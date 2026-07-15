@@ -24,6 +24,7 @@ import {
   CheckSquare,
   Printer,
   Layers,
+  LogOut,
 } from "lucide-react";
 
 const STORAGE_OPTIONS = [
@@ -2653,6 +2654,7 @@ function JobPicker({
   onOpenCatalog,
   onExportAll,
   onImportAll,
+  onSignOut,
 }) {
   const [collapsed, setCollapsed] = useState({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -2694,6 +2696,13 @@ function JobPicker({
               className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
             >
               <BookOpen className="w-4 h-4" />
+            </button>
+            <button
+              onClick={onSignOut}
+              title="Log out"
+              className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+            >
+              <LogOut className="w-4 h-4" />
             </button>
             <button
               onClick={onCreateClick}
@@ -3911,7 +3920,7 @@ async function getWithRetry(key, attempts = 6) {
   return { ok: false, error: lastError };
 }
 
-export default function WareHub() {
+function WareHub({ onSignOut }) {
   const [jobs, setJobs] = useState([]);
   const [activeJobId, setActiveJobId] = useState(null);
   const [showPicker, setShowPicker] = useState(true);
@@ -4353,6 +4362,7 @@ export default function WareHub() {
           onOpenCatalog={() => setCatalogModalOpen(true)}
           onExportAll={exportAllData}
           onImportAll={importAllData}
+          onSignOut={onSignOut}
         />
       ) : (
         <JobInventory
@@ -4432,4 +4442,102 @@ export default function WareHub() {
       )}
     </>
   );
+}
+
+function LoginScreen({ onSignedIn }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    const { data, error: signInError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+    setLoading(false);
+    if (signInError) {
+      setError(signInError.message);
+      return;
+    }
+    onSignedIn(data.session);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center px-4">
+      <div className="w-full max-w-sm">
+        <div className="flex items-center gap-2.5 justify-center mb-6">
+          <div className="w-9 h-9 rounded-md bg-amber-500 flex items-center justify-center">
+            <Package className="w-5 h-5 text-slate-950" strokeWidth={2.5} />
+          </div>
+          <h1 className="font-bold text-xl text-slate-100">WareHub</h1>
+        </div>
+        <form
+          onSubmit={handleSubmit}
+          className="bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-4"
+        >
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoFocus
+              required
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60"
+            />
+          </div>
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-50"
+          >
+            {loading ? "Signing in..." : "Sign in"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+export default function AuthGate() {
+  const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  if (session === undefined) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <LoginScreen onSignedIn={setSession} />;
+  }
+
+  return <WareHub onSignOut={() => supabase.auth.signOut()} />;
 }
