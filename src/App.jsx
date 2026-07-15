@@ -1556,9 +1556,12 @@ function ContainerDetailModal({
   const [picking, setPicking] = useState(false);
   const [selected, setSelected] = useState({});
   const [alsoMarkPulled, setAlsoMarkPulled] = useState(true);
+  const [pickSearch, setPickSearch] = useState("");
 
   const inContainer = items.filter((i) => i.container === containerName);
-  const notInContainer = items.filter((i) => i.container !== containerName);
+  const notInContainer = items
+    .filter((i) => i.container !== containerName)
+    .filter((i) => i.name.toLowerCase().includes(pickSearch.trim().toLowerCase()));
 
   const toggleSelect = (id) => {
     setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -1588,10 +1591,24 @@ function ContainerDetailModal({
             </button>
           </div>
 
+          <div className="px-5 pt-4">
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                value={pickSearch}
+                onChange={(e) => setPickSearch(e.target.value)}
+                placeholder="Search items..."
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md pl-9 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+          </div>
+
           <div className="flex-1 overflow-y-auto px-5 py-4">
             {notInContainer.length === 0 ? (
               <p className="text-sm text-slate-500 text-center py-10">
-                Every item in this job is already in this container.
+                {pickSearch
+                  ? `No items match "${pickSearch}".`
+                  : "Every item in this job is already in this container."}
               </p>
             ) : (
               <div className="space-y-2">
@@ -2891,6 +2908,7 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
   const [selectedIds, setSelectedIds] = useState({});
   const [bulkGangPicker, setBulkGangPicker] = useState(false);
   const [bulkStoragePicker, setBulkStoragePicker] = useState(false);
+  const [bulkContainerPicker, setBulkContainerPicker] = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -3126,6 +3144,10 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
     bulkUpdate((i) => ({ ...i, storage }), `Storage set to ${storage}`);
     setBulkStoragePicker(false);
   };
+  const bulkSetContainer = (container) => {
+    bulkUpdate((i) => ({ ...i, container }), `Moved to container "${container}"`);
+    setBulkContainerPicker(false);
+  };
   const bulkDelete = () => {
     onUpdateJob((prevJob) => ({
       ...prevJob,
@@ -3232,26 +3254,6 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
                   </button>
                   <button
                     onClick={() => {
-                      setContainersOpen(true);
-                      setMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
-                  >
-                    <Archive className="w-4 h-4 text-slate-400" />
-                    Containers
-                  </button>
-                  <button
-                    onClick={() => {
-                      setSelectMode(true);
-                      setMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
-                  >
-                    <CheckSquare className="w-4 h-4 text-slate-400" />
-                    Select items
-                  </button>
-                  <button
-                    onClick={() => {
                       setPickListOpen(true);
                       setMenuOpen(false);
                     }}
@@ -3282,16 +3284,6 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
                   </button>
                   <button
                     onClick={() => {
-                      onOpenCatalog();
-                      setMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left border-t border-slate-700"
-                  >
-                    <BookOpen className="w-4 h-4 text-slate-400" />
-                    Item catalog
-                  </button>
-                  <button
-                    onClick={() => {
                       setRenameOpen(true);
                       setMenuOpen(false);
                     }}
@@ -3299,6 +3291,37 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
                   >
                     <Pencil className="w-4 h-4 text-slate-400" />
                     Rename job
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setContainersOpen(true);
+                      setMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left border-t border-slate-700"
+                  >
+                    <Archive className="w-4 h-4 text-slate-400" />
+                    Containers
+                  </button>
+                  <button
+                    onClick={() => {
+                      setSelectMode(true);
+                      setMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                  >
+                    <CheckSquare className="w-4 h-4 text-slate-400" />
+                    Select items
+                  </button>
+                  <button
+                    onClick={() => {
+                      onOpenCatalog();
+                      setMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                  >
+                    <BookOpen className="w-4 h-4 text-slate-400" />
+                    Item catalog
                   </button>
                 </div>
               </>
@@ -3526,6 +3549,12 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
                   Set storage
                 </button>
                 <button
+                  onClick={() => setBulkContainerPicker(true)}
+                  className="text-xs bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-2.5 py-1.5 hover:bg-slate-700"
+                >
+                  Move to container
+                </button>
+                <button
                   onClick={() => setBulkDeleteConfirm(true)}
                   className="text-xs bg-red-500/10 border border-red-700/40 text-red-400 rounded-md px-2.5 py-1.5 hover:bg-red-500/20"
                 >
@@ -3745,6 +3774,40 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
             </div>
             <button
               onClick={() => setBulkStoragePicker(false)}
+              className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {bulkContainerPicker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-3">
+              Move {selectedItemIds.length} item{selectedItemIds.length === 1 ? "" : "s"} to
+              container
+            </h3>
+            {containerOptions.length === 0 ? (
+              <p className="text-sm text-slate-500 mb-4">
+                No containers yet — add one from the Containers screen first.
+              </p>
+            ) : (
+              <div className="space-y-1.5 mb-4 max-h-64 overflow-y-auto">
+                {containerOptions.map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => bulkSetContainer(c)}
+                    className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-700 text-slate-200 hover:bg-slate-800"
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              onClick={() => setBulkContainerPicker(false)}
               className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
             >
               Cancel
