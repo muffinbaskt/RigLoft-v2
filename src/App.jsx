@@ -621,7 +621,7 @@ function ItemForm({ initial, containerOptions, onAddContainer, onSave, onCancel,
             <Select
               value={item.container}
               onChange={set("container")}
-              options={["", ...containerOptions]}
+              options={["", ...[...containerOptions].sort((a, b) => a.localeCompare(b))]}
               labels={{ "": "No container assigned" }}
             />
           </div>
@@ -1555,7 +1555,7 @@ function ContainerDetailModal({
 }) {
   const [picking, setPicking] = useState(false);
   const [selected, setSelected] = useState({});
-  const [alsoMarkPulled, setAlsoMarkPulled] = useState(true);
+  const [qtyOverrides, setQtyOverrides] = useState({});
   const [pickSearch, setPickSearch] = useState("");
 
   const inContainer = items.filter((i) => i.container === containerName);
@@ -1567,13 +1567,24 @@ function ContainerDetailModal({
     setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const setQty = (id, value) => {
+    setQtyOverrides((prev) => ({ ...prev, [id]: value }));
+  };
+
   const selectedIds = Object.keys(selected)
     .filter((id) => selected[id])
     .map((id) => Number(id));
 
   const confirmPull = () => {
-    onPull(selectedIds, alsoMarkPulled);
+    const qtyMap = {};
+    selectedIds.forEach((id) => {
+      const item = items.find((i) => i.id === id);
+      const override = qtyOverrides[id];
+      qtyMap[id] = override !== undefined && override !== "" ? Number(override) : item.qtyNeeded;
+    });
+    onPull(qtyMap);
     setSelected({});
+    setQtyOverrides({});
     setPicking(false);
   };
 
@@ -1601,6 +1612,9 @@ function ContainerDetailModal({
                 className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md pl-9 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
               />
             </div>
+            <p className="text-xs text-slate-600 mt-2">
+              Qty defaults to what's needed — edit it for a partial pull.
+            </p>
           </div>
 
           <div className="flex-1 overflow-y-auto px-5 py-4">
@@ -1613,9 +1627,9 @@ function ContainerDetailModal({
             ) : (
               <div className="space-y-2">
                 {notInContainer.map((item) => (
-                  <label
+                  <div
                     key={item.id}
-                    className="flex items-center gap-3 border border-slate-800 rounded-md p-3 cursor-pointer hover:border-slate-700"
+                    className="flex items-center gap-3 border border-slate-800 rounded-md p-3 hover:border-slate-700"
                   >
                     <input
                       type="checkbox"
@@ -1631,22 +1645,20 @@ function ContainerDetailModal({
                         {item.container ? ` · currently in ${item.container}` : ""}
                       </p>
                     </div>
-                  </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={qtyOverrides[item.id] ?? item.qtyNeeded}
+                      onChange={(e) => setQty(item.id, e.target.value)}
+                      onFocus={() => {
+                        if (!selected[item.id]) toggleSelect(item.id);
+                      }}
+                      className="w-16 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60 shrink-0"
+                    />
+                  </div>
                 ))}
               </div>
             )}
-          </div>
-
-          <div className="px-5 py-3 border-t border-slate-800 shrink-0">
-            <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={alsoMarkPulled}
-                onChange={(e) => setAlsoMarkPulled(e.target.checked)}
-                className="w-3.5 h-3.5 rounded accent-amber-500"
-              />
-              Also mark these as fully pulled (qty have = qty needed, status → Complete)
-            </label>
           </div>
 
           <div className="flex gap-3 px-5 py-4 border-t border-slate-800 shrink-0">
@@ -1765,7 +1777,7 @@ function ContainersModal({
         items={items}
         onClose={onClose}
         onBack={() => setOpenContainer(null)}
-        onPull={(itemIds, alsoMarkPulled) => onPull(openContainer, itemIds, alsoMarkPulled)}
+        onPull={(qtyMap) => onPull(openContainer, qtyMap)}
       />
     );
   }
@@ -1793,7 +1805,7 @@ function ContainersModal({
               </p>
             ) : (
               <div className="space-y-2">
-                {containerOptions.map((name) =>
+                {[...containerOptions].sort((a, b) => a.localeCompare(b)).map((name) =>
                   renaming === name ? (
                     <div
                       key={name}
@@ -2976,26 +2988,23 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
     }));
   };
 
-  const pullItemsIntoContainer = (containerName, itemIds, alsoMarkPulled) => {
+  const pullItemsIntoContainer = (containerName, qtyMap) => {
+    const itemIds = Object.keys(qtyMap).map(Number);
     onUpdateJob((prevJob) => ({
       ...prevJob,
-      items: prevJob.items.map((i) =>
-        itemIds.includes(i.id)
-          ? {
-              ...i,
-              container: containerName,
-              qtyHave: alsoMarkPulled ? i.qtyNeeded : i.qtyHave,
-              status: alsoMarkPulled ? "green" : i.status,
-            }
-          : i
-      ),
+      items: prevJob.items.map((i) => {
+        if (!(i.id in qtyMap)) return i;
+        const qtyHave = qtyMap[i.id];
+        const status = qtyHave >= i.qtyNeeded ? "green" : qtyHave > 0 ? "yellow" : "red";
+        return { ...i, container: containerName, qtyHave, status };
+      }),
       activityLog: [
         {
           id: Date.now(),
           time: timeStamp(),
           message: `Pulled ${itemIds.length} item${
             itemIds.length === 1 ? "" : "s"
-          } into "${containerName}"${alsoMarkPulled ? " and marked as fully pulled" : ""}`,
+          } into "${containerName}" with quantities set`,
         },
         ...prevJob.activityLog,
       ].slice(0, 50),
@@ -3414,7 +3423,7 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
             <Select
               value={containerFilter}
               onChange={setContainerFilter}
-              options={["All", ...containerOptions]}
+              options={["All", ...[...containerOptions].sort((a, b) => a.localeCompare(b))]}
               labels={{ All: "All containers" }}
             />
           </div>
@@ -3795,7 +3804,7 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
               </p>
             ) : (
               <div className="space-y-1.5 mb-4 max-h-64 overflow-y-auto">
-                {containerOptions.map((c) => (
+                {[...containerOptions].sort((a, b) => a.localeCompare(b)).map((c) => (
                   <button
                     key={c}
                     onClick={() => bulkSetContainer(c)}
