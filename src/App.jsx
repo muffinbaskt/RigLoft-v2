@@ -2614,6 +2614,7 @@ function JobCard({ job, indent, outstanding, onSelect, onRename, onDelete }) {
 
 function JobPicker({
   jobs,
+  catalog,
   onSelect,
   onCreateClick,
   onCreateSubJobClick,
@@ -2621,6 +2622,8 @@ function JobPicker({
   onRenameRequest,
   onResetRequest,
   onOpenCatalog,
+  onExportAll,
+  onImportAll,
 }) {
   const [collapsed, setCollapsed] = useState({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -2841,6 +2844,28 @@ function JobPicker({
           >
             Reset all data
           </button>
+          <div className="flex items-center justify-center gap-3 mt-3">
+            <button
+              onClick={onExportAll}
+              className="text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2"
+            >
+              Export all data (backup)
+            </button>
+            <span className="text-slate-700">·</span>
+            <label className="text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2 cursor-pointer">
+              Import all data (restore backup)
+              <input
+                type="file"
+                accept="application/json"
+                onChange={(e) => {
+                  const file = e.target.files[0];
+                  if (file) onImportAll(file);
+                  e.target.value = "";
+                }}
+                className="hidden"
+              />
+            </label>
+          </div>
           <p className="text-[10px] text-slate-700 mt-2">Build check: 2026-07-14-B</p>
         </div>
       </main>
@@ -3768,9 +3793,6 @@ const CATALOG_KEY = "warehub-catalog";
 // shouldn't have" — the latter must never be treated as a fresh start.
 const INITIALIZED_KEY = "warehub-initialized";
 
-// Saves a key/value pair to the Supabase "app_storage" table, retrying a
-// couple of times on transient network errors. Same {ok, error} shape as
-// before, so nothing else in this file needs to change.
 async function saveWithRetry(key, value, attempts = 2) {
   let lastError = null;
   for (let i = 0; i < attempts; i++) {
@@ -3793,11 +3815,6 @@ async function saveWithRetry(key, value, attempts = 2) {
   return { ok: false, error: lastError };
 }
 
-// Reads a key from the Supabase "app_storage" table, retrying on transient
-// errors. A row that simply doesn't exist yet (brand-new key) is treated as
-// a successful "confirmed empty" result, not a failure — same distinction
-// the original artifact version made, since a genuinely-missing key is the
-// normal state for a new account, not an error to block on.
 async function getWithRetry(key, attempts = 6) {
   let lastError = null;
   for (let i = 0; i < attempts; i++) {
@@ -3831,6 +3848,7 @@ export default function WareHub() {
   const [jobRenameTarget, setJobRenameTarget] = useState(null);
   const [subJobParent, setSubJobParent] = useState(null);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [importAllError, setImportAllError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadingSlow, setLoadingSlow] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -4089,6 +4107,66 @@ export default function WareHub() {
     else setSaveError(null);
   };
 
+  const exportAllData = () => {
+    try {
+      const payload = {
+        exportedFrom: "WareHub",
+        exportedAt: new Date().toISOString(),
+        jobs,
+        catalog,
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `warehub-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch {
+      setSaveError("Couldn't create the backup file");
+    }
+  };
+
+  const importAllData = (file) => {
+    if (
+      !window.confirm(
+        "This replaces every job and catalog item currently in this app with what's in the backup file. Continue?"
+      )
+    ) {
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const parsed = JSON.parse(e.target.result);
+        if (!Array.isArray(parsed.jobs)) {
+          setImportAllError("That file doesn't look like a WareHub backup.");
+          return;
+        }
+        const importedJobs = parsed.jobs;
+        const importedCatalog = Array.isArray(parsed.catalog) ? parsed.catalog : [];
+        setJobs(importedJobs);
+        setCatalog(importedCatalog);
+        const firstJob = importedJobs.find((j) => !j.parentId) || importedJobs[0];
+        if (firstJob) setActiveJobId(firstJob.id);
+        setShowPicker(true);
+        setImportAllError(null);
+        const jobsResult = await saveWithRetry(JOBS_KEY, JSON.stringify(importedJobs));
+        const catalogResult = await saveWithRetry(CATALOG_KEY, JSON.stringify(importedCatalog));
+        if (!jobsResult.ok) setSaveError(jobsResult.error);
+        else if (!catalogResult.ok) setSaveError(catalogResult.error);
+        else setSaveError(null);
+      } catch {
+        setImportAllError("Couldn't read that file — make sure it's an unmodified WareHub backup.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
   if (loadFailed) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center px-4">
@@ -4175,9 +4253,22 @@ export default function WareHub() {
         </div>
       )}
 
+      {importAllError && (
+        <div className="fixed top-0 inset-x-0 z-[60] bg-red-900/90 text-red-100 text-xs text-center py-2 px-4 flex items-center justify-center gap-3">
+          <span>{importAllError}</span>
+          <button
+            onClick={() => setImportAllError(null)}
+            className="underline underline-offset-2 shrink-0 font-semibold"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {showingPicker ? (
         <JobPicker
           jobs={jobs}
+          catalog={catalog}
           onSelect={(id) => {
             setActiveJobId(id);
             setShowPicker(false);
@@ -4188,6 +4279,8 @@ export default function WareHub() {
           onRenameRequest={(job) => setJobRenameTarget(job)}
           onResetRequest={() => setResetConfirmOpen(true)}
           onOpenCatalog={() => setCatalogModalOpen(true)}
+          onExportAll={exportAllData}
+          onImportAll={importAllData}
         />
       ) : (
         <JobInventory
