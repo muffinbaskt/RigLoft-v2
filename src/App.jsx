@@ -2999,25 +2999,66 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
 
   const pullItemsIntoContainer = (containerName, qtyMap) => {
     const itemIds = Object.keys(qtyMap).map(Number);
-    onUpdateJob((prevJob) => ({
-      ...prevJob,
-      items: prevJob.items.map((i) => {
-        if (!(i.id in qtyMap)) return i;
-        const qtyHave = qtyMap[i.id];
-        const status = qtyHave >= i.qtyNeeded ? "green" : qtyHave > 0 ? "yellow" : "red";
-        return { ...i, container: containerName, qtyHave, status };
-      }),
-      activityLog: [
-        {
-          id: Date.now(),
-          time: timeStamp(),
-          message: `Pulled ${itemIds.length} item${
-            itemIds.length === 1 ? "" : "s"
-          } into "${containerName}" with quantities set`,
-        },
-        ...prevJob.activityLog,
-      ].slice(0, 50),
-    }));
+    let splitCount = 0;
+    onUpdateJob((prevJob) => {
+      let newItems = [...prevJob.items];
+      itemIds.forEach((id) => {
+        const idx = newItems.findIndex((i) => i.id === id);
+        if (idx === -1) return;
+        const original = newItems[idx];
+        const pulledQty = qtyMap[id];
+        const remainingNeeded = original.qtyNeeded - pulledQty;
+
+        if (pulledQty <= 0 || remainingNeeded <= 0) {
+          // Taking all of it (or the whole remaining amount) — no split
+          // needed, just move this line into the container as-is.
+          const status =
+            pulledQty >= original.qtyNeeded ? "green" : pulledQty > 0 ? "yellow" : "red";
+          newItems[idx] = { ...original, container: containerName, qtyHave: pulledQty, status };
+        } else {
+          // Partial pull — split into two lines so the total quantity
+          // needed stays correct across however many containers this item
+          // ends up spread across.
+          splitCount++;
+          const splitOff = {
+            ...original,
+            id: Date.now() + idx + Math.floor(Math.random() * 100000),
+            qtyNeeded: pulledQty,
+            qtyHave: pulledQty,
+            container: containerName,
+            status: "green",
+            serials: [], // avoid implying the same serial numbers sit in two places
+          };
+          const remainingHave = Math.max(0, original.qtyHave - pulledQty);
+          newItems[idx] = {
+            ...original,
+            qtyNeeded: remainingNeeded,
+            qtyHave: remainingHave,
+            status: remainingHave > 0 ? "yellow" : "red",
+          };
+          newItems.splice(idx + 1, 0, splitOff);
+        }
+      });
+
+      return {
+        ...prevJob,
+        items: newItems,
+        activityLog: [
+          {
+            id: Date.now(),
+            time: timeStamp(),
+            message: `Pulled ${itemIds.length} item${
+              itemIds.length === 1 ? "" : "s"
+            } into "${containerName}"${
+              splitCount > 0
+                ? ` (${splitCount} split across containers)`
+                : " with quantities set"
+            }`,
+          },
+          ...prevJob.activityLog,
+        ].slice(0, 50),
+      };
+    });
   };
 
   const matchesProcFilter = (item) => {
