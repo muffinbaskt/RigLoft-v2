@@ -705,15 +705,57 @@ function ItemForm({ initial, containerOptions, onAddContainer, onSave, onCancel,
             Cancel
           </button>
           <button
-            onClick={() =>
-              canSave &&
+            onClick={() => {
+              if (!canSave) return;
+              const finalQtyNeeded = Number(item.qtyNeeded);
+              const finalQtyHave = Number(item.qtyHave) || 0;
+              const finalSerials = parseSerials(serialsText);
+
+              // If this is an existing item, the container was changed to
+              // something new, and the quantity needed was reduced, treat
+              // this as "move part of it" — split off a remainder line
+              // that stays behind with the old container and old quantity,
+              // rather than just quietly shrinking the original demand.
+              const isSplit =
+                initial.id &&
+                item.container !== initial.container &&
+                item.container &&
+                finalQtyNeeded < Number(initial.qtyNeeded);
+
+              if (isSplit) {
+                const originalTotal = initial.originalQtyNeeded || Number(initial.qtyNeeded);
+                const remainderQtyNeeded = Number(initial.qtyNeeded) - finalQtyNeeded;
+                const remainderQtyHave = Math.max(0, Number(initial.qtyHave) - finalQtyHave);
+                const updatedItem = {
+                  ...item,
+                  qtyNeeded: finalQtyNeeded,
+                  qtyHave: finalQtyHave,
+                  serials: [],
+                  originalQtyNeeded: originalTotal,
+                  status:
+                    finalQtyHave >= finalQtyNeeded ? "green" : finalQtyHave > 0 ? "yellow" : "red",
+                };
+                const remainderItem = {
+                  ...initial,
+                  id: Date.now() + Math.floor(Math.random() * 100000),
+                  qtyNeeded: remainderQtyNeeded,
+                  qtyHave: remainderQtyHave,
+                  container: initial.container,
+                  serials: finalSerials,
+                  originalQtyNeeded: originalTotal,
+                  status: remainderQtyHave > 0 ? "yellow" : "red",
+                };
+                onSave(updatedItem, remainderItem);
+                return;
+              }
+
               onSave({
                 ...item,
-                qtyNeeded: Number(item.qtyNeeded),
-                qtyHave: Number(item.qtyHave) || 0,
-                serials: parseSerials(serialsText),
-              })
-            }
+                qtyNeeded: finalQtyNeeded,
+                qtyHave: finalQtyHave,
+                serials: finalSerials,
+              });
+            }}
             disabled={!canSave}
             className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40 disabled:hover:bg-amber-500"
           >
@@ -2392,6 +2434,11 @@ function ItemCard({ item, selectMode, selected, onToggleSelect, onEdit, onDelete
               Have {item.qtyHave} of {item.qtyNeeded}
               {item.qtyUnit ? ` ${item.qtyUnit}` : ""} needed
             </p>
+            {item.originalQtyNeeded && item.originalQtyNeeded !== item.qtyNeeded && (
+              <p className="text-xs text-amber-500/80 mt-0.5">
+                ⚠ Split — part of {item.originalQtyNeeded} needed total across containers
+              </p>
+            )}
             <div className="mt-1.5 h-1.5 w-full max-w-[160px] rounded-full bg-slate-800 overflow-hidden">
               <div
                 className={`h-full rounded-full ${
@@ -3020,6 +3067,7 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
           // needed stays correct across however many containers this item
           // ends up spread across.
           splitCount++;
+          const originalTotal = original.originalQtyNeeded || original.qtyNeeded;
           const splitOff = {
             ...original,
             id: Date.now() + idx + Math.floor(Math.random() * 100000),
@@ -3028,6 +3076,7 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
             container: containerName,
             status: "green",
             serials: [], // avoid implying the same serial numbers sit in two places
+            originalQtyNeeded: originalTotal,
           };
           const remainingHave = Math.max(0, original.qtyHave - pulledQty);
           newItems[idx] = {
@@ -3035,6 +3084,7 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
             qtyNeeded: remainingNeeded,
             qtyHave: remainingHave,
             status: remainingHave > 0 ? "yellow" : "red",
+            originalQtyNeeded: originalTotal,
           };
           newItems.splice(idx + 1, 0, splitOff);
         }
@@ -3112,7 +3162,26 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
     )
   );
 
-  const saveItem = (item) => {
+  const saveItem = (item, remainderItem) => {
+    if (item.id && remainderItem) {
+      // A split: update the existing item in place and insert a new line
+      // for the remainder that stayed behind in its original container.
+      onUpdateJob((prevJob) => ({
+        ...prevJob,
+        items: prevJob.items.flatMap((i) =>
+          i.id === item.id ? [item, remainderItem] : [i]
+        ),
+        activityLog: [
+          {
+            id: Date.now(),
+            time: timeStamp(),
+            message: `Split "${item.name}" — ${item.qtyNeeded} moved to "${item.container}", ${remainderItem.qtyNeeded} remaining in "${remainderItem.container || "no container"}"`,
+          },
+          ...prevJob.activityLog,
+        ].slice(0, 50),
+      }));
+      return;
+    }
     if (item.id) {
       const before = items.find((i) => i.id === item.id);
       const changes = diffItems(before, item);
