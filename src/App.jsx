@@ -3874,17 +3874,30 @@ const CATALOG_KEY = "warehub-catalog";
 // shouldn't have" — the latter must never be treated as a fresh start.
 const INITIALIZED_KEY = "warehub-initialized";
 
-async function saveWithRetry(key, value, attempts = 2) {
+// Saves a key, but first checks whether another tab/device has saved a
+// newer version since we last knew about it. If so, this refuses to save
+// (instead of silently overwriting someone else's more recent changes) and
+// returns {ok:false, conflict:true} so the caller can warn the user rather
+// than lose data with no trace.
+async function saveWithRetry(key, value, expectedUpdatedAt, attempts = 2) {
   let lastError = null;
   for (let i = 0; i < attempts; i++) {
     try {
+      if (expectedUpdatedAt) {
+        const { data: current, error: checkError } = await supabase
+          .from("app_storage")
+          .select("updated_at")
+          .eq("key", key)
+          .maybeSingle();
+        if (!checkError && current && current.updated_at !== expectedUpdatedAt) {
+          return { ok: false, conflict: true };
+        }
+      }
+      const nowIso = new Date().toISOString();
       const { error } = await supabase
         .from("app_storage")
-        .upsert(
-          { key, value: JSON.parse(value), updated_at: new Date().toISOString() },
-          { onConflict: "key" }
-        );
-      if (!error) return { ok: true };
+        .upsert({ key, value: JSON.parse(value), updated_at: nowIso }, { onConflict: "key" });
+      if (!error) return { ok: true, updatedAt: nowIso };
       lastError = error.message;
     } catch (err) {
       lastError = err && err.message ? err.message : String(err);
@@ -3902,11 +3915,15 @@ async function getWithRetry(key, attempts = 6) {
     try {
       const { data, error } = await supabase
         .from("app_storage")
-        .select("value")
+        .select("value, updated_at")
         .eq("key", key)
         .maybeSingle();
       if (!error) {
-        return { ok: true, value: data ? JSON.stringify(data.value) : null };
+        return {
+          ok: true,
+          value: data ? JSON.stringify(data.value) : null,
+          updatedAt: data ? data.updated_at : null,
+        };
       }
       lastError = error.message;
     } catch (err) {
@@ -3942,10 +3959,28 @@ function WareHub({ onSignOut }) {
   const [pendingSync, setPendingSync] = useState(false);
   const jobsSaveTimer = useRef(null);
   const jobsRef = useRef([]);
+  const jobsUpdatedAtRef = useRef(null);
   const [catalog, setCatalog] = useState([]);
   const [catalogModalOpen, setCatalogModalOpen] = useState(false);
   const catalogSaveTimer = useRef(null);
   const catalogRef = useRef([]);
+  const catalogUpdatedAtRef = useRef(null);
+  const [conflictWarning, setConflictWarning] = useState(false);
+
+  // Warn before closing/reloading if a save is still pending or in flight —
+  // this can't guarantee the save finishes, but it stops you from powering
+  // off or closing the tab without knowing there's unsaved work in transit.
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      const hasPendingSave = !!jobsSaveTimer.current || !!catalogSaveTimer.current || syncing;
+      if (hasPendingSave) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [syncing]);
 
   // Keep refs in sync so an unmount-time flush always has the latest data,
   // even though the cleanup closure below can't see later state updates
@@ -3964,11 +3999,15 @@ function WareHub({ onSignOut }) {
     return () => {
       if (jobsSaveTimer.current) {
         clearTimeout(jobsSaveTimer.current);
-        saveWithRetry(JOBS_KEY, JSON.stringify(jobsRef.current));
+        saveWithRetry(JOBS_KEY, JSON.stringify(jobsRef.current), jobsUpdatedAtRef.current);
       }
       if (catalogSaveTimer.current) {
         clearTimeout(catalogSaveTimer.current);
-        saveWithRetry(CATALOG_KEY, JSON.stringify(catalogRef.current));
+        saveWithRetry(
+          CATALOG_KEY,
+          JSON.stringify(catalogRef.current),
+          catalogUpdatedAtRef.current
+        );
       }
     };
   }, []);
@@ -4051,6 +4090,9 @@ function WareHub({ onSignOut }) {
       : finalJobs[0].id;
     setActiveJobId(validActiveId);
     setCatalog(loadedCatalog.map((c) => (c.gang === "Welders" ? { ...c, gang: "Welding" } : c)));
+    jobsUpdatedAtRef.current = jobsResult.updatedAt || null;
+    catalogUpdatedAtRef.current = catalogResult.updatedAt || null;
+    setConflictWarning(false);
     setLoading(false);
   };
 
@@ -4061,7 +4103,7 @@ function WareHub({ onSignOut }) {
   // Persist jobs whenever they change (after initial load completes), debounced
   // so several quick edits in a row don't each trigger their own blocking save
   useEffect(() => {
-    if (loading || loadFailed) return;
+    if (loading || loadFailed || conflictWarning) return;
     if (!isOnline) {
       setPendingSync(true);
       return;
@@ -4071,16 +4113,27 @@ function WareHub({ onSignOut }) {
       jobsSaveTimer.current = null;
       (async () => {
         setSyncing(true);
-        const result = await saveWithRetry(JOBS_KEY, JSON.stringify(jobs));
+        const result = await saveWithRetry(
+          JOBS_KEY,
+          JSON.stringify(jobs),
+          jobsUpdatedAtRef.current
+        );
         setSyncing(false);
+        if (result.conflict) {
+          setConflictWarning(true);
+          return;
+        }
         setSaveError(result.ok ? null : result.error);
-        if (result.ok) setPendingSync(false);
+        if (result.ok) {
+          setPendingSync(false);
+          jobsUpdatedAtRef.current = result.updatedAt;
+        }
       })();
     }, 600);
     return () => {
       if (jobsSaveTimer.current) clearTimeout(jobsSaveTimer.current);
     };
-  }, [jobs, loading, retryTick, isOnline]);
+  }, [jobs, loading, retryTick, isOnline, conflictWarning]);
 
   // Persist which job is active
   useEffect(() => {
@@ -4099,20 +4152,29 @@ function WareHub({ onSignOut }) {
 
   // Persist catalog whenever it changes, debounced like jobs
   useEffect(() => {
-    if (loading || loadFailed) return;
+    if (loading || loadFailed || conflictWarning) return;
     if (!isOnline) return;
     if (catalogSaveTimer.current) clearTimeout(catalogSaveTimer.current);
     catalogSaveTimer.current = setTimeout(() => {
       catalogSaveTimer.current = null;
       (async () => {
-        const result = await saveWithRetry(CATALOG_KEY, JSON.stringify(catalog));
+        const result = await saveWithRetry(
+          CATALOG_KEY,
+          JSON.stringify(catalog),
+          catalogUpdatedAtRef.current
+        );
+        if (result.conflict) {
+          setConflictWarning(true);
+          return;
+        }
         if (!result.ok) setSaveError(result.error);
+        else catalogUpdatedAtRef.current = result.updatedAt;
       })();
     }, 600);
     return () => {
       if (catalogSaveTimer.current) clearTimeout(catalogSaveTimer.current);
     };
-  }, [catalog, loading, retryTick, isOnline]);
+  }, [catalog, loading, retryTick, isOnline, conflictWarning]);
 
   const activeJob = jobs.find((j) => j.id === activeJobId);
 
@@ -4183,6 +4245,8 @@ function WareHub({ onSignOut }) {
     setResetConfirmOpen(false);
     const jobsResult = await saveWithRetry(JOBS_KEY, JSON.stringify(fresh));
     const activeResult = await saveWithRetry(ACTIVE_JOB_KEY, JSON.stringify(fresh[0].id));
+    if (jobsResult.ok) jobsUpdatedAtRef.current = jobsResult.updatedAt;
+    setConflictWarning(false);
     if (!jobsResult.ok) setSaveError(jobsResult.error);
     else if (!activeResult.ok) setSaveError(activeResult.error);
     else setSaveError(null);
@@ -4238,6 +4302,9 @@ function WareHub({ onSignOut }) {
         setImportAllError(null);
         const jobsResult = await saveWithRetry(JOBS_KEY, JSON.stringify(importedJobs));
         const catalogResult = await saveWithRetry(CATALOG_KEY, JSON.stringify(importedCatalog));
+        if (jobsResult.ok) jobsUpdatedAtRef.current = jobsResult.updatedAt;
+        if (catalogResult.ok) catalogUpdatedAtRef.current = catalogResult.updatedAt;
+        setConflictWarning(false);
         if (!jobsResult.ok) setSaveError(jobsResult.error);
         else if (!catalogResult.ok) setSaveError(catalogResult.error);
         else setSaveError(null);
@@ -4328,9 +4395,56 @@ function WareHub({ onSignOut }) {
       )}
 
       {syncing && (
-        <div className="fixed bottom-3 right-3 z-[60] bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-full px-3 py-1.5 flex items-center gap-1.5 shadow-lg">
-          <div className="w-2.5 h-2.5 border-2 border-slate-600 border-t-amber-500 rounded-full animate-spin" />
-          Syncing…
+        <div className="fixed bottom-3 right-3 z-[60] bg-amber-500 text-slate-950 text-xs font-semibold rounded-full px-3 py-2 flex items-center gap-2 shadow-lg">
+          <div className="w-3 h-3 border-2 border-slate-950/30 border-t-slate-950 rounded-full animate-spin" />
+          Saving — don't close yet
+        </div>
+      )}
+
+      {conflictWarning && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-amber-600/50 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-1.5">
+              This was updated somewhere else
+            </h3>
+            <p className="text-sm text-slate-400 mb-5">
+              Another tab or device saved changes to this data after you last loaded it. To
+              avoid silently overwriting their work, nothing further will save from here until
+              you choose:
+            </p>
+            <div className="space-y-2">
+              <button
+                onClick={() => {
+                  setConflictWarning(false);
+                  loadAllData();
+                }}
+                className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Reload the latest version (recommended)
+              </button>
+              <button
+                onClick={async () => {
+                  setSyncing(true);
+                  const jobsResult = await saveWithRetry(JOBS_KEY, JSON.stringify(jobs));
+                  const catalogResult = await saveWithRetry(
+                    CATALOG_KEY,
+                    JSON.stringify(catalog)
+                  );
+                  setSyncing(false);
+                  if (jobsResult.ok) jobsUpdatedAtRef.current = jobsResult.updatedAt;
+                  if (catalogResult.ok) catalogUpdatedAtRef.current = catalogResult.updatedAt;
+                  setConflictWarning(false);
+                }}
+                className="w-full text-sm rounded-md py-2.5 border border-red-700/50 text-red-400 hover:bg-red-500/10"
+              >
+                Overwrite with what's on this screen
+              </button>
+            </div>
+            <p className="text-xs text-slate-600 mt-4">
+              Reloading discards any edits made in this tab since it last synced. Overwriting
+              discards whatever the other tab/device saved instead.
+            </p>
+          </div>
         </div>
       )}
 
