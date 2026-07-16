@@ -458,6 +458,7 @@ function ItemForm({ initial, containerOptions, onAddContainer, onSave, onCancel,
     ...initial,
   });
   const [serialsText, setSerialsText] = useState((initial.serials || []).join(", "));
+  const [splitRemainder, setSplitRemainder] = useState(false);
   const set = (field) => (val) => setItem((prev) => ({ ...prev, [field]: val }));
 
   const handleSerialsChange = (text) => {
@@ -625,6 +626,25 @@ function ItemForm({ initial, containerOptions, onAddContainer, onSave, onCancel,
               options={["", ...[...containerOptions].sort((a, b) => a.localeCompare(b))]}
               labels={{ "": "No container assigned" }}
             />
+            {initial.id &&
+              item.container !== initial.container &&
+              item.container &&
+              Number(item.qtyNeeded) < Number(initial.qtyNeeded) && (
+                <label className="flex items-start gap-2 mt-2.5 text-xs text-slate-300 cursor-pointer select-none bg-slate-800/50 border border-slate-700 rounded-md p-2.5">
+                  <input
+                    type="checkbox"
+                    checked={splitRemainder}
+                    onChange={(e) => setSplitRemainder(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded accent-amber-500 mt-0.5 shrink-0"
+                  />
+                  <span>
+                    This container only gets part of it — split off the remaining{" "}
+                    {Number(initial.qtyNeeded) - Number(item.qtyNeeded)} as a separate line still
+                    needed in "{initial.container || "no container"}". Leave unchecked if
+                    you're just correcting the total quantity needed.
+                  </span>
+                </label>
+              )}
           </div>
 
           <div>
@@ -711,16 +731,17 @@ function ItemForm({ initial, containerOptions, onAddContainer, onSave, onCancel,
               const finalQtyHave = Number(item.qtyHave) || 0;
               const finalSerials = parseSerials(serialsText);
 
-              // If this is an existing item, the container was changed to
-              // something new, and the quantity needed was reduced, treat
-              // this as "move part of it" — split off a remainder line
-              // that stays behind with the old container and old quantity,
-              // rather than just quietly shrinking the original demand.
-              const isSplit =
+              // Only split if you explicitly checked the box below — never
+              // inferred just from changing the container and quantity,
+              // since sometimes you're simply correcting a mistake and
+              // want the number to just be right, not split off a "ghost"
+              // remainder elsewhere.
+              const canOfferSplit =
                 initial.id &&
                 item.container !== initial.container &&
                 item.container &&
                 finalQtyNeeded < Number(initial.qtyNeeded);
+              const isSplit = canOfferSplit && splitRemainder;
 
               if (isSplit) {
                 const originalTotal = initial.originalQtyNeeded || Number(initial.qtyNeeded);
