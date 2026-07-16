@@ -3889,8 +3889,17 @@ async function saveWithRetry(key, value, expectedUpdatedAt, attempts = 2) {
           .select("updated_at")
           .eq("key", key)
           .maybeSingle();
-        if (!checkError && current && current.updated_at !== expectedUpdatedAt) {
-          return { ok: false, conflict: true };
+        if (!checkError && current) {
+          const currentTime = new Date(current.updated_at).getTime();
+          const expectedTime = new Date(expectedUpdatedAt).getTime();
+          // Only treat this as a real conflict if both timestamps parsed
+          // successfully AND they represent a genuinely different moment —
+          // comparing the raw strings directly was the bug here, since the
+          // same instant can come back formatted differently depending on
+          // whether it originated from this browser or from Postgres.
+          if (!Number.isNaN(currentTime) && !Number.isNaN(expectedTime) && currentTime !== expectedTime) {
+            return { ok: false, conflict: true };
+          }
         }
       }
       const nowIso = new Date().toISOString();
