@@ -108,7 +108,7 @@ function seedJob() {
         ordered: true,
         received: true,
         storage: "Red conex",
-        container: "Conex 20-01",
+        containers: [{ name: "Conex 20-01", qty: 400 }],
         status: "green",
         gang: "Bolt-up",
         serials: [],
@@ -123,7 +123,7 @@ function seedJob() {
         ordered: true,
         received: false,
         storage: "Outside",
-        container: "Gangbox 12345",
+        containers: [{ name: "Gangbox 12345", qty: 5 }],
         status: "yellow",
         gang: "Raising",
         serials: [],
@@ -138,7 +138,7 @@ function seedJob() {
         ordered: false,
         received: false,
         storage: "Covered",
-        container: "Printshack 67891",
+        containers: [],
         status: "red",
         gang: "Welding",
         serials: [],
@@ -179,8 +179,12 @@ function diffItems(before, after) {
   if (before.storage !== after.storage) changes.push(`storage → ${after.storage}`);
   if ((before.storageDetail || "") !== (after.storageDetail || ""))
     changes.push(`storage detail → ${after.storageDetail || "(cleared)"}`);
-  if (before.container !== after.container)
-    changes.push(`container → ${after.container || "(none)"}`);
+  const beforeContainers = JSON.stringify(before.containers || []);
+  const afterContainers = JSON.stringify(after.containers || []);
+  if (beforeContainers !== afterContainers) {
+    const summary = (after.containers || []).map((c) => `${c.name}: ${c.qty}`).join(", ");
+    changes.push(`containers → ${summary || "(none)"}`);
+  }
   if (before.status !== after.status) {
     const label = STATUS_OPTIONS.find((s) => s.value === after.status)?.label;
     changes.push(`status → ${label}`);
@@ -204,24 +208,39 @@ function parseSerials(text) {
     .filter(Boolean);
 }
 
-function emptyItem(defaultStorage, defaultContainer) {
+function emptyItem(defaultStorage) {
   return {
     id: null,
     name: "",
     qtyNeeded: "",
     qtyUnit: "",
-    qtyHave: "",
+    qtyHave: 0,
     ordered: false,
     received: false,
     storage: defaultStorage,
     storageDetail: "",
-    container: defaultContainer || "",
+    containers: [], // [{ name, qty }] — qtyHave is always the sum of these
     status: "red",
     gang: GANG_OPTIONS[0],
     serials: [],
     needsTransfer: false,
     notes: "",
   };
+}
+
+function totalHave(containers) {
+  return (containers || []).reduce((sum, c) => sum + (Number(c.qty) || 0), 0);
+}
+
+// Converts an old single-container item into the new breakdown-list shape.
+// Safe to call on already-migrated items (returns them unchanged).
+function migrateItemContainers(item) {
+  if (Array.isArray(item.containers)) return item;
+  const containers =
+    item.container && Number(item.qtyHave) > 0
+      ? [{ name: item.container, qty: Number(item.qtyHave) }]
+      : [];
+  return { ...item, containers, qtyHave: totalHave(containers) };
 }
 
 function singularize(word) {
@@ -449,26 +468,64 @@ function AddContainer({ onAdd }) {
 }
 
 function ItemForm({ initial, containerOptions, onAddContainer, onSave, onCancel, existingItems = [] }) {
-  const [item, setItem] = useState({
-    serials: [],
-    needsTransfer: false,
-    notes: "",
-    storageDetail: "",
-    qtyUnit: "",
-    ...initial,
-  });
+  const [item, setItem] = useState(
+    migrateItemContainers({
+      serials: [],
+      needsTransfer: false,
+      notes: "",
+      storageDetail: "",
+      qtyUnit: "",
+      containers: [],
+      ...initial,
+    })
+  );
   const [serialsText, setSerialsText] = useState((initial.serials || []).join(", "));
-  const [splitRemainder, setSplitRemainder] = useState(false);
   const set = (field) => (val) => setItem((prev) => ({ ...prev, [field]: val }));
 
   const handleSerialsChange = (text) => {
     setSerialsText(text);
     const count = parseSerials(text).length;
     setItem((prev) => {
-      const currentQtyHave = Number(prev.qtyHave) || 0;
-      return count > currentQtyHave ? { ...prev, qtyHave: count } : prev;
+      const currentHave = totalHave(prev.containers);
+      if (count <= currentHave) return prev;
+      // Bump the first container's qty (or create one) so the have-count
+      // still makes sense; if there are no containers yet, there's nowhere
+      // sensible to put the extra count, so just leave it for the user to
+      // sort out via the container rows below.
+      if (prev.containers.length === 0) return prev;
+      const updated = [...prev.containers];
+      updated[0] = { ...updated[0], qty: updated[0].qty + (count - currentHave) };
+      return { ...prev, containers: updated };
     });
   };
+
+  const addContainerRow = () => {
+    const used = new Set(item.containers.map((c) => c.name));
+    const nextAvailable = [...containerOptions].sort((a, b) => a.localeCompare(b)).find(
+      (name) => !used.has(name)
+    );
+    setItem((prev) => ({
+      ...prev,
+      containers: [...prev.containers, { name: nextAvailable || "", qty: 0 }],
+    }));
+  };
+
+  const updateContainerRow = (index, field, value) => {
+    setItem((prev) => {
+      const updated = [...prev.containers];
+      updated[index] = { ...updated[index], [field]: value };
+      return { ...prev, containers: updated };
+    });
+  };
+
+  const removeContainerRow = (index) => {
+    setItem((prev) => ({
+      ...prev,
+      containers: prev.containers.filter((_, i) => i !== index),
+    }));
+  };
+
+  const currentTotalHave = totalHave(item.containers);
 
   const canSave = item.name.trim().length > 0 && String(item.qtyNeeded).trim().length > 0;
 
@@ -537,14 +594,10 @@ function ItemForm({ initial, containerOptions, onAddContainer, onSave, onCancel,
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1.5">Qty have</label>
-              <input
-                type="number"
-                min="0"
-                value={item.qtyHave}
-                onChange={(e) => set("qtyHave")(e.target.value)}
-                placeholder="0"
-                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60"
-              />
+              <div className="w-full bg-slate-800/50 border border-slate-700 text-slate-300 text-sm rounded-md px-3 py-2">
+                {currentTotalHave}
+                <span className="text-slate-600 text-xs ml-1">(from containers below)</span>
+              </div>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1.5">Gang</label>
@@ -612,39 +665,64 @@ function ItemForm({ initial, containerOptions, onAddContainer, onSave, onCancel,
 
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-xs font-medium text-slate-400">Container</label>
+              <label className="block text-xs font-medium text-slate-400">
+                Containers ({currentTotalHave} of {Number(item.qtyNeeded) || 0} placed)
+              </label>
               <AddContainer
                 onAdd={(name) => {
                   onAddContainer(name);
-                  set("container")(name);
+                  setItem((prev) => ({
+                    ...prev,
+                    containers: [...prev.containers, { name, qty: 0 }],
+                  }));
                 }}
               />
             </div>
-            <Select
-              value={item.container}
-              onChange={set("container")}
-              options={["", ...[...containerOptions].sort((a, b) => a.localeCompare(b))]}
-              labels={{ "": "No container assigned" }}
-            />
-            {initial.id &&
-              item.container !== initial.container &&
-              item.container &&
-              Number(item.qtyNeeded) < Number(initial.qtyNeeded) && (
-                <label className="flex items-start gap-2 mt-2.5 text-xs text-slate-300 cursor-pointer select-none bg-slate-800/50 border border-slate-700 rounded-md p-2.5">
-                  <input
-                    type="checkbox"
-                    checked={splitRemainder}
-                    onChange={(e) => setSplitRemainder(e.target.checked)}
-                    className="w-3.5 h-3.5 rounded accent-amber-500 mt-0.5 shrink-0"
-                  />
-                  <span>
-                    This container only gets part of it — split off the remaining{" "}
-                    {Number(initial.qtyNeeded) - Number(item.qtyNeeded)} as a separate line still
-                    needed in "{initial.container || "no container"}". Leave unchecked if
-                    you're just correcting the total quantity needed.
-                  </span>
-                </label>
-              )}
+            {item.containers.length === 0 ? (
+              <p className="text-xs text-slate-600 mb-2">
+                Not placed in any container yet.
+              </p>
+            ) : (
+              <div className="space-y-2 mb-2">
+                {item.containers.map((c, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <div className="flex-1 min-w-0">
+                      <Select
+                        value={c.name}
+                        onChange={(val) => updateContainerRow(idx, "name", val)}
+                        options={[...containerOptions].sort((a, b) => a.localeCompare(b))}
+                      />
+                    </div>
+                    <input
+                      type="number"
+                      min="0"
+                      value={c.qty}
+                      onChange={(e) =>
+                        updateContainerRow(idx, "qty", Number(e.target.value) || 0)
+                      }
+                      className="w-20 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-2 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                    />
+                    <button
+                      onClick={() => removeContainerRow(idx)}
+                      className="text-slate-500 hover:text-red-400 p-1.5 shrink-0"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button
+              onClick={addContainerRow}
+              disabled={containerOptions.length === 0}
+              className="text-xs text-amber-400 hover:text-amber-300 disabled:text-slate-600 disabled:cursor-not-allowed"
+            >
+              + Add another container
+            </button>
+            <p className="text-xs text-slate-600 mt-2">
+              Split across as many containers as this item is actually sitting in — qty have
+              updates automatically as the total.
+            </p>
           </div>
 
           <div>
@@ -728,52 +806,17 @@ function ItemForm({ initial, containerOptions, onAddContainer, onSave, onCancel,
             onClick={() => {
               if (!canSave) return;
               const finalQtyNeeded = Number(item.qtyNeeded);
-              const finalQtyHave = Number(item.qtyHave) || 0;
               const finalSerials = parseSerials(serialsText);
-
-              // Only split if you explicitly checked the box below — never
-              // inferred just from changing the container and quantity,
-              // since sometimes you're simply correcting a mistake and
-              // want the number to just be right, not split off a "ghost"
-              // remainder elsewhere.
-              const canOfferSplit =
-                initial.id &&
-                item.container !== initial.container &&
-                item.container &&
-                finalQtyNeeded < Number(initial.qtyNeeded);
-              const isSplit = canOfferSplit && splitRemainder;
-
-              if (isSplit) {
-                const originalTotal = initial.originalQtyNeeded || Number(initial.qtyNeeded);
-                const remainderQtyNeeded = Number(initial.qtyNeeded) - finalQtyNeeded;
-                const remainderQtyHave = Math.max(0, Number(initial.qtyHave) - finalQtyHave);
-                const updatedItem = {
-                  ...item,
-                  qtyNeeded: finalQtyNeeded,
-                  qtyHave: finalQtyHave,
-                  serials: [],
-                  originalQtyNeeded: originalTotal,
-                  status:
-                    finalQtyHave >= finalQtyNeeded ? "green" : finalQtyHave > 0 ? "yellow" : "red",
-                };
-                const remainderItem = {
-                  ...initial,
-                  id: Date.now() + Math.floor(Math.random() * 100000),
-                  qtyNeeded: remainderQtyNeeded,
-                  qtyHave: remainderQtyHave,
-                  container: initial.container,
-                  serials: finalSerials,
-                  originalQtyNeeded: originalTotal,
-                  status: remainderQtyHave > 0 ? "yellow" : "red",
-                };
-                onSave(updatedItem, remainderItem);
-                return;
-              }
+              const cleanContainers = item.containers
+                .filter((c) => c.name)
+                .map((c) => ({ name: c.name, qty: Number(c.qty) || 0 }));
+              const finalQtyHave = totalHave(cleanContainers);
 
               onSave({
                 ...item,
                 qtyNeeded: finalQtyNeeded,
                 qtyHave: finalQtyHave,
+                containers: cleanContainers,
                 serials: finalSerials,
               });
             }}
@@ -898,7 +941,9 @@ function TransferListModal({ jobName, items, onClose }) {
                   <p className="font-semibold text-slate-100">{item.name}</p>
                   <p className="text-xs text-slate-500 mb-1.5">
                     Qty {item.qtyHave} of {item.qtyNeeded} · {item.gang}
-                    {item.container ? ` · ${item.container}` : ""}
+                    {(item.containers || []).length > 0
+                      ? ` · ${item.containers.map((c) => `${c.name}: ${c.qty}`).join(", ")}`
+                      : ""}
                   </p>
                   {item.serials && item.serials.length > 0 && (
                     <p className="text-xs text-fuchsia-300 font-mono break-words">
@@ -1005,7 +1050,7 @@ function ExportModal({ jobName, items, onClose }) {
     i.ordered ? "Yes" : "No",
     i.received ? "Yes" : "No",
     i.storage === "Other" && i.storageDetail ? `Other (${i.storageDetail})` : i.storage,
-    i.container || "",
+    (i.containers || []).map((c) => `${c.name}: ${c.qty}`).join("; "),
     i.gang,
     STATUS_OPTIONS.find((s) => s.value === i.status)?.label || i.status,
     (i.serials || []).join("; "),
@@ -1622,9 +1667,16 @@ function ContainerDetailModal({
   const [qtyOverrides, setQtyOverrides] = useState({});
   const [pickSearch, setPickSearch] = useState("");
 
-  const inContainer = items.filter((i) => i.container === containerName);
+  const inContainerFor = (name) =>
+    items
+      .map((i) => ({
+        item: i,
+        entry: (i.containers || []).find((c) => c.name === name),
+      }))
+      .filter((x) => x.entry);
+  const inContainer = inContainerFor(containerName);
   const notInContainer = items
-    .filter((i) => i.container !== containerName)
+    .filter((i) => !(i.containers || []).some((c) => c.name === containerName))
     .filter((i) => i.name.toLowerCase().includes(pickSearch.trim().toLowerCase()));
 
   const toggleSelect = (id) => {
@@ -1644,7 +1696,8 @@ function ContainerDetailModal({
     selectedIds.forEach((id) => {
       const item = items.find((i) => i.id === id);
       const override = qtyOverrides[id];
-      qtyMap[id] = override !== undefined && override !== "" ? Number(override) : item.qtyNeeded;
+      const remaining = Math.max(0, item.qtyNeeded - item.qtyHave);
+      qtyMap[id] = override !== undefined && override !== "" ? Number(override) : remaining;
     });
     onPull(qtyMap);
     setSelected({});
@@ -1677,7 +1730,7 @@ function ContainerDetailModal({
               />
             </div>
             <p className="text-xs text-slate-600 mt-2">
-              Qty defaults to what's needed — edit it for a partial pull.
+              Qty defaults to what's still unplaced — edit it for a partial pull.
             </p>
           </div>
 
@@ -1690,37 +1743,43 @@ function ContainerDetailModal({
               </p>
             ) : (
               <div className="space-y-2">
-                {notInContainer.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex items-center gap-3 border border-slate-800 rounded-md p-3 hover:border-slate-700"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={!!selected[item.id]}
-                      onChange={() => toggleSelect(item.id)}
-                      className="w-4 h-4 rounded accent-amber-500 shrink-0"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm text-slate-100 truncate">{item.name}</p>
-                      <p className="text-xs text-slate-500">
-                        Have {item.qtyHave} of {item.qtyNeeded}
-                        {item.qtyUnit ? ` ${item.qtyUnit}` : ""} · {item.gang}
-                        {item.container ? ` · currently in ${item.container}` : ""}
-                      </p>
+                {notInContainer.map((item) => {
+                  const remaining = Math.max(0, item.qtyNeeded - item.qtyHave);
+                  const elsewhere = (item.containers || [])
+                    .map((c) => `${c.name}: ${c.qty}`)
+                    .join(", ");
+                  return (
+                    <div
+                      key={item.id}
+                      className="flex items-center gap-3 border border-slate-800 rounded-md p-3 hover:border-slate-700"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!!selected[item.id]}
+                        onChange={() => toggleSelect(item.id)}
+                        className="w-4 h-4 rounded accent-amber-500 shrink-0"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm text-slate-100 truncate">{item.name}</p>
+                        <p className="text-xs text-slate-500">
+                          Have {item.qtyHave} of {item.qtyNeeded}
+                          {item.qtyUnit ? ` ${item.qtyUnit}` : ""} · {item.gang}
+                          {elsewhere ? ` · already in: ${elsewhere}` : ""}
+                        </p>
+                      </div>
+                      <input
+                        type="number"
+                        min="0"
+                        value={qtyOverrides[item.id] ?? remaining}
+                        onChange={(e) => setQty(item.id, e.target.value)}
+                        onFocus={() => {
+                          if (!selected[item.id]) toggleSelect(item.id);
+                        }}
+                        className="w-16 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60 shrink-0"
+                      />
                     </div>
-                    <input
-                      type="number"
-                      min="0"
-                      value={qtyOverrides[item.id] ?? item.qtyNeeded}
-                      onChange={(e) => setQty(item.id, e.target.value)}
-                      onFocus={() => {
-                        if (!selected[item.id]) toggleSelect(item.id);
-                      }}
-                      className="w-16 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60 shrink-0"
-                    />
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1772,11 +1831,12 @@ function ContainerDetailModal({
             </p>
           ) : (
             <div className="space-y-2">
-              {inContainer.map((item) => (
+              {inContainer.map(({ item, entry }) => (
                 <div key={item.id} className="border border-slate-800 rounded-md p-3">
                   <p className="text-sm text-slate-100 truncate">{item.name}</p>
                   <p className="text-xs text-slate-500">
-                    Have {item.qtyHave} of {item.qtyNeeded}
+                    {entry.qty} here (of {item.qtyNeeded} total needed, {item.qtyHave} have
+                    overall)
                     {item.qtyUnit ? ` ${item.qtyUnit}` : ""} · {item.gang}
                   </p>
                 </div>
@@ -1815,7 +1875,8 @@ function ContainersModal({
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [openContainer, setOpenContainer] = useState(null);
 
-  const countFor = (name) => items.filter((i) => i.container === name).length;
+  const countFor = (name) =>
+    items.filter((i) => (i.containers || []).some((c) => c.name === name)).length;
 
   const submitAdd = () => {
     const trimmed = newName.trim();
@@ -2006,8 +2067,11 @@ function buildPickListHtml(jobName, groups, sortedGroupKeys, groupOption) {
           ? `<h2>${escapeHtml(groupKey)}</h2>`
           : "";
       const rows = groups[groupKey]
-        .map(
-          (item) => `
+        .map((item) => {
+          const containersText = (item.containers || [])
+            .map((c) => `${c.name}: ${c.qty}`)
+            .join(", ");
+          return `
             <tr>
               <td><div class="checkbox"></div></td>
               <td>${escapeHtml(item.name)}</td>
@@ -2015,9 +2079,9 @@ function buildPickListHtml(jobName, groups, sortedGroupKeys, groupOption) {
               <td>${escapeHtml(
                 item.storage === "Other" && item.storageDetail ? item.storageDetail : item.storage
               )}</td>
-              <td>${escapeHtml(item.container || "—")}</td>
-            </tr>`
-        )
+              <td>${escapeHtml(containersText || "—")}</td>
+            </tr>`;
+        })
         .join("");
       return `
         <div class="group">
@@ -2071,20 +2135,31 @@ function buildPickListHtml(jobName, groups, sortedGroupKeys, groupOption) {
 function PickListModal({ jobName, items, onClose }) {
   const [groupOption, setGroupOption] = useState("gang");
 
-  const groups = items.reduce((acc, item) => {
-    const key =
-      groupOption === "gang"
-        ? item.gang
-        : groupOption === "container"
-        ? item.container || "No container assigned"
-        : groupOption === "storage"
-        ? item.storage === "Other" && item.storageDetail
-          ? item.storageDetail
-          : item.storage
-        : "All items";
-    (acc[key] = acc[key] || []).push(item);
-    return acc;
-  }, {});
+  const groups =
+    groupOption === "container"
+      ? items.reduce((acc, item) => {
+          if (!item.containers || item.containers.length === 0) {
+            const key = "Not yet placed in a container";
+            (acc[key] = acc[key] || []).push(item);
+          } else {
+            item.containers.forEach((c) => {
+              (acc[c.name] = acc[c.name] || []).push({ ...item, qtyNeeded: c.qty });
+            });
+          }
+          return acc;
+        }, {})
+      : items.reduce((acc, item) => {
+          const key =
+            groupOption === "gang"
+              ? item.gang
+              : groupOption === "storage"
+              ? item.storage === "Other" && item.storageDetail
+                ? item.storageDetail
+                : item.storage
+              : "All items";
+          (acc[key] = acc[key] || []).push(item);
+          return acc;
+        }, {});
 
   const sortedGroupKeys = Object.keys(groups).sort();
 
@@ -2455,11 +2530,6 @@ function ItemCard({ item, selectMode, selected, onToggleSelect, onEdit, onDelete
               Have {item.qtyHave} of {item.qtyNeeded}
               {item.qtyUnit ? ` ${item.qtyUnit}` : ""} needed
             </p>
-            {item.originalQtyNeeded && item.originalQtyNeeded !== item.qtyNeeded && (
-              <p className="text-xs text-amber-500/80 mt-0.5">
-                ⚠ Split — part of {item.originalQtyNeeded} needed total across containers
-              </p>
-            )}
             <div className="mt-1.5 h-1.5 w-full max-w-[160px] rounded-full bg-slate-800 overflow-hidden">
               <div
                 className={`h-full rounded-full ${
@@ -2509,11 +2579,14 @@ function ItemCard({ item, selectMode, selected, onToggleSelect, onEdit, onDelete
         <span className="text-xs rounded-full px-2.5 py-1 border border-slate-700 text-slate-400">
           {item.storage === "Other" && item.storageDetail ? item.storageDetail : item.storage}
         </span>
-        {item.container && (
-          <span className="text-xs rounded-full px-2.5 py-1 border border-indigo-500/30 bg-indigo-500/10 text-indigo-300">
-            📦 {item.container}
+        {(item.containers || []).map((c, idx) => (
+          <span
+            key={idx}
+            className="text-xs rounded-full px-2.5 py-1 border border-indigo-500/30 bg-indigo-500/10 text-indigo-300"
+          >
+            📦 {c.name}: {c.qty}
           </span>
-        )}
+        ))}
         <span
           className={`text-xs rounded-full px-2.5 py-1 border flex items-center gap-1 ${
             item.ordered
@@ -3035,9 +3108,12 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
     onUpdateJob((prevJob) => ({
       ...prevJob,
       containerOptions: prevJob.containerOptions.map((c) => (c === oldName ? newName : c)),
-      items: prevJob.items.map((i) =>
-        i.container === oldName ? { ...i, container: newName } : i
-      ),
+      items: prevJob.items.map((i) => ({
+        ...i,
+        containers: (i.containers || []).map((c) =>
+          c.name === oldName ? { ...c, name: newName } : c
+        ),
+      })),
       activityLog: [
         {
           id: Date.now(),
@@ -3053,7 +3129,10 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
     onUpdateJob((prevJob) => ({
       ...prevJob,
       containerOptions: prevJob.containerOptions.filter((c) => c !== name),
-      items: prevJob.items.map((i) => (i.container === name ? { ...i, container: "" } : i)),
+      items: prevJob.items.map((i) => {
+        const remaining = (i.containers || []).filter((c) => c.name !== name);
+        return { ...i, containers: remaining, qtyHave: totalHave(remaining) };
+      }),
       activityLog: [
         {
           id: Date.now(),
@@ -3067,69 +3146,29 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
 
   const pullItemsIntoContainer = (containerName, qtyMap) => {
     const itemIds = Object.keys(qtyMap).map(Number);
-    let splitCount = 0;
-    onUpdateJob((prevJob) => {
-      let newItems = [...prevJob.items];
-      itemIds.forEach((id) => {
-        const idx = newItems.findIndex((i) => i.id === id);
-        if (idx === -1) return;
-        const original = newItems[idx];
-        const pulledQty = qtyMap[id];
-        const remainingNeeded = original.qtyNeeded - pulledQty;
-
-        if (pulledQty <= 0 || remainingNeeded <= 0) {
-          // Taking all of it (or the whole remaining amount) — no split
-          // needed, just move this line into the container as-is.
-          const status =
-            pulledQty >= original.qtyNeeded ? "green" : pulledQty > 0 ? "yellow" : "red";
-          newItems[idx] = { ...original, container: containerName, qtyHave: pulledQty, status };
-        } else {
-          // Partial pull — split into two lines so the total quantity
-          // needed stays correct across however many containers this item
-          // ends up spread across.
-          splitCount++;
-          const originalTotal = original.originalQtyNeeded || original.qtyNeeded;
-          const splitOff = {
-            ...original,
-            id: Date.now() + idx + Math.floor(Math.random() * 100000),
-            qtyNeeded: pulledQty,
-            qtyHave: pulledQty,
-            container: containerName,
-            status: "green",
-            serials: [], // avoid implying the same serial numbers sit in two places
-            originalQtyNeeded: originalTotal,
-          };
-          const remainingHave = Math.max(0, original.qtyHave - pulledQty);
-          newItems[idx] = {
-            ...original,
-            qtyNeeded: remainingNeeded,
-            qtyHave: remainingHave,
-            status: remainingHave > 0 ? "yellow" : "red",
-            originalQtyNeeded: originalTotal,
-          };
-          newItems.splice(idx + 1, 0, splitOff);
-        }
-      });
-
-      return {
-        ...prevJob,
-        items: newItems,
-        activityLog: [
-          {
-            id: Date.now(),
-            time: timeStamp(),
-            message: `Pulled ${itemIds.length} item${
-              itemIds.length === 1 ? "" : "s"
-            } into "${containerName}"${
-              splitCount > 0
-                ? ` (${splitCount} split across containers)`
-                : " with quantities set"
-            }`,
-          },
-          ...prevJob.activityLog,
-        ].slice(0, 50),
-      };
-    });
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      items: prevJob.items.map((i) => {
+        if (!(i.id in qtyMap)) return i;
+        const pulledQty = qtyMap[i.id];
+        const existing = (i.containers || []).filter((c) => c.name !== containerName);
+        const newContainers =
+          pulledQty > 0 ? [...existing, { name: containerName, qty: pulledQty }] : existing;
+        const qtyHave = totalHave(newContainers);
+        const status = qtyHave >= i.qtyNeeded ? "green" : qtyHave > 0 ? "yellow" : "red";
+        return { ...i, containers: newContainers, qtyHave, status };
+      }),
+      activityLog: [
+        {
+          id: Date.now(),
+          time: timeStamp(),
+          message: `Pulled ${itemIds.length} item${
+            itemIds.length === 1 ? "" : "s"
+          } into "${containerName}"`,
+        },
+        ...prevJob.activityLog,
+      ].slice(0, 50),
+    }));
   };
 
   const matchesProcFilter = (item) => {
@@ -3145,7 +3184,7 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
     const q = searchQuery.trim().toLowerCase();
     return (
       item.name.toLowerCase().includes(q) ||
-      (item.container || "").toLowerCase().includes(q) ||
+      (item.containers || []).some((c) => c.name.toLowerCase().includes(q)) ||
       (item.notes || "").toLowerCase().includes(q) ||
       (item.serials || []).some((sn) => sn.toLowerCase().includes(q))
     );
@@ -3176,33 +3215,15 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
       (i) =>
         (gangFilter === "All" || i.gang === gangFilter) &&
         (storageFilter === "All" || i.storage === storageFilter) &&
-        (containerFilter === "All" || i.container === containerFilter) &&
+        (containerFilter === "All" ||
+          (i.containers || []).some((c) => c.name === containerFilter)) &&
         (statusFilter === "All" || i.status === statusFilter) &&
         matchesProcFilter(i) &&
         matchesSearch(i)
     )
   );
 
-  const saveItem = (item, remainderItem) => {
-    if (item.id && remainderItem) {
-      // A split: update the existing item in place and insert a new line
-      // for the remainder that stayed behind in its original container.
-      onUpdateJob((prevJob) => ({
-        ...prevJob,
-        items: prevJob.items.flatMap((i) =>
-          i.id === item.id ? [item, remainderItem] : [i]
-        ),
-        activityLog: [
-          {
-            id: Date.now(),
-            time: timeStamp(),
-            message: `Split "${item.name}" — ${item.qtyNeeded} moved to "${item.container}", ${remainderItem.qtyNeeded} remaining in "${remainderItem.container || "no container"}"`,
-          },
-          ...prevJob.activityLog,
-        ].slice(0, 50),
-      }));
-      return;
-    }
+  const saveItem = (item) => {
     if (item.id) {
       const before = items.find((i) => i.id === item.id);
       const changes = diffItems(before, item);
@@ -3294,7 +3315,13 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
     setBulkStoragePicker(false);
   };
   const bulkSetContainer = (container) => {
-    bulkUpdate((i) => ({ ...i, container }), `Moved to container "${container}"`);
+    bulkUpdate(
+      (i) => {
+        const containers = [{ name: container, qty: i.qtyNeeded }];
+        return { ...i, containers, qtyHave: totalHave(containers), status: "green" };
+      },
+      `Moved to container "${container}" (full quantity)`
+    );
     setBulkContainerPicker(false);
   };
   const bulkDelete = () => {
@@ -3318,7 +3345,7 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
 
   const importItems = (previewRows) => {
     const newItems = previewRows.map((p, idx) => ({
-      ...emptyItem(p.storage, ""),
+      ...emptyItem(p.storage),
       id: Date.now() + idx,
       name: p.name,
       qtyNeeded: Number(p.qtyNeeded) > 0 ? Number(p.qtyNeeded) : 1,
@@ -3476,7 +3503,7 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
               </>
             )}
             <button
-              onClick={() => setFormState(emptyItem(STORAGE_OPTIONS[0], ""))}
+              onClick={() => setFormState(emptyItem(STORAGE_OPTIONS[0]))}
               className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
             >
               <Plus className="w-4 h-4" />
@@ -3934,10 +3961,15 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
       {bulkContainerPicker && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
           <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
-            <h3 className="text-slate-100 font-semibold mb-3">
+            <h3 className="text-slate-100 font-semibold mb-1.5">
               Move {selectedItemIds.length} item{selectedItemIds.length === 1 ? "" : "s"} to
               container
             </h3>
+            <p className="text-xs text-slate-500 mb-3">
+              Sets the full quantity needed into this one container for each item selected,
+              replacing any existing breakdown. For a partial amount split across containers,
+              use "Pull items into this container" from the Containers screen instead.
+            </p>
             {containerOptions.length === 0 ? (
               <p className="text-sm text-slate-500 mb-4">
                 No containers yet — add one from the Containers screen first.
@@ -4220,7 +4252,9 @@ function WareHub({ onSignOut }) {
 
     const migrateGang = (job) => ({
       ...job,
-      items: job.items.map((i) => (i.gang === "Welders" ? { ...i, gang: "Welding" } : i)),
+      items: job.items.map((i) =>
+        migrateItemContainers(i.gang === "Welders" ? { ...i, gang: "Welding" } : i)
+      ),
     });
     const finalJobs =
       loadedJobs && loadedJobs.length > 0 ? loadedJobs.map(migrateGang) : [seedJob()];
