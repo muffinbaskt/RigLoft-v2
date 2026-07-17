@@ -321,6 +321,7 @@ function parseImportText(text, catalog) {
       const qtyPart = parts[1] || "";
       const orderedRaw = (parts[2] || "").toLowerCase();
       const ordered = ["yes", "y", "true"].includes(orderedRaw);
+      const containerPart = parts[3] || "";
 
       const qtyMatch = qtyPart.match(/(\d+)\s*(.*)/);
       const qtyParsed = qtyMatch ? parseInt(qtyMatch[1], 10) : NaN;
@@ -338,7 +339,7 @@ function parseImportText(text, catalog) {
         matched: !!match,
         gang: match ? match.gang : "Unassigned",
         storage: match ? match.storage : "Unassigned",
-        container: "",
+        container: containerPart,
         needsTransfer: match ? !!match.needsTransfer : false,
         ordered,
       };
@@ -2286,6 +2287,12 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
     );
   };
 
+  const updateContainer = (lineId, value) => {
+    setPreview((prev) =>
+      prev.map((p) => (p.lineId === lineId ? { ...p, container: value } : p))
+    );
+  };
+
   const cloneRow = (lineId) => {
     setPreview((prev) => {
       const idx = prev.findIndex((p) => p.lineId === lineId);
@@ -2345,16 +2352,17 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 placeholder={
-                  "Come along 3-ton | 4 | yes\n3/4in A325 bolts | 500\nGrinder disc 9in | 4 box | yes"
+                  "Come along 3-ton | 4 | yes | Conex 20-04\n3/4in A325 bolts | 500\nGrinder disc 9in | 4 box | yes | Gangbox 19268"
                 }
                 rows={8}
                 className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60 font-mono resize-none"
               />
               <p className="text-xs text-slate-600 mt-2">
-                Paste one item per line as "name | quantity | ordered (yes/no, optional)". Add
-                a unit after the number if it's not single items — e.g. "4 box" or "8 cases" —
-                and it'll carry through. Items matching your catalog auto-fill gang and storage.
-                You can edit anything, including quantity and unit, on the next screen.
+                Paste one item per line as "name | quantity | ordered (yes/no, optional) |
+                container (optional)". Add a unit after the number if it's not single items —
+                e.g. "4 box" — and it'll carry through. A container name that doesn't exist yet
+                gets created automatically. Items matching your catalog auto-fill gang and
+                storage. Everything's editable on the next screen.
               </p>
               <button
                 onClick={onOpenCatalog}
@@ -2410,6 +2418,12 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
                       onChange={(e) => updateUnit(p.lineId, e.target.value)}
                       placeholder="each"
                       className="w-20 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60"
+                    />
+                    <input
+                      value={p.container}
+                      onChange={(e) => updateContainer(p.lineId, e.target.value)}
+                      placeholder="container (optional)"
+                      className="w-36 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60"
                     />
                     <div className="flex items-center gap-2 ml-auto shrink-0">
                       <button
@@ -3344,21 +3358,37 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
   };
 
   const importItems = (previewRows) => {
-    const newItems = previewRows.map((p, idx) => ({
-      ...emptyItem(p.storage),
-      id: Date.now() + idx,
-      name: p.name,
-      qtyNeeded: Number(p.qtyNeeded) > 0 ? Number(p.qtyNeeded) : 1,
-      qtyUnit: p.qtyUnit || "",
-      qtyHave: 0,
-      gang: p.gang,
-      needsTransfer: !!p.needsTransfer,
-      ordered: !!p.ordered,
-    }));
+    const qtyNum = (p) => (Number(p.qtyNeeded) > 0 ? Number(p.qtyNeeded) : 1);
+    const newItems = previewRows.map((p, idx) => {
+      const containerName = (p.container || "").trim();
+      const containers = containerName ? [{ name: containerName, qty: qtyNum(p) }] : [];
+      return {
+        ...emptyItem(p.storage),
+        id: Date.now() + idx,
+        name: p.name,
+        qtyNeeded: qtyNum(p),
+        qtyUnit: p.qtyUnit || "",
+        containers,
+        qtyHave: totalHave(containers),
+        status: containers.length > 0 ? "green" : "red",
+        gang: p.gang,
+        needsTransfer: !!p.needsTransfer,
+        ordered: !!p.ordered,
+      };
+    });
+    const newContainerNames = [
+      ...new Set(
+        newItems.flatMap((i) => i.containers.map((c) => c.name)).filter(Boolean)
+      ),
+    ];
     const matchedCount = previewRows.filter((p) => p.matched).length;
     onUpdateJob((prevJob) => ({
       ...prevJob,
       items: [...prevJob.items, ...newItems],
+      containerOptions: [
+        ...prevJob.containerOptions,
+        ...newContainerNames.filter((name) => !prevJob.containerOptions.includes(name)),
+      ],
       activityLog: [
         {
           id: Date.now(),
