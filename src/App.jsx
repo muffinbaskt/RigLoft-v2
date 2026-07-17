@@ -894,12 +894,12 @@ function TransferListModal({ jobName, items, onClose }) {
   const [copyFailed, setCopyFailed] = useState(false);
   const transferItems = items.filter((i) => i.needsTransfer);
 
-  const asText = transferItems
-    .map((i) => {
-      const sme = i.serials && i.serials.length > 0 ? ` — SME #: ${i.serials.join(", ")}` : "";
-      return `${i.name} (qty ${i.qtyHave}/${i.qtyNeeded})${sme}`;
-    })
-    .join("\n");
+  const lineFor = (item) =>
+    item.serials && item.serials.length > 0
+      ? `${item.name}: ${item.serials.join(", ")}`
+      : `${item.name} x${item.qtyHave}`;
+
+  const asText = transferItems.map(lineFor).join("\n");
 
   const copyList = async () => {
     const ok = await copyToClipboard(`Transfer list — ${jobName}\n\n${asText}`);
@@ -936,22 +936,18 @@ function TransferListModal({ jobName, items, onClose }) {
               form.
             </p>
           ) : (
-            <div className="space-y-3">
+            <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden">
               {transferItems.map((item) => (
-                <div
-                  key={item.id}
-                  className="border border-slate-800 rounded-lg p-3 bg-slate-800/40"
-                >
-                  <p className="font-semibold text-slate-100">{item.name}</p>
-                  <p className="text-xs text-slate-500 mb-1.5">
-                    Qty {item.qtyHave} of {item.qtyNeeded} · {item.gang}
-                    {(item.containers || []).length > 0
-                      ? ` · ${item.containers.map((c) => `${c.name}: ${c.qty}`).join(", ")}`
-                      : ""}
+                <div key={item.id} className="px-3 py-2 bg-slate-800/40">
+                  <p className="text-sm text-slate-100">
+                    {item.name}{" "}
+                    {!(item.serials && item.serials.length > 0) && (
+                      <span className="text-slate-500">x{item.qtyHave}</span>
+                    )}
                   </p>
                   {item.serials && item.serials.length > 0 && (
-                    <p className="text-xs text-fuchsia-300 font-mono break-words">
-                      SME #: {item.serials.join(", ")}
+                    <p className="text-xs text-fuchsia-300 font-mono break-words mt-0.5">
+                      {item.serials.join(", ")}
                     </p>
                   )}
                 </div>
