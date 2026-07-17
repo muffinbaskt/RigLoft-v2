@@ -322,6 +322,8 @@ function parseImportText(text, catalog) {
       const orderedRaw = (parts[2] || "").toLowerCase();
       const ordered = ["yes", "y", "true"].includes(orderedRaw);
       const containerPart = parts[3] || "";
+      const serialsPart = parts[4] || "";
+      const serials = parseSerials(serialsPart);
 
       const qtyMatch = qtyPart.match(/(\d+)\s*(.*)/);
       const qtyParsed = qtyMatch ? parseInt(qtyMatch[1], 10) : NaN;
@@ -340,6 +342,7 @@ function parseImportText(text, catalog) {
         gang: match ? match.gang : "Unassigned",
         storage: match ? match.storage : "Unassigned",
         container: containerPart,
+        serials,
         needsTransfer: match ? !!match.needsTransfer : false,
         ordered,
       };
@@ -2293,6 +2296,12 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
     );
   };
 
+  const updateSerials = (lineId, value) => {
+    setPreview((prev) =>
+      prev.map((p) => (p.lineId === lineId ? { ...p, serials: parseSerials(value) } : p))
+    );
+  };
+
   const cloneRow = (lineId) => {
     setPreview((prev) => {
       const idx = prev.findIndex((p) => p.lineId === lineId);
@@ -2352,17 +2361,18 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 placeholder={
-                  "Come along 3-ton | 4 | yes | Conex 20-04\n3/4in A325 bolts | 500\nGrinder disc 9in | 4 box | yes | Gangbox 19268"
+                  "Come along 3-ton | 4 | yes | Conex 20-04 | 12290, 12372, 12381, 12388\n3/4in A325 bolts | 500\nGrinder disc 9in | 4 box | yes | Gangbox 19268"
                 }
                 rows={8}
                 className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60 font-mono resize-none"
               />
               <p className="text-xs text-slate-600 mt-2">
                 Paste one item per line as "name | quantity | ordered (yes/no, optional) |
-                container (optional)". Add a unit after the number if it's not single items —
-                e.g. "4 box" — and it'll carry through. A container name that doesn't exist yet
-                gets created automatically. Items matching your catalog auto-fill gang and
-                storage. Everything's editable on the next screen.
+                container (optional) | SME #s comma-separated (optional)". Add a unit after
+                the number if it's not single items — e.g. "4 box" — and it'll carry through.
+                A container name that doesn't exist yet gets created automatically. Items
+                matching your catalog auto-fill gang and storage. Everything's editable on the
+                next screen.
               </p>
               <button
                 onClick={onOpenCatalog}
@@ -2457,6 +2467,14 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
                       />
                       Ordered
                     </label>
+                  </div>
+                  <div className="mt-2">
+                    <input
+                      value={(p.serials || []).join(", ")}
+                      onChange={(e) => updateSerials(p.lineId, e.target.value)}
+                      placeholder="SME #s, comma-separated (optional)"
+                      className="w-full bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                    />
                   </div>
                 </div>
               ))}
@@ -3372,6 +3390,7 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
         qtyHave: totalHave(containers),
         status: containers.length > 0 ? "green" : "red",
         gang: p.gang,
+        serials: p.serials || [],
         needsTransfer: !!p.needsTransfer,
         ordered: !!p.ordered,
       };
