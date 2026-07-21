@@ -26,6 +26,7 @@ import {
   Layers,
   LogOut,
   ListChecks,
+  Inbox,
 } from "lucide-react";
 
 const STORAGE_OPTIONS = [
@@ -1868,6 +1869,91 @@ function ContainerDetailModal({
   );
 }
 
+function SuggestionsInboxModal({ suggestions, jobs, loading, onApprove, onDeny, onClose }) {
+  const jobName = (jobId) => jobs.find((j) => String(j.id) === String(jobId))?.name || "Unknown job";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <div>
+            <h2 className="text-slate-100 font-semibold text-base">Suggestions</h2>
+            <p className="text-xs text-slate-500">
+              {suggestions.length} pending from viewers
+            </p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {loading ? (
+            <div className="flex justify-center py-10">
+              <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
+            </div>
+          ) : suggestions.length === 0 ? (
+            <p className="text-sm text-slate-500 text-center py-10">
+              Nothing pending. Suggestions from anyone viewing your shared link show up here.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {suggestions.map((s) => (
+                <div key={s.id} className="border border-slate-800 rounded-md p-3">
+                  <p className="text-xs text-slate-500 mb-1.5">{jobName(s.job_id)}</p>
+                  {s.suggestion_type === "new_item" ? (
+                    <>
+                      <p className="text-sm text-slate-100 font-semibold">
+                        New item: {s.payload.name}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        Qty needed: {s.payload.qtyNeeded}
+                        {s.payload.container ? ` · Container: ${s.payload.container}` : ""}
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm text-slate-100 font-semibold">
+                        {s.payload.itemName}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        Qty have → {s.payload.qtyHave}
+                        {s.payload.container
+                          ? ` · ${s.payload.container.name}: ${s.payload.container.qty}`
+                          : ""}
+                        {" · "}
+                        {s.payload.ordered ? "Ordered" : "Not ordered"} ·{" "}
+                        {s.payload.received ? "Received" : "Not received"}
+                      </p>
+                    </>
+                  )}
+                  {s.note && (
+                    <p className="text-xs text-slate-400 italic mt-1.5">"{s.note}"</p>
+                  )}
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      onClick={() => onDeny(s)}
+                      className="flex-1 text-xs rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+                    >
+                      Ignore
+                    </button>
+                    <button
+                      onClick={() => onApprove(s)}
+                      className="flex-1 text-xs rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+                    >
+                      Approve
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TodoListModal({ todos, isEditor, onAddCustom, onToggleDone, onDelete, onClose }) {
   const [newText, setNewText] = useState("");
 
@@ -2664,16 +2750,308 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
   );
 }
 
-function ItemCard({ item, selectMode, selected, isEditor, onToggleSelect, onEdit, onDelete, onViewSerials }) {
+function SuggestEditModal({ job, item, onSubmit, onClose }) {
+  const currentContainer = (item.containers || [])[0];
+  const [qtyHave, setQtyHave] = useState(item.qtyHave);
+  const [containerName, setContainerName] = useState(currentContainer?.name || "");
+  const [containerQty, setContainerQty] = useState(currentContainer?.qty || item.qtyHave);
+  const [ordered, setOrdered] = useState(item.ordered);
+  const [received, setReceived] = useState(item.received);
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const handleSubmit = async () => {
+    setSubmitting(true);
+    const result = await submitSuggestion({
+      jobId: job.id,
+      itemId: item.id,
+      type: "edit_item",
+      payload: {
+        itemName: item.name,
+        qtyHave: Number(qtyHave) || 0,
+        container: containerName ? { name: containerName, qty: Number(containerQty) || 0 } : null,
+        ordered,
+        received,
+      },
+      note,
+    });
+    setSubmitting(false);
+    if (result.ok) setDone(true);
+  };
+
+  if (done) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+        <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5 text-center">
+          <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto mb-3" />
+          <h3 className="text-slate-100 font-semibold mb-1.5">Suggestion sent</h3>
+          <p className="text-sm text-slate-500 mb-4">
+            The job owner will review it before anything changes.
+          </p>
+          <button
+            onClick={onClose}
+            className="w-full text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <div>
+            <h2 className="text-slate-100 font-semibold text-base">Suggest a change</h2>
+            <p className="text-xs text-slate-500">{item.name}</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+          <p className="text-xs text-slate-500">
+            You're viewing this job without edit access. Propose a change below — the job
+            owner will see it and can approve or ignore it.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">Qty have</label>
+              <input
+                type="number"
+                min="0"
+                value={qtyHave}
+                onChange={(e) => setQtyHave(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+            <div className="flex items-end gap-2">
+              <label className="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer select-none pb-2">
+                <input
+                  type="checkbox"
+                  checked={ordered}
+                  onChange={(e) => setOrdered(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded accent-amber-500"
+                />
+                Ordered
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer select-none pb-2">
+                <input
+                  type="checkbox"
+                  checked={received}
+                  onChange={(e) => setReceived(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded accent-amber-500"
+                />
+                Received
+              </label>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                Container
+              </label>
+              <input
+                value={containerName}
+                onChange={(e) => setContainerName(e.target.value)}
+                placeholder="e.g. Gangbox 12345"
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                Qty in that container
+              </label>
+              <input
+                type="number"
+                min="0"
+                value={containerQty}
+                onChange={(e) => setContainerQty(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              Note (optional)
+            </label>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={2}
+              placeholder="Anything else the owner should know..."
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 resize-none"
+            />
+          </div>
+        </div>
+
+        <div className="flex gap-3 px-5 py-4 border-t border-slate-800 shrink-0">
+          <button
+            onClick={onClose}
+            className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={submitting}
+            className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-50"
+          >
+            {submitting ? "Sending..." : "Send suggestion"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SuggestNewItemModal({ job, onClose }) {
+  const [name, setName] = useState("");
+  const [qtyNeeded, setQtyNeeded] = useState("");
+  const [container, setContainer] = useState("");
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const canSubmit = name.trim().length > 0;
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    const result = await submitSuggestion({
+      jobId: job.id,
+      itemId: null,
+      type: "new_item",
+      payload: {
+        name: name.trim(),
+        qtyNeeded: Number(qtyNeeded) || 1,
+        container: container.trim() || null,
+      },
+      note,
+    });
+    setSubmitting(false);
+    if (result.ok) setDone(true);
+  };
+
+  if (done) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+        <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5 text-center">
+          <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto mb-3" />
+          <h3 className="text-slate-100 font-semibold mb-1.5">Suggestion sent</h3>
+          <p className="text-sm text-slate-500 mb-4">
+            The job owner will review it before it's added.
+          </p>
+          <button
+            onClick={onClose}
+            className="w-full text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <h2 className="text-slate-100 font-semibold text-base">Suggest a new item</h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+          <p className="text-xs text-slate-500">
+            You're viewing this job without edit access. Propose an item to add — the job
+            owner will see it and can approve or ignore it.
+          </p>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Item name</label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoFocus
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                Qty needed
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={qtyNeeded}
+                onChange={(e) => setQtyNeeded(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                Container (optional)
+              </label>
+              <input
+                value={container}
+                onChange={(e) => setContainer(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              Note (optional)
+            </label>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={2}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 resize-none"
+            />
+          </div>
+        </div>
+
+        <div className="flex gap-3 px-5 py-4 border-t border-slate-800 shrink-0">
+          <button
+            onClick={onClose}
+            className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={!canSubmit || submitting}
+            className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-50"
+          >
+            {submitting ? "Sending..." : "Send suggestion"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ItemCard({ item, selectMode, selected, isEditor, onToggleSelect, onEdit, onDelete, onViewSerials, onSuggestEdit }) {
   const handleCardClick = () => {
-    if (selectMode) onToggleSelect(item.id);
+    if (selectMode) {
+      onToggleSelect(item.id);
+    } else if (!isEditor) {
+      onSuggestEdit(item);
+    }
   };
 
   return (
     <div
       onClick={handleCardClick}
       className={`bg-slate-900 rounded-lg p-4 transition-colors border ${
-        selectMode ? "cursor-pointer" : ""
+        selectMode || !isEditor ? "cursor-pointer" : ""
       } ${
         selected
           ? "border-amber-500/70 bg-amber-500/5"
@@ -2972,6 +3350,8 @@ function JobPicker({
   onExportAll,
   onImportAll,
   onSignOut,
+  pendingSuggestionCount,
+  onOpenSuggestions,
 }) {
   const [collapsed, setCollapsed] = useState({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -2988,8 +3368,18 @@ function JobPicker({
   const matchingItemResults = searching
     ? jobs.flatMap((j) =>
         j.items
-          .filter((i) => i.name.toLowerCase().includes(query))
-          .map((i) => ({ item: i, job: j }))
+          .filter(
+            (i) =>
+              i.name.toLowerCase().includes(query) ||
+              (i.serials || []).some((s) => s.toLowerCase().includes(query))
+          )
+          .map((i) => ({
+            item: i,
+            job: j,
+            matchedSerial: (i.serials || []).find((s) =>
+              s.toLowerCase().includes(query)
+            ),
+          }))
       )
     : [];
 
@@ -3014,6 +3404,20 @@ function JobPicker({
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {isEditor && (
+              <button
+                onClick={onOpenSuggestions}
+                title="Suggestions"
+                className="relative flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+              >
+                <Inbox className="w-4 h-4" />
+                {pendingSuggestionCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-slate-950 text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                    {pendingSuggestionCount > 9 ? "9+" : pendingSuggestionCount}
+                  </span>
+                )}
+              </button>
+            )}
             <button
               onClick={onOpenCatalog}
               title="Item catalog"
@@ -3057,7 +3461,7 @@ function JobPicker({
             <input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search job names or items across all jobs..."
+              placeholder="Search job names, items, or SME #s across all jobs..."
               className="w-full bg-slate-900 border border-slate-800 text-slate-100 text-sm rounded-md pl-9 pr-9 py-2.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60"
             />
             {searchQuery && (
@@ -3109,7 +3513,7 @@ function JobPicker({
                       Items ({matchingItemResults.length})
                     </p>
                     <div className="space-y-2">
-                      {matchingItemResults.map(({ item, job }) => (
+                      {matchingItemResults.map(({ item, job, matchedSerial }) => (
                         <button
                           key={`${job.id}-${item.id}`}
                           onClick={() => onSelect(job.id)}
@@ -3120,6 +3524,16 @@ function JobPicker({
                             In "{job.name}" · Have {item.qtyHave} of {item.qtyNeeded}
                             {item.qtyUnit ? ` ${item.qtyUnit}` : ""} · {item.gang}
                           </p>
+                          {(item.containers || []).length > 0 && (
+                            <p className="text-xs text-slate-500">
+                              📦 {item.containers.map((c) => `${c.name}: ${c.qty}`).join(", ")}
+                            </p>
+                          )}
+                          {matchedSerial && (
+                            <p className="text-xs text-fuchsia-300 font-mono mt-0.5">
+                              Matched SME #: {matchedSerial}
+                            </p>
+                          )}
                         </button>
                       ))}
                     </div>
@@ -3298,6 +3712,8 @@ function JobInventory({
   const [containersOpen, setContainersOpen] = useState(false);
   const [pickListOpen, setPickListOpen] = useState(false);
   const [todoListOpen, setTodoListOpen] = useState(false);
+  const [suggestEditTarget, setSuggestEditTarget] = useState(null);
+  const [suggestNewItemOpen, setSuggestNewItemOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
 
@@ -3816,13 +4232,21 @@ function JobInventory({
                 </div>
               </>
             )}
-            {isEditor && (
+            {isEditor ? (
               <button
                 onClick={() => setFormState(emptyItem(STORAGE_OPTIONS[0]))}
                 className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
               >
                 <Plus className="w-4 h-4" />
                 <span className="hidden sm:inline">Add item</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => setSuggestNewItemOpen(true)}
+                className="flex items-center gap-1.5 bg-slate-800 border border-slate-700 text-slate-200 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-slate-700"
+              >
+                <Plus className="w-4 h-4" />
+                <span className="hidden sm:inline">Suggest item</span>
               </button>
             )}
           </div>
@@ -4107,6 +4531,7 @@ function JobInventory({
                         onEdit={setFormState}
                         onDelete={setDeleteTarget}
                         onViewSerials={setSerialsView}
+                        onSuggestEdit={setSuggestEditTarget}
                       />
                     ))}
                   </div>
@@ -4126,6 +4551,7 @@ function JobInventory({
                 onEdit={setFormState}
                 onDelete={setDeleteTarget}
                 onViewSerials={setSerialsView}
+                onSuggestEdit={setSuggestEditTarget}
               />
             ))}
           </div>
@@ -4348,6 +4774,18 @@ function JobInventory({
         />
       )}
 
+      {suggestEditTarget && (
+        <SuggestEditModal
+          job={job}
+          item={suggestEditTarget}
+          onClose={() => setSuggestEditTarget(null)}
+        />
+      )}
+
+      {suggestNewItemOpen && (
+        <SuggestNewItemModal job={job} onClose={() => setSuggestNewItemOpen(false)} />
+      )}
+
       {renameOpen && (
         <JobNameModal
           initialName={job.name}
@@ -4443,6 +4881,50 @@ async function getWithRetry(key, attempts = 6) {
     }
   }
   return { ok: false, error: lastError };
+}
+
+// Anyone (including viewers with no login) can submit a suggestion — this
+// hits its own database table with its own permission rules, separate from
+// the main app_storage table, so it never conflicts with view-only access.
+async function submitSuggestion({ jobId, itemId, type, payload, note }) {
+  try {
+    const { error } = await supabase.from("suggestions").insert({
+      job_id: String(jobId),
+      item_id: itemId ? String(itemId) : null,
+      suggestion_type: type,
+      payload,
+      note: note || null,
+    });
+    return { ok: !error, error: error ? error.message : null };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
+// Only works for the logged-in owner — RLS blocks anyone else from seeing
+// what's been submitted. Every row here is effectively "pending" since
+// resolved ones get deleted rather than just marked, keeping the inbox
+// clean without needing a separate history view.
+async function fetchPendingSuggestions() {
+  try {
+    const { data, error } = await supabase
+      .from("suggestions")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, suggestions: data || [] };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
+async function resolveSuggestion(id) {
+  try {
+    const { error } = await supabase.from("suggestions").delete().eq("id", id);
+    return { ok: !error, error: error ? error.message : null };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
 }
 
 function WareHub({ isEditor, onSignOut, onRequestLogin }) {
@@ -4690,6 +5172,117 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
 
   const updateActiveJob = (updater) => {
     setJobs((prev) => prev.map((j) => (j.id === activeJobId ? updater(j) : j)));
+  };
+
+  const updateJobById = (jobId, updater) => {
+    setJobs((prev) => prev.map((j) => (String(j.id) === String(jobId) ? updater(j) : j)));
+  };
+
+  const [pendingSuggestionCount, setPendingSuggestionCount] = useState(0);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [suggestionsList, setSuggestionsList] = useState([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+
+  const refreshSuggestions = async () => {
+    if (!isEditor) return;
+    setSuggestionsLoading(true);
+    const result = await fetchPendingSuggestions();
+    setSuggestionsLoading(false);
+    if (result.ok) {
+      setSuggestionsList(result.suggestions);
+      setPendingSuggestionCount(result.suggestions.length);
+    }
+  };
+
+  useEffect(() => {
+    if (isEditor) refreshSuggestions();
+  }, [isEditor]);
+
+  const approveSuggestion = async (s) => {
+    const job = jobs.find((j) => String(j.id) === String(s.job_id));
+    if (!job) {
+      await resolveSuggestion(s.id);
+      refreshSuggestions();
+      return;
+    }
+    if (s.suggestion_type === "edit_item") {
+      updateJobById(s.job_id, (prevJob) => ({
+        ...prevJob,
+        items: prevJob.items.map((i) => {
+          if (String(i.id) !== String(s.item_id)) return i;
+          let containers = i.containers || [];
+          if (s.payload.container && s.payload.container.name) {
+            const others = containers.filter((c) => c.name !== s.payload.container.name);
+            containers = [...others, s.payload.container];
+          }
+          const qtyHave =
+            s.payload.qtyHave !== undefined ? s.payload.qtyHave : totalHave(containers);
+          const status =
+            qtyHave >= i.qtyNeeded ? "green" : qtyHave > 0 ? "yellow" : "red";
+          return {
+            ...i,
+            containers,
+            qtyHave,
+            ordered: s.payload.ordered,
+            received: s.payload.received,
+            status,
+          };
+        }),
+        containerOptions:
+          s.payload.container && s.payload.container.name
+            ? [...new Set([...prevJob.containerOptions, s.payload.container.name])]
+            : prevJob.containerOptions,
+        activityLog: [
+          {
+            id: Date.now(),
+            time: timeStamp(),
+            message: `Approved suggested change to "${s.payload.itemName}"${
+              s.note ? ` — note: ${s.note}` : ""
+            }`,
+          },
+          ...prevJob.activityLog,
+        ].slice(0, 50),
+      }));
+    } else if (s.suggestion_type === "new_item") {
+      updateJobById(s.job_id, (prevJob) => {
+        const containers = s.payload.container
+          ? [{ name: s.payload.container, qty: s.payload.qtyNeeded }]
+          : [];
+        const newItem = {
+          ...emptyItem(STORAGE_OPTIONS[0]),
+          id: Date.now(),
+          name: s.payload.name,
+          qtyNeeded: s.payload.qtyNeeded,
+          containers,
+          qtyHave: totalHave(containers),
+          status: containers.length > 0 ? "green" : "red",
+        };
+        return {
+          ...prevJob,
+          items: [...prevJob.items, newItem],
+          containerOptions: s.payload.container
+            ? [...new Set([...prevJob.containerOptions, s.payload.container])]
+            : prevJob.containerOptions,
+          activityLog: [
+            {
+              id: Date.now(),
+              time: timeStamp(),
+              message: `Approved suggested new item "${s.payload.name}"${
+                s.note ? ` — note: ${s.note}` : ""
+              }`,
+            },
+            ...prevJob.activityLog,
+          ].slice(0, 50),
+        };
+      });
+    }
+    await resolveSuggestion(s.id);
+    refreshSuggestions();
+  };
+
+  const denySuggestion = async (s) => {
+    await resolveSuggestion(s.id);
+    refreshSuggestions();
   };
 
   const createJob = (name, color, parentId = null) => {
@@ -4989,6 +5582,11 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           onExportAll={exportAllData}
           onImportAll={importAllData}
           onSignOut={onSignOut}
+          pendingSuggestionCount={pendingSuggestionCount}
+          onOpenSuggestions={() => {
+            setSuggestionsOpen(true);
+            refreshSuggestions();
+          }}
         />
       ) : (
         <JobInventory
@@ -5011,6 +5609,17 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           onBulkSave={bulkSaveCatalogItems}
           onDelete={deleteCatalogItem}
           onClose={() => setCatalogModalOpen(false)}
+        />
+      )}
+
+      {suggestionsOpen && (
+        <SuggestionsInboxModal
+          suggestions={suggestionsList}
+          jobs={jobs}
+          loading={suggestionsLoading}
+          onApprove={approveSuggestion}
+          onDeny={denySuggestion}
+          onClose={() => setSuggestionsOpen(false)}
         />
       )}
 
