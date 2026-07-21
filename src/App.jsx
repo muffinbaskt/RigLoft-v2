@@ -25,6 +25,7 @@ import {
   Printer,
   Layers,
   LogOut,
+  ListChecks,
 } from "lucide-react";
 
 const STORAGE_OPTIONS = [
@@ -160,6 +161,7 @@ function newJob(name, parentId = null, color = null) {
     color,
     items: [],
     containerOptions: [],
+    todos: [],
     activityLog: [{ id: Date.now(), time: timeStamp(), message: `Job "${name}" created.` }],
   };
 }
@@ -1859,6 +1861,125 @@ function ContainerDetailModal({
   );
 }
 
+function TodoListModal({ todos, onAddCustom, onToggleDone, onDelete, onClose }) {
+  const [newText, setNewText] = useState("");
+
+  const submitCustom = () => {
+    const trimmed = newText.trim();
+    if (trimmed) {
+      onAddCustom(trimmed);
+      setNewText("");
+    }
+  };
+
+  const pending = todos.filter((t) => !t.done);
+  const done = todos.filter((t) => t.done);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <div>
+            <h2 className="text-slate-100 font-semibold text-base flex items-center gap-2">
+              <ListChecks className="w-4 h-4 text-emerald-400" />
+              To Do
+            </h2>
+            <p className="text-xs text-slate-500">
+              {pending.length} pending · {done.length} done
+            </p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {todos.length === 0 ? (
+            <p className="text-sm text-slate-500 text-center py-10">
+              Nothing here yet. Select items in the job and "Add to To Do," or add a custom
+              task below.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              {pending.length > 0 && (
+                <div className="space-y-2">
+                  {pending.map((t) => (
+                    <div
+                      key={t.id}
+                      className="flex items-start gap-3 border border-slate-800 rounded-md p-3"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={false}
+                        onChange={() => onToggleDone(t.id)}
+                        className="w-4 h-4 rounded accent-emerald-500 mt-0.5 shrink-0 cursor-pointer"
+                      />
+                      <p className="text-sm text-slate-100 flex-1 min-w-0">{t.text}</p>
+                      <button
+                        onClick={() => onDelete(t.id)}
+                        className="text-slate-600 hover:text-red-400 shrink-0"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {done.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-slate-600 mb-2">Done</p>
+                  <div className="space-y-2">
+                    {done.map((t) => (
+                      <div
+                        key={t.id}
+                        className="flex items-start gap-3 border border-slate-800/60 rounded-md p-3 opacity-60"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={true}
+                          onChange={() => onToggleDone(t.id)}
+                          className="w-4 h-4 rounded accent-emerald-500 mt-0.5 shrink-0 cursor-pointer"
+                        />
+                        <p className="text-sm text-slate-400 line-through flex-1 min-w-0">
+                          {t.text}
+                        </p>
+                        <button
+                          onClick={() => onDelete(t.id)}
+                          className="text-slate-600 hover:text-red-400 shrink-0"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+          <div className="flex items-center gap-2">
+            <input
+              value={newText}
+              onChange={(e) => setNewText(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitCustom()}
+              placeholder="Add a custom task..."
+              className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+            <button
+              onClick={submitCustom}
+              className="text-sm bg-amber-500 text-slate-950 font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
+            >
+              Add
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ContainersModal({
   containerOptions,
   items,
@@ -3105,6 +3226,7 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
   const [importOpen, setImportOpen] = useState(false);
   const [containersOpen, setContainersOpen] = useState(false);
   const [pickListOpen, setPickListOpen] = useState(false);
+  const [todoListOpen, setTodoListOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
 
@@ -3352,6 +3474,58 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
     );
     setBulkContainerPicker(false);
   };
+
+  const todos = job.todos || [];
+
+  const addCustomTodo = (text) => {
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      todos: [
+        ...(prevJob.todos || []),
+        { id: Date.now(), text, done: false, itemId: null },
+      ],
+    }));
+  };
+
+  const bulkAddToTodo = () => {
+    const newTodos = selectedItemIds.map((id, idx) => {
+      const item = items.find((i) => i.id === id);
+      return { id: Date.now() + idx, text: item.name, done: false, itemId: id };
+    });
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      todos: [...(prevJob.todos || []), ...newTodos],
+      activityLog: [
+        {
+          id: Date.now(),
+          time: timeStamp(),
+          message: `Added ${newTodos.length} item${
+            newTodos.length === 1 ? "" : "s"
+          } to To Do`,
+        },
+        ...prevJob.activityLog,
+      ].slice(0, 50),
+    }));
+    clearSelection();
+    setTodoListOpen(true);
+  };
+
+  const toggleTodoDone = (id) => {
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      todos: (prevJob.todos || []).map((t) =>
+        t.id === id ? { ...t, done: !t.done } : t
+      ),
+    }));
+  };
+
+  const deleteTodo = (id) => {
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      todos: (prevJob.todos || []).filter((t) => t.id !== id),
+    }));
+  };
+
   const bulkDelete = () => {
     onUpdateJob((prevJob) => ({
       ...prevJob,
@@ -3533,6 +3707,21 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
                   >
                     <CheckSquare className="w-4 h-4 text-slate-400" />
                     Select items
+                  </button>
+                  <button
+                    onClick={() => {
+                      setTodoListOpen(true);
+                      setMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                  >
+                    <ListChecks className="w-4 h-4 text-slate-400" />
+                    To Do{" "}
+                    {todos.filter((t) => !t.done).length > 0 && (
+                      <span className="text-xs text-emerald-400">
+                        ({todos.filter((t) => !t.done).length})
+                      </span>
+                    )}
                   </button>
                   <button
                     onClick={() => {
@@ -3774,6 +3963,12 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
                   className="text-xs bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-2.5 py-1.5 hover:bg-slate-700"
                 >
                   Move to container
+                </button>
+                <button
+                  onClick={bulkAddToTodo}
+                  className="text-xs bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-2.5 py-1.5 hover:bg-slate-700"
+                >
+                  Add to To Do
                 </button>
                 <button
                   onClick={() => setBulkDeleteConfirm(true)}
@@ -4055,6 +4250,16 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
 
       {pickListOpen && (
         <PickListModal jobName={job.name} items={items} onClose={() => setPickListOpen(false)} />
+      )}
+
+      {todoListOpen && (
+        <TodoListModal
+          todos={todos}
+          onAddCustom={addCustomTodo}
+          onToggleDone={toggleTodoDone}
+          onDelete={deleteTodo}
+          onClose={() => setTodoListOpen(false)}
+        />
       )}
 
       {renameOpen && (
