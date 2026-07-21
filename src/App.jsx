@@ -1523,7 +1523,7 @@ function CatalogBulkAddModal({ onImport, onCancel }) {
   );
 }
 
-function CatalogModal({ catalog, onSave, onBulkSave, onDelete, onClose }) {
+function CatalogModal({ catalog, isEditor, onSave, onBulkSave, onDelete, onClose }) {
   const [editing, setEditing] = useState(null);
   const [bulkAdding, setBulkAdding] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -1603,42 +1603,46 @@ function CatalogModal({ catalog, onSave, onBulkSave, onDelete, onClose }) {
                         {c.needsTransfer ? " · 🚚 transfer" : ""}
                       </p>
                     </div>
-                    <div className="flex gap-1 shrink-0">
-                      <button
-                        onClick={() => setEditing(c)}
-                        className="text-slate-500 hover:text-slate-200 p-1.5 rounded-md hover:bg-slate-800"
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => setDeleteTarget(c)}
-                        className="text-slate-500 hover:text-red-400 p-1.5 rounded-md hover:bg-slate-800"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                    {isEditor && (
+                      <div className="flex gap-1 shrink-0">
+                        <button
+                          onClick={() => setEditing(c)}
+                          className="text-slate-500 hover:text-slate-200 p-1.5 rounded-md hover:bg-slate-800"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setDeleteTarget(c)}
+                          className="text-slate-500 hover:text-red-400 p-1.5 rounded-md hover:bg-slate-800"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
             )}
           </div>
 
-          <div className="flex gap-3 px-5 py-4 border-t border-slate-800 shrink-0">
-            <button
-              onClick={() => setBulkAdding(true)}
-              className="flex-1 flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 border border-slate-700 text-slate-200 hover:bg-slate-800"
-            >
-              <Upload className="w-4 h-4" />
-              Bulk add
-            </button>
-            <button
-              onClick={() => setEditing(emptyCatalogItem())}
-              className="flex-1 flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
-            >
-              <Plus className="w-4 h-4" />
-              Add item
-            </button>
-          </div>
+          {isEditor && (
+            <div className="flex gap-3 px-5 py-4 border-t border-slate-800 shrink-0">
+              <button
+                onClick={() => setBulkAdding(true)}
+                className="flex-1 flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 border border-slate-700 text-slate-200 hover:bg-slate-800"
+              >
+                <Upload className="w-4 h-4" />
+                Bulk add
+              </button>
+              <button
+                onClick={() => setEditing(emptyCatalogItem())}
+                className="flex-1 flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                <Plus className="w-4 h-4" />
+                Add item
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1660,6 +1664,7 @@ function CatalogModal({ catalog, onSave, onBulkSave, onDelete, onClose }) {
 function ContainerDetailModal({
   containerName,
   items,
+  isEditor,
   onClose,
   onPull,
   onBack,
@@ -1847,21 +1852,23 @@ function ContainerDetailModal({
           )}
         </div>
 
-        <div className="px-5 py-4 border-t border-slate-800 shrink-0">
-          <button
-            onClick={() => setPicking(true)}
-            className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
-          >
-            <Plus className="w-4 h-4" />
-            Pull items into this container
-          </button>
-        </div>
+        {isEditor && (
+          <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+            <button
+              onClick={() => setPicking(true)}
+              className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+            >
+              <Plus className="w-4 h-4" />
+              Pull items into this container
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function TodoListModal({ todos, onAddCustom, onToggleDone, onDelete, onClose }) {
+function TodoListModal({ todos, isEditor, onAddCustom, onToggleDone, onDelete, onClose }) {
   const [newText, setNewText] = useState("");
 
   const submitCustom = () => {
@@ -1911,16 +1918,19 @@ function TodoListModal({ todos, onAddCustom, onToggleDone, onDelete, onClose }) 
                       <input
                         type="checkbox"
                         checked={false}
+                        disabled={!isEditor}
                         onChange={() => onToggleDone(t.id)}
-                        className="w-4 h-4 rounded accent-emerald-500 mt-0.5 shrink-0 cursor-pointer"
+                        className="w-4 h-4 rounded accent-emerald-500 mt-0.5 shrink-0 cursor-pointer disabled:cursor-default disabled:opacity-50"
                       />
                       <p className="text-sm text-slate-100 flex-1 min-w-0">{t.text}</p>
-                      <button
-                        onClick={() => onDelete(t.id)}
-                        className="text-slate-600 hover:text-red-400 shrink-0"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
+                      {isEditor && (
+                        <button
+                          onClick={() => onDelete(t.id)}
+                          className="text-slate-600 hover:text-red-400 shrink-0"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1937,18 +1947,21 @@ function TodoListModal({ todos, onAddCustom, onToggleDone, onDelete, onClose }) 
                         <input
                           type="checkbox"
                           checked={true}
+                          disabled={!isEditor}
                           onChange={() => onToggleDone(t.id)}
-                          className="w-4 h-4 rounded accent-emerald-500 mt-0.5 shrink-0 cursor-pointer"
+                          className="w-4 h-4 rounded accent-emerald-500 mt-0.5 shrink-0 cursor-pointer disabled:cursor-default"
                         />
                         <p className="text-sm text-slate-400 line-through flex-1 min-w-0">
                           {t.text}
                         </p>
-                        <button
-                          onClick={() => onDelete(t.id)}
-                          className="text-slate-600 hover:text-red-400 shrink-0"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
+                        {isEditor && (
+                          <button
+                            onClick={() => onDelete(t.id)}
+                            className="text-slate-600 hover:text-red-400 shrink-0"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1958,23 +1971,25 @@ function TodoListModal({ todos, onAddCustom, onToggleDone, onDelete, onClose }) 
           )}
         </div>
 
-        <div className="px-5 py-4 border-t border-slate-800 shrink-0">
-          <div className="flex items-center gap-2">
-            <input
-              value={newText}
-              onChange={(e) => setNewText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && submitCustom()}
-              placeholder="Add a custom task..."
-              className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-            />
-            <button
-              onClick={submitCustom}
-              className="text-sm bg-amber-500 text-slate-950 font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
-            >
-              Add
-            </button>
+        {isEditor && (
+          <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+            <div className="flex items-center gap-2">
+              <input
+                value={newText}
+                onChange={(e) => setNewText(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && submitCustom()}
+                placeholder="Add a custom task..."
+                className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+              <button
+                onClick={submitCustom}
+                className="text-sm bg-amber-500 text-slate-950 font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
+              >
+                Add
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -1983,6 +1998,7 @@ function TodoListModal({ todos, onAddCustom, onToggleDone, onDelete, onClose }) 
 function ContainersModal({
   containerOptions,
   items,
+  isEditor,
   onClose,
   onAdd,
   onRename,
@@ -2021,6 +2037,7 @@ function ContainersModal({
       <ContainerDetailModal
         containerName={openContainer}
         items={items}
+        isEditor={isEditor}
         onClose={onClose}
         onBack={() => setOpenContainer(null)}
         onPull={(qtyMap) => onPull(openContainer, qtyMap)}
@@ -2090,25 +2107,29 @@ function ContainersModal({
                         </p>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
-                        <span
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setRenaming(name);
-                            setRenameValue(name);
-                          }}
-                          className="text-slate-500 hover:text-slate-200 p-1.5 rounded-md hover:bg-slate-800"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </span>
-                        <span
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setDeleteTarget(name);
-                          }}
-                          className="text-slate-500 hover:text-red-400 p-1.5 rounded-md hover:bg-slate-800"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </span>
+                        {isEditor && (
+                          <>
+                            <span
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setRenaming(name);
+                                setRenameValue(name);
+                              }}
+                              className="text-slate-500 hover:text-slate-200 p-1.5 rounded-md hover:bg-slate-800"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </span>
+                            <span
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeleteTarget(name);
+                              }}
+                              className="text-slate-500 hover:text-red-400 p-1.5 rounded-md hover:bg-slate-800"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </span>
+                          </>
+                        )}
                       </div>
                     </div>
                   )
@@ -2117,43 +2138,45 @@ function ContainersModal({
             )}
           </div>
 
-          <div className="px-5 py-4 border-t border-slate-800 shrink-0">
-            {adding ? (
-              <div className="flex items-center gap-2">
-                <input
-                  autoFocus
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && submitAdd()}
-                  placeholder="e.g. Gangbox 12345"
-                  className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-                />
+          {isEditor && (
+            <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+              {adding ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    autoFocus
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && submitAdd()}
+                    placeholder="e.g. Gangbox 12345"
+                    className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                  />
+                  <button
+                    onClick={submitAdd}
+                    className="text-sm bg-amber-500 text-slate-950 font-semibold rounded-md px-3.5 py-2"
+                  >
+                    Add
+                  </button>
+                  <button
+                    onClick={() => {
+                      setAdding(false);
+                      setNewName("");
+                    }}
+                    className="text-slate-500 hover:text-slate-300 p-2"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
                 <button
-                  onClick={submitAdd}
-                  className="text-sm bg-amber-500 text-slate-950 font-semibold rounded-md px-3.5 py-2"
+                  onClick={() => setAdding(true)}
+                  className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
                 >
-                  Add
+                  <Plus className="w-4 h-4" />
+                  Add container
                 </button>
-                <button
-                  onClick={() => {
-                    setAdding(false);
-                    setNewName("");
-                  }}
-                  className="text-slate-500 hover:text-slate-300 p-2"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setAdding(true)}
-                className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
-              >
-                <Plus className="w-4 h-4" />
-                Add container
-              </button>
-            )}
-          </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -2641,7 +2664,7 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
   );
 }
 
-function ItemCard({ item, selectMode, selected, onToggleSelect, onEdit, onDelete, onViewSerials }) {
+function ItemCard({ item, selectMode, selected, isEditor, onToggleSelect, onEdit, onDelete, onViewSerials }) {
   const handleCardClick = () => {
     if (selectMode) onToggleSelect(item.id);
   };
@@ -2697,7 +2720,7 @@ function ItemCard({ item, selectMode, selected, onToggleSelect, onEdit, onDelete
             </div>
           </div>
         </div>
-        {!selectMode && (
+        {!selectMode && isEditor && (
           <div className="flex gap-1.5 shrink-0">
             <button
               onClick={(e) => {
@@ -2886,7 +2909,7 @@ function JobNameModal({
   );
 }
 
-function JobCard({ job, indent, outstanding, onSelect, onRename, onDelete }) {
+function JobCard({ job, indent, outstanding, isEditor, onSelect, onRename, onDelete }) {
   const borderClass = job.color ? JOB_COLOR_BORDER[job.color] : "border-l-slate-800";
   return (
     <button
@@ -2908,26 +2931,28 @@ function JobCard({ job, indent, outstanding, onSelect, onRename, onDelete }) {
           </p>
         </div>
       </div>
-      <div className="flex items-center gap-1 shrink-0">
-        <span
-          onClick={(e) => {
-            e.stopPropagation();
-            onRename(job);
-          }}
-          className="text-slate-600 hover:text-slate-300 p-1.5 rounded-md hover:bg-slate-800"
-        >
-          <Pencil className="w-3.5 h-3.5" />
-        </span>
-        <span
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete(job);
-          }}
-          className="text-slate-600 hover:text-red-400 p-1.5 rounded-md hover:bg-slate-800"
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-        </span>
-      </div>
+      {isEditor && (
+        <div className="flex items-center gap-1 shrink-0">
+          <span
+            onClick={(e) => {
+              e.stopPropagation();
+              onRename(job);
+            }}
+            className="text-slate-600 hover:text-slate-300 p-1.5 rounded-md hover:bg-slate-800"
+          >
+            <Pencil className="w-3.5 h-3.5" />
+          </span>
+          <span
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(job);
+            }}
+            className="text-slate-600 hover:text-red-400 p-1.5 rounded-md hover:bg-slate-800"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </span>
+        </div>
+      )}
     </button>
   );
 }
@@ -2935,6 +2960,8 @@ function JobCard({ job, indent, outstanding, onSelect, onRename, onDelete }) {
 function JobPicker({
   jobs,
   catalog,
+  isEditor,
+  onRequestLogin,
   onSelect,
   onCreateClick,
   onCreateSubJobClick,
@@ -2975,7 +3002,14 @@ function JobPicker({
               <Package className="w-4.5 h-4.5 text-slate-950" strokeWidth={2.5} />
             </div>
             <div>
-              <h1 className="font-bold text-slate-100 leading-tight">WareHub</h1>
+              <h1 className="font-bold text-slate-100 leading-tight flex items-center gap-2">
+                WareHub
+                {!isEditor && (
+                  <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-400 rounded-full px-2 py-0.5">
+                    View only
+                  </span>
+                )}
+              </h1>
               <p className="text-xs text-slate-500 leading-tight">Select a job</p>
             </div>
           </div>
@@ -2987,20 +3021,31 @@ function JobPicker({
             >
               <BookOpen className="w-4 h-4" />
             </button>
-            <button
-              onClick={onSignOut}
-              title="Log out"
-              className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
-            <button
-              onClick={onCreateClick}
-              className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
-            >
-              <Plus className="w-4 h-4" />
-              <span className="hidden sm:inline">New job</span>
-            </button>
+            {isEditor ? (
+              <button
+                onClick={onSignOut}
+                title="Log out"
+                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            ) : (
+              <button
+                onClick={onRequestLogin}
+                className="text-xs text-slate-400 hover:text-slate-200 underline underline-offset-2 px-1"
+              >
+                Log in to edit
+              </button>
+            )}
+            {isEditor && (
+              <button
+                onClick={onCreateClick}
+                className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
+              >
+                <Plus className="w-4 h-4" />
+                <span className="hidden sm:inline">New job</span>
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -3048,6 +3093,7 @@ function JobPicker({
                             job={job}
                             indent={false}
                             outstanding={outstanding}
+                            isEditor={isEditor}
                             onSelect={() => onSelect(job.id)}
                             onRename={onRenameRequest}
                             onDelete={onDeleteRequest}
@@ -3085,14 +3131,20 @@ function JobPicker({
         ) : jobs.length === 0 ? (
           <div className="text-center py-20 border border-dashed border-slate-800 rounded-lg">
             <Briefcase className="w-8 h-8 text-slate-700 mx-auto mb-2" />
-            <p className="text-slate-500 text-sm mb-4">No jobs yet. Create one to start tracking inventory.</p>
-            <button
-              onClick={onCreateClick}
-              className="inline-flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-4 py-2 hover:bg-amber-400"
-            >
-              <Plus className="w-4 h-4" />
-              New job
-            </button>
+            <p className="text-slate-500 text-sm mb-4">
+              {isEditor
+                ? "No jobs yet. Create one to start tracking inventory."
+                : "No jobs to show."}
+            </p>
+            {isEditor && (
+              <button
+                onClick={onCreateClick}
+                className="inline-flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-4 py-2 hover:bg-amber-400"
+              >
+                <Plus className="w-4 h-4" />
+                New job
+              </button>
+            )}
           </div>
         ) : (
           <div className="space-y-3">
@@ -3124,6 +3176,7 @@ function JobPicker({
                         job={job}
                         indent={false}
                         outstanding={outstanding}
+                        isEditor={isEditor}
                         onSelect={() => onSelect(job.id)}
                         onRename={onRenameRequest}
                         onDelete={onDeleteRequest}
@@ -3143,6 +3196,7 @@ function JobPicker({
                             job={child}
                             indent
                             outstanding={childOutstanding}
+                            isEditor={isEditor}
                             onSelect={() => onSelect(child.id)}
                             onRename={onRenameRequest}
                             onDelete={onDeleteRequest}
@@ -3152,13 +3206,15 @@ function JobPicker({
                     </div>
                   )}
 
-                  <button
-                    onClick={() => onCreateSubJobClick(job)}
-                    className="ml-6 mt-2 flex items-center gap-1.5 text-xs text-slate-500 hover:text-amber-400"
-                  >
-                    <Plus className="w-3 h-3" />
-                    Add sub-job under "{job.name}"
-                  </button>
+                  {isEditor && (
+                    <button
+                      onClick={() => onCreateSubJobClick(job)}
+                      className="ml-6 mt-2 flex items-center gap-1.5 text-xs text-slate-500 hover:text-amber-400"
+                    >
+                      <Plus className="w-3 h-3" />
+                      Add sub-job under "{job.name}"
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -3166,12 +3222,14 @@ function JobPicker({
         )}
 
         <div className="text-center mt-8">
-          <button
-            onClick={onResetRequest}
-            className="text-xs text-slate-600 hover:text-slate-400 underline underline-offset-2"
-          >
-            Reset all data
-          </button>
+          {isEditor && (
+            <button
+              onClick={onResetRequest}
+              className="text-xs text-slate-600 hover:text-slate-400 underline underline-offset-2"
+            >
+              Reset all data
+            </button>
+          )}
           <div className="flex items-center justify-center gap-3 mt-3">
             <button
               onClick={onExportAll}
@@ -3179,20 +3237,24 @@ function JobPicker({
             >
               Export all data (backup)
             </button>
-            <span className="text-slate-700">·</span>
-            <label className="text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2 cursor-pointer">
-              Import all data (restore backup)
-              <input
-                type="file"
-                accept="application/json"
-                onChange={(e) => {
-                  const file = e.target.files[0];
-                  if (file) onImportAll(file);
-                  e.target.value = "";
-                }}
-                className="hidden"
-              />
-            </label>
+            {isEditor && (
+              <>
+                <span className="text-slate-700">·</span>
+                <label className="text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2 cursor-pointer">
+                  Import all data (restore backup)
+                  <input
+                    type="file"
+                    accept="application/json"
+                    onChange={(e) => {
+                      const file = e.target.files[0];
+                      if (file) onImportAll(file);
+                      e.target.value = "";
+                    }}
+                    className="hidden"
+                  />
+                </label>
+              </>
+            )}
           </div>
           <p className="text-[10px] text-slate-700 mt-2">Build check: 2026-07-14-B</p>
         </div>
@@ -3201,7 +3263,16 @@ function JobPicker({
   );
 }
 
-function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, onRenameJob }) {
+function JobInventory({
+  job,
+  isEditor,
+  onRequestLogin,
+  onUpdateJob,
+  onBackToJobs,
+  catalog,
+  onOpenCatalog,
+  onRenameJob,
+}) {
   const { items, containerOptions, activityLog } = job;
   const [formState, setFormState] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -3640,16 +3711,18 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
                 <div className="absolute right-0 top-full mt-2 w-48 bg-slate-800 border border-slate-700 rounded-md shadow-lg z-20 overflow-hidden">
-                  <button
-                    onClick={() => {
-                      setImportOpen(true);
-                      setMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
-                  >
-                    <Upload className="w-4 h-4 text-slate-400" />
-                    Import items
-                  </button>
+                  {isEditor && (
+                    <button
+                      onClick={() => {
+                        setImportOpen(true);
+                        setMenuOpen(false);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                    >
+                      <Upload className="w-4 h-4 text-slate-400" />
+                      Import items
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       setPickListOpen(true);
@@ -3680,16 +3753,18 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
                     <Download className="w-4 h-4 text-slate-400" />
                     Export items
                   </button>
-                  <button
-                    onClick={() => {
-                      setRenameOpen(true);
-                      setMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
-                  >
-                    <Pencil className="w-4 h-4 text-slate-400" />
-                    Rename job
-                  </button>
+                  {isEditor && (
+                    <button
+                      onClick={() => {
+                        setRenameOpen(true);
+                        setMenuOpen(false);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                    >
+                      <Pencil className="w-4 h-4 text-slate-400" />
+                      Rename job
+                    </button>
+                  )}
 
                   <button
                     onClick={() => {
@@ -3701,16 +3776,18 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
                     <Archive className="w-4 h-4 text-slate-400" />
                     Containers
                   </button>
-                  <button
-                    onClick={() => {
-                      setSelectMode(true);
-                      setMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
-                  >
-                    <CheckSquare className="w-4 h-4 text-slate-400" />
-                    Select items
-                  </button>
+                  {isEditor && (
+                    <button
+                      onClick={() => {
+                        setSelectMode(true);
+                        setMenuOpen(false);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                    >
+                      <CheckSquare className="w-4 h-4 text-slate-400" />
+                      Select items
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       setTodoListOpen(true);
@@ -3739,13 +3816,15 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
                 </div>
               </>
             )}
-            <button
-              onClick={() => setFormState(emptyItem(STORAGE_OPTIONS[0]))}
-              className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
-            >
-              <Plus className="w-4 h-4" />
-              <span className="hidden sm:inline">Add item</span>
-            </button>
+            {isEditor && (
+              <button
+                onClick={() => setFormState(emptyItem(STORAGE_OPTIONS[0]))}
+                className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
+              >
+                <Plus className="w-4 h-4" />
+                <span className="hidden sm:inline">Add item</span>
+              </button>
+            )}
           </div>
 
         </div>
@@ -4023,6 +4102,7 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
                         item={item}
                         selectMode={selectMode}
                         selected={!!selectedIds[item.id]}
+                        isEditor={isEditor}
                         onToggleSelect={toggleItemSelect}
                         onEdit={setFormState}
                         onDelete={setDeleteTarget}
@@ -4041,6 +4121,7 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
                 item={item}
                 selectMode={selectMode}
                 selected={!!selectedIds[item.id]}
+                isEditor={isEditor}
                 onToggleSelect={toggleItemSelect}
                 onEdit={setFormState}
                 onDelete={setDeleteTarget}
@@ -4138,6 +4219,7 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
         <ContainersModal
           containerOptions={containerOptions}
           items={items}
+          isEditor={isEditor}
           onClose={() => setContainersOpen(false)}
           onAdd={addContainer}
           onRename={renameContainer}
@@ -4258,6 +4340,7 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
       {todoListOpen && (
         <TodoListModal
           todos={todos}
+          isEditor={isEditor}
           onAddCustom={addCustomTodo}
           onToggleDone={toggleTodoDone}
           onDelete={deleteTodo}
@@ -4362,7 +4445,7 @@ async function getWithRetry(key, attempts = 6) {
   return { ok: false, error: lastError };
 }
 
-function WareHub({ onSignOut }) {
+function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   const [jobs, setJobs] = useState([]);
   const [activeJobId, setActiveJobId] = useState(null);
   const [showPicker, setShowPicker] = useState(true);
@@ -4891,6 +4974,8 @@ function WareHub({ onSignOut }) {
         <JobPicker
           jobs={jobs}
           catalog={catalog}
+          isEditor={isEditor}
+          onRequestLogin={onRequestLogin}
           onSelect={(id) => {
             setActiveJobId(id);
             setShowPicker(false);
@@ -4908,6 +4993,8 @@ function WareHub({ onSignOut }) {
       ) : (
         <JobInventory
           job={activeJob}
+          isEditor={isEditor}
+          onRequestLogin={onRequestLogin}
           onUpdateJob={updateActiveJob}
           onBackToJobs={() => setShowPicker(true)}
           catalog={catalog}
@@ -4919,6 +5006,7 @@ function WareHub({ onSignOut }) {
       {catalogModalOpen && (
         <CatalogModal
           catalog={catalog}
+          isEditor={isEditor}
           onSave={saveCatalogItem}
           onBulkSave={bulkSaveCatalogItems}
           onDelete={deleteCatalogItem}
@@ -4985,7 +5073,7 @@ function WareHub({ onSignOut }) {
   );
 }
 
-function LoginScreen({ onSignedIn }) {
+function LoginScreen({ onSignedIn, embedded = false }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
@@ -5007,27 +5095,26 @@ function LoginScreen({ onSignedIn }) {
     onSignedIn(data.session);
   };
 
-  return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center px-4">
-      <div className="w-full max-w-sm">
-        <div className="flex items-center gap-2.5 justify-center mb-6">
-          <div className="w-9 h-9 rounded-md bg-amber-500 flex items-center justify-center">
-            <Package className="w-5 h-5 text-slate-950" strokeWidth={2.5} />
-          </div>
-          <h1 className="font-bold text-xl text-slate-100">WareHub</h1>
+  const content = (
+    <div className="w-full max-w-sm">
+      <div className="flex items-center gap-2.5 justify-center mb-6">
+        <div className="w-9 h-9 rounded-md bg-amber-500 flex items-center justify-center">
+          <Package className="w-5 h-5 text-slate-950" strokeWidth={2.5} />
         </div>
-        <form
-          onSubmit={handleSubmit}
-          className="bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-4"
-        >
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              autoFocus
-              required
+        <h1 className="font-bold text-xl text-slate-100">WareHub</h1>
+      </div>
+      <form
+        onSubmit={handleSubmit}
+        className="bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-4"
+      >
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">Email</label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoFocus
+            required
               className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60"
             />
           </div>
@@ -5049,14 +5136,22 @@ function LoginScreen({ onSignedIn }) {
           >
             {loading ? "Signing in..." : "Sign in"}
           </button>
-        </form>
-      </div>
+      </form>
+    </div>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center px-4">
+      {content}
     </div>
   );
 }
 
 export default function AuthGate() {
   const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
+  const [showLogin, setShowLogin] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -5076,9 +5171,32 @@ export default function AuthGate() {
     );
   }
 
-  if (!session) {
-    return <LoginScreen onSignedIn={setSession} />;
-  }
-
-  return <WareHub onSignOut={() => supabase.auth.signOut()} />;
+  return (
+    <>
+      <WareHub
+        isEditor={!!session}
+        onSignOut={() => supabase.auth.signOut()}
+        onRequestLogin={() => setShowLogin(true)}
+      />
+      {showLogin && !session && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-4">
+          <div className="relative w-full max-w-sm">
+            <button
+              onClick={() => setShowLogin(false)}
+              className="absolute -top-10 right-0 text-slate-400 hover:text-slate-200"
+            >
+              <X className="w-6 h-6" />
+            </button>
+            <LoginScreen
+              embedded
+              onSignedIn={(s) => {
+                setSession(s);
+                setShowLogin(false);
+              }}
+            />
+          </div>
+        </div>
+      )}
+    </>
+  );
 }
