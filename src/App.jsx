@@ -4613,7 +4613,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   // Persist jobs whenever they change (after initial load completes), debounced
   // so several quick edits in a row don't each trigger their own blocking save
   useEffect(() => {
-    if (loading || loadFailed || conflictWarning) return;
+    if (loading || loadFailed || conflictWarning || !isEditor) return;
     if (!isOnline) {
       setPendingSync(true);
       return;
@@ -4643,11 +4643,11 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     return () => {
       if (jobsSaveTimer.current) clearTimeout(jobsSaveTimer.current);
     };
-  }, [jobs, loading, retryTick, isOnline, conflictWarning]);
+  }, [jobs, loading, retryTick, isOnline, conflictWarning, isEditor]);
 
   // Persist which job is active
   useEffect(() => {
-    if (loading || loadFailed || activeJobId == null) return;
+    if (loading || loadFailed || activeJobId == null || !isEditor) return;
     if (!isOnline) {
       setPendingSync(true);
       return;
@@ -4658,11 +4658,11 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
       setSyncing(false);
       if (!result.ok) setSaveError(result.error);
     })();
-  }, [activeJobId, loading, retryTick, isOnline]);
+  }, [activeJobId, loading, retryTick, isOnline, isEditor]);
 
   // Persist catalog whenever it changes, debounced like jobs
   useEffect(() => {
-    if (loading || loadFailed || conflictWarning) return;
+    if (loading || loadFailed || conflictWarning || !isEditor) return;
     if (!isOnline) return;
     if (catalogSaveTimer.current) clearTimeout(catalogSaveTimer.current);
     catalogSaveTimer.current = setTimeout(() => {
@@ -4684,7 +4684,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     return () => {
       if (catalogSaveTimer.current) clearTimeout(catalogSaveTimer.current);
     };
-  }, [catalog, loading, retryTick, isOnline, conflictWarning]);
+  }, [catalog, loading, retryTick, isOnline, conflictWarning, isEditor]);
 
   const activeJob = jobs.find((j) => j.id === activeJobId);
 
