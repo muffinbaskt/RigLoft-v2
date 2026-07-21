@@ -2770,7 +2770,9 @@ function SuggestEditModal({ job, item, onSubmit, onClose }) {
       payload: {
         itemName: item.name,
         qtyHave: Number(qtyHave) || 0,
-        container: containerName ? { name: containerName, qty: Number(containerQty) || 0 } : null,
+        container: containerName.trim()
+          ? { name: containerName.trim(), qty: Number(containerQty) || 0 }
+          : { clear: true },
         ordered,
         received,
       },
@@ -5211,7 +5213,9 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         items: prevJob.items.map((i) => {
           if (String(i.id) !== String(s.item_id)) return i;
           let containers = i.containers || [];
-          if (s.payload.container && s.payload.container.name) {
+          if (s.payload.container?.clear) {
+            containers = [];
+          } else if (s.payload.container && s.payload.container.name) {
             const others = containers.filter((c) => c.name !== s.payload.container.name);
             containers = [...others, s.payload.container];
           }
