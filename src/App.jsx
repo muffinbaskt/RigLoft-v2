@@ -3490,7 +3490,10 @@ function JobInventory({ job, onUpdateJob, onBackToJobs, catalog, onOpenCatalog, 
   const bulkAddToTodo = () => {
     const newTodos = selectedItemIds.map((id, idx) => {
       const item = items.find((i) => i.id === id);
-      return { id: Date.now() + idx, text: item.name, done: false, itemId: id };
+      const text = `${item.name} — ${item.qtyHave} out of ${item.qtyNeeded}${
+        item.qtyUnit ? ` ${item.qtyUnit}` : ""
+      }`;
+      return { id: Date.now() + idx, text, done: false, itemId: id };
     });
     onUpdateJob((prevJob) => ({
       ...prevJob,
