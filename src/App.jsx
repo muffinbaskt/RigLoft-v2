@@ -5286,19 +5286,23 @@ function clearOfflineQueue() {
   }
 }
 
-function downloadOfflineBackup(queue) {
+function downloadBackupFile(jobs, catalog, label) {
   try {
+    const now = new Date();
     const payload = {
-      exportedFrom: "Riggy (offline conflict backup)",
-      exportedAt: new Date().toISOString(),
-      jobs: queue.jobs,
-      catalog: queue.catalog,
+      exportedFrom: `Riggy (${label})`,
+      exportedAt: now.toISOString(),
+      jobs,
+      catalog,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `riggy-offline-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    // Include time (not just date) so multiple same-day backups don't
+    // collide or silently overwrite one another in the Downloads folder.
+    const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    link.download = `riggy-${label.replace(/\s+/g, "-")}-${stamp}.json`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -5306,6 +5310,28 @@ function downloadOfflineBackup(queue) {
     return true;
   } catch {
     return false;
+  }
+}
+
+function downloadOfflineBackup(queue) {
+  return downloadBackupFile(queue.jobs, queue.catalog, "offline-conflict-backup");
+}
+
+// Quietly saves a backup file on its own, no button needed — these are
+// tiny (plain JSON), so there's no real cost to keeping this frequent.
+const AUTO_BACKUP_KEY = "warehub-last-auto-backup";
+const AUTO_BACKUP_INTERVAL_MS = 60 * 60 * 1000; // once an hour
+
+function maybeAutoBackup(jobs, catalog) {
+  if (!jobs || jobs.length === 0) return; // nothing real to back up yet
+  try {
+    const last = localStorage.getItem(AUTO_BACKUP_KEY);
+    const lastTime = last ? new Date(last).getTime() : 0;
+    if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
+    const ok = downloadBackupFile(jobs, catalog, "auto-backup");
+    if (ok) localStorage.setItem(AUTO_BACKUP_KEY, new Date().toISOString());
+  } catch {
+    // best effort only — never worth interrupting anything over this
   }
 }
 
@@ -5503,6 +5529,17 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     };
   }, []);
 
+  // Also check periodically for long sessions that stay open past the
+  // initial load — otherwise a full day of work in one sitting would only
+  // ever get backed up once, right at the start.
+  useEffect(() => {
+    if (!isEditor) return;
+    const timer = setInterval(() => {
+      maybeAutoBackup(jobsRef.current, catalogRef.current);
+    }, 10 * 60 * 1000); // check every 10 minutes; actual backup still only every hour
+    return () => clearInterval(timer);
+  }, [isEditor]);
+
   // Fix for a known iOS/Safari quirk: elements with :hover styles can require
   // an extra "warm-up" tap on the very first touch of the page before clicks
   // register normally. An empty touchstart listener disables that behavior.
@@ -5584,6 +5621,8 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     jobsUpdatedAtRef.current = jobsResult.updatedAt || null;
     catalogUpdatedAtRef.current = catalogResult.updatedAt || null;
     setConflictWarning(false);
+
+    if (isEditor) maybeAutoBackup(finalJobs, loadedCatalog);
 
     // If there's a leftover offline queue from a previous session (the app
     // was closed while offline), check it now that we know what the server
