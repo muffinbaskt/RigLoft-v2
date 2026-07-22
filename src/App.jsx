@@ -5385,16 +5385,25 @@ function downloadOfflineBackup(queue) {
 const AUTO_BACKUP_KEY = "warehub-last-auto-backup";
 const AUTO_BACKUP_INTERVAL_MS = 60 * 60 * 1000; // once an hour
 
+let autoBackupInFlight = false; // in-memory guard against a same-tab burst
+
 function maybeAutoBackup(jobs, catalog) {
   if (!jobs || jobs.length === 0) return; // nothing real to back up yet
+  if (autoBackupInFlight) return;
   try {
     const last = localStorage.getItem(AUTO_BACKUP_KEY);
     const lastTime = last ? new Date(last).getTime() : 0;
     if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
-    const ok = downloadBackupFile(jobs, catalog, "auto-backup");
-    if (ok) localStorage.setItem(AUTO_BACKUP_KEY, new Date().toISOString());
+    // Mark it as done BEFORE actually downloading — closes the race where
+    // several queued checks (e.g. after the tab was backgrounded a long
+    // time) all read the same stale timestamp and each decide to back up.
+    autoBackupInFlight = true;
+    localStorage.setItem(AUTO_BACKUP_KEY, new Date().toISOString());
+    downloadBackupFile(jobs, catalog, "auto-backup");
   } catch {
     // best effort only — never worth interrupting anything over this
+  } finally {
+    autoBackupInFlight = false;
   }
 }
 
@@ -5421,11 +5430,16 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   const jobsSaveTimer = useRef(null);
   const jobsRef = useRef([]);
   const jobsUpdatedAtRef = useRef(null);
+  // Tracks "the last version we know for sure matched the server" — the
+  // common ancestor a three-way merge needs. Updated after every successful
+  // load and every successful save, not just when going offline.
+  const jobsBaseRef = useRef([]);
   const [catalog, setCatalog] = useState([]);
   const [catalogModalOpen, setCatalogModalOpen] = useState(false);
   const catalogSaveTimer = useRef(null);
   const catalogRef = useRef([]);
   const catalogUpdatedAtRef = useRef(null);
+  const catalogBaseRef = useRef([]);
   const [conflictWarning, setConflictWarning] = useState(false);
 
   // Offline support: snapshot of the last-confirmed-synced timestamps at
@@ -5515,10 +5529,12 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
       );
       if (jobsSave.ok) {
         jobsUpdatedAtRef.current = jobsSave.updatedAt;
+        jobsBaseRef.current = queue.jobs;
         setJobs(queue.jobs);
       }
       if (catalogSave.ok) {
         catalogUpdatedAtRef.current = catalogSave.updatedAt;
+        catalogBaseRef.current = queue.catalog;
         setCatalog(queue.catalog);
       }
       clearOfflineQueue();
@@ -5555,10 +5571,12 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
       );
       if (jobsSave.ok) {
         jobsUpdatedAtRef.current = jobsSave.updatedAt;
+        jobsBaseRef.current = jobMerge.jobs;
         setJobs(jobMerge.jobs);
       }
       if (catalogSave.ok) {
         catalogUpdatedAtRef.current = catalogSave.updatedAt;
+        catalogBaseRef.current = catalogMerge.merged;
         setCatalog(catalogMerge.merged);
       }
       clearOfflineQueue();
@@ -5594,13 +5612,25 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
 
   // Also check periodically for long sessions that stay open past the
   // initial load — otherwise a full day of work in one sitting would only
-  // ever get backed up once, right at the start.
+  // ever get backed up once, right at the start. Also check whenever the
+  // tab becomes visible again — a backgrounded tab's timers get throttled
+  // by the browser and can queue up, so relying on the interval alone risks
+  // several checks firing in a burst right when you come back to it.
   useEffect(() => {
     if (!isEditor) return;
     const timer = setInterval(() => {
       maybeAutoBackup(jobsRef.current, catalogRef.current);
     }, 10 * 60 * 1000); // check every 10 minutes; actual backup still only every hour
-    return () => clearInterval(timer);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        maybeAutoBackup(jobsRef.current, catalogRef.current);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [isEditor]);
 
   // Fix for a known iOS/Safari quirk: elements with :hover styles can require
@@ -5680,9 +5710,14 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
       ? loadedActiveId
       : finalJobs[0].id;
     setActiveJobId(validActiveId);
-    setCatalog(loadedCatalog.map((c) => (c.gang === "Welders" ? { ...c, gang: "Welding" } : c)));
+    const finalCatalog = loadedCatalog.map((c) =>
+      c.gang === "Welders" ? { ...c, gang: "Welding" } : c
+    );
+    setCatalog(finalCatalog);
     jobsUpdatedAtRef.current = jobsResult.updatedAt || null;
     catalogUpdatedAtRef.current = catalogResult.updatedAt || null;
+    jobsBaseRef.current = finalJobs;
+    catalogBaseRef.current = finalCatalog;
     setConflictWarning(false);
 
     if (isEditor) maybeAutoBackup(finalJobs, loadedCatalog);
@@ -5728,6 +5763,57 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     setOfflineQueued(true);
   };
 
+  // Runs the same smart three-way merge used for offline reconnection, but
+  // for a regular online save that discovers someone else saved first (e.g.
+  // two tabs/devices active at once). If nothing actually overlaps, this
+  // syncs silently — only a genuine collision on the same item interrupts.
+  const handleSaveConflict = async () => {
+    const theirJobsResult = await getWithRetry(JOBS_KEY);
+    const theirCatalogResult = await getWithRetry(CATALOG_KEY);
+    if (!theirJobsResult.ok || !theirCatalogResult.ok) {
+      setConflictWarning(true); // can't even check right now — rare fallback
+      return;
+    }
+    const theirJobs = JSON.parse(theirJobsResult.value || "[]");
+    const theirCatalog = JSON.parse(theirCatalogResult.value || "[]");
+
+    const jobMerge = threeWayMergeJobs(jobsBaseRef.current, jobsRef.current, theirJobs);
+    const catalogMerge = threeWayMergeList(
+      catalogBaseRef.current,
+      catalogRef.current,
+      theirCatalog
+    );
+
+    const allConflicts = [
+      ...jobMerge.itemConflicts.map((c) => ({ ...c, kind: "item" })),
+      ...jobMerge.jobConflicts.map((c) => ({ ...c, kind: "job" })),
+      ...catalogMerge.conflicts.map((c) => ({ ...c, kind: "catalog" })),
+    ];
+
+    if (allConflicts.length === 0) {
+      const jobsSave = await saveWithRetry(JOBS_KEY, JSON.stringify(jobMerge.jobs));
+      const catalogSave = await saveWithRetry(CATALOG_KEY, JSON.stringify(catalogMerge.merged));
+      if (jobsSave.ok) {
+        jobsUpdatedAtRef.current = jobsSave.updatedAt;
+        jobsBaseRef.current = jobMerge.jobs;
+        setJobs(jobMerge.jobs);
+      }
+      if (catalogSave.ok) {
+        catalogUpdatedAtRef.current = catalogSave.updatedAt;
+        catalogBaseRef.current = catalogMerge.merged;
+        setCatalog(catalogMerge.merged);
+      }
+      setPendingSync(false);
+      return;
+    }
+
+    setMergeState({
+      jobs: jobMerge.jobs,
+      catalog: catalogMerge.merged,
+      conflicts: allConflicts.map((c) => ({ ...c, resolution: "mine" })),
+    });
+  };
+
   // Persist jobs whenever they change (after initial load completes), debounced
   // so several quick edits in a row don't each trigger their own blocking save
   useEffect(() => {
@@ -5749,13 +5835,14 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         );
         setSyncing(false);
         if (result.conflict) {
-          setConflictWarning(true);
+          await handleSaveConflict();
           return;
         }
         setSaveError(result.ok ? null : result.error);
         if (result.ok) {
           setPendingSync(false);
           jobsUpdatedAtRef.current = result.updatedAt;
+          jobsBaseRef.current = jobs;
         }
       })();
     }, 600);
@@ -5796,17 +5883,21 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           catalogUpdatedAtRef.current
         );
         if (result.conflict) {
-          setConflictWarning(true);
+          await handleSaveConflict();
           return;
         }
         if (!result.ok) setSaveError(result.error);
-        else catalogUpdatedAtRef.current = result.updatedAt;
+        else {
+          catalogUpdatedAtRef.current = result.updatedAt;
+          catalogBaseRef.current = catalog;
+        }
       })();
     }, 600);
     return () => {
       if (catalogSaveTimer.current) clearTimeout(catalogSaveTimer.current);
     };
   }, [catalog, loading, retryTick, isOnline, conflictWarning, isEditor]);
+
 
   const activeJob = jobs.find((j) => j.id === activeJobId);
 
@@ -6138,7 +6229,10 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     setResetConfirmOpen(false);
     const jobsResult = await saveWithRetry(JOBS_KEY, JSON.stringify(fresh));
     const activeResult = await saveWithRetry(ACTIVE_JOB_KEY, JSON.stringify(fresh[0].id));
-    if (jobsResult.ok) jobsUpdatedAtRef.current = jobsResult.updatedAt;
+    if (jobsResult.ok) {
+      jobsUpdatedAtRef.current = jobsResult.updatedAt;
+      jobsBaseRef.current = fresh;
+    }
     setConflictWarning(false);
     if (!jobsResult.ok) setSaveError(jobsResult.error);
     else if (!activeResult.ok) setSaveError(activeResult.error);
@@ -6195,8 +6289,14 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         setImportAllError(null);
         const jobsResult = await saveWithRetry(JOBS_KEY, JSON.stringify(importedJobs));
         const catalogResult = await saveWithRetry(CATALOG_KEY, JSON.stringify(importedCatalog));
-        if (jobsResult.ok) jobsUpdatedAtRef.current = jobsResult.updatedAt;
-        if (catalogResult.ok) catalogUpdatedAtRef.current = catalogResult.updatedAt;
+        if (jobsResult.ok) {
+          jobsUpdatedAtRef.current = jobsResult.updatedAt;
+          jobsBaseRef.current = importedJobs;
+        }
+        if (catalogResult.ok) {
+          catalogUpdatedAtRef.current = catalogResult.updatedAt;
+          catalogBaseRef.current = importedCatalog;
+        }
         setConflictWarning(false);
         if (!jobsResult.ok) setSaveError(jobsResult.error);
         else if (!catalogResult.ok) setSaveError(catalogResult.error);
@@ -6311,12 +6411,12 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4">
           <div className="bg-slate-900 border border-amber-600/50 rounded-lg w-full max-w-sm p-5">
             <h3 className="text-slate-100 font-semibold mb-1.5">
-              This was updated somewhere else
+              Couldn't check what changed
             </h3>
             <p className="text-sm text-slate-400 mb-5">
-              Another tab or device saved changes to this data after you last loaded it. To
-              avoid silently overwriting their work, nothing further will save from here until
-              you choose:
+              Something else saved changes to this data, but the connection isn't cooperating
+              enough right now to check exactly what — so there's no way to merge automatically
+              this time. To avoid silently overwriting their work, choose:
             </p>
             <div className="space-y-2">
               <button
@@ -6337,8 +6437,14 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
                     JSON.stringify(catalog)
                   );
                   setSyncing(false);
-                  if (jobsResult.ok) jobsUpdatedAtRef.current = jobsResult.updatedAt;
-                  if (catalogResult.ok) catalogUpdatedAtRef.current = catalogResult.updatedAt;
+                  if (jobsResult.ok) {
+                    jobsUpdatedAtRef.current = jobsResult.updatedAt;
+                    jobsBaseRef.current = jobs;
+                  }
+                  if (catalogResult.ok) {
+                    catalogUpdatedAtRef.current = catalogResult.updatedAt;
+                    catalogBaseRef.current = catalog;
+                  }
                   setConflictWarning(false);
                 }}
                 className="w-full text-sm rounded-md py-2.5 border border-red-700/50 text-red-400 hover:bg-red-500/10"
@@ -6493,10 +6599,12 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
                   );
                   if (jobsSave.ok) {
                     jobsUpdatedAtRef.current = jobsSave.updatedAt;
+                    jobsBaseRef.current = finalJobs;
                     setJobs(finalJobs);
                   }
                   if (catalogSave.ok) {
                     catalogUpdatedAtRef.current = catalogSave.updatedAt;
+                    catalogBaseRef.current = finalCatalog;
                     setCatalog(finalCatalog);
                   }
                   clearOfflineQueue();
