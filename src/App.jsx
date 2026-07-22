@@ -3487,7 +3487,7 @@ function JobPicker({
             </div>
             <div>
               <h1 className="font-bold text-slate-100 leading-tight flex items-center gap-2">
-                WareHub
+                Riggy
                 {!isEditor && (
                   <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-400 rounded-full px-2 py-0.5">
                     View only
@@ -5546,7 +5546,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   const exportAllData = () => {
     try {
       const payload = {
-        exportedFrom: "WareHub",
+        exportedFrom: "Riggy",
         exportedAt: new Date().toISOString(),
         jobs,
         catalog,
@@ -5580,7 +5580,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
       try {
         const parsed = JSON.parse(e.target.result);
         if (!Array.isArray(parsed.jobs)) {
-          setImportAllError("That file doesn't look like a WareHub backup.");
+          setImportAllError("That file doesn't look like a Riggy backup.");
           return;
         }
         const importedJobs = parsed.jobs;
@@ -5600,7 +5600,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         else if (!catalogResult.ok) setSaveError(catalogResult.error);
         else setSaveError(null);
       } catch {
-        setImportAllError("Couldn't read that file — make sure it's an unmodified WareHub backup.");
+        setImportAllError("Couldn't read that file — make sure it's an unmodified Riggy backup.");
       }
     };
     reader.readAsText(file);
@@ -5903,7 +5903,7 @@ function LoginScreen({ onSignedIn, embedded = false }) {
         <div className="w-9 h-9 rounded-md bg-amber-500 flex items-center justify-center">
           <Package className="w-5 h-5 text-slate-950" strokeWidth={2.5} />
         </div>
-        <h1 className="font-bold text-xl text-slate-100">WareHub</h1>
+        <h1 className="font-bold text-xl text-slate-100">Riggy</h1>
       </div>
       <form
         onSubmit={handleSubmit}
