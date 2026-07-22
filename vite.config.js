@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
- 
+
 export default defineConfig({
   plugins: [
     react(),
@@ -9,8 +9,8 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: ["icon-192.png", "icon-512.png", "icon-512-maskable.png"],
       manifest: {
-        name: "WareHub",
-        short_name: "WareHub",
+        name: "Riggy",
+        short_name: "Riggy",
         description: "Job site inventory tracker",
         theme_color: "#020617",
         background_color: "#020617",
@@ -47,4 +47,3 @@ export default defineConfig({
     }),
   ],
 });
- 
