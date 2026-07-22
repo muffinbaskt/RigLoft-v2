@@ -3398,7 +3398,7 @@ function JobCard({ job, indent, outstanding, isEditor, onSelect, onRename, onDel
         <div className="min-w-0">
           <p className="font-semibold text-slate-100 truncate">{job.name}</p>
           <p className="text-xs text-slate-500">
-            {job.items.length} item{job.items.length === 1 ? "" : "s"}
+            {(job.items || []).length} item{(job.items || []).length === 1 ? "" : "s"}
             {outstanding > 0 ? ` · ${outstanding} outstanding` : " · all complete"}
           </p>
         </div>
@@ -3584,7 +3584,7 @@ function JobPicker({
                     </p>
                     <div className="space-y-2.5">
                       {matchingJobs.map((job) => {
-                        const outstanding = job.items.filter((i) => i.status !== "green").length;
+                        const outstanding = (job.items || []).filter((i) => i.status !== "green").length;
                         return (
                           <JobCard
                             key={job.id}
@@ -3657,7 +3657,7 @@ function JobPicker({
         ) : (
           <div className="space-y-3">
             {topLevel.map((job) => {
-              const outstanding = job.items.filter((i) => i.status !== "green").length;
+              const outstanding = (job.items || []).filter((i) => i.status !== "green").length;
               const children = childrenOf(job.id);
               const isCollapsed = collapsed[job.id];
               return (
@@ -3695,7 +3695,7 @@ function JobPicker({
                   {!isCollapsed && children.length > 0 && (
                     <div className="space-y-2 mt-2">
                       {children.map((child) => {
-                        const childOutstanding = child.items.filter(
+                        const childOutstanding = (child.items || []).filter(
                           (i) => i.status !== "green"
                         ).length;
                         return (
@@ -3781,7 +3781,9 @@ function JobInventory({
   onOpenCatalog,
   onRenameJob,
 }) {
-  const { items, containerOptions, activityLog } = job;
+  const items = job.items || [];
+  const containerOptions = job.containerOptions || [];
+  const activityLog = job.activityLog || [];
   const [formState, setFormState] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [serialsView, setSerialsView] = useState(null);
@@ -5141,36 +5143,113 @@ function threeWayMergeList(baseList, mineList, theirList) {
 // Applies the item-level three-way merge to every job, plus a lighter
 // merge of job-level metadata (name, color, etc.) so a rename by one side
 // doesn't collide with an item change by the other.
+// Only these fields represent an actual choice a person made that could
+// genuinely differ between two sides. Everything else on a job (activity
+// log, container list, to-dos) is naturally additive — there's nothing to
+// meaningfully "pick" between, so those get combined automatically instead
+// of being treated as a conflict.
+const JOB_META_KEYS = ["name", "color", "parentId"];
+
+function pickKeys(obj, keys) {
+  const out = {};
+  keys.forEach((k) => (out[k] = obj ? obj[k] : undefined));
+  return out;
+}
+
+function unionById(theirsList, mineList) {
+  const byId = new Map();
+  (theirsList || []).forEach((x) => byId.set(String(x.id), x));
+  (mineList || []).forEach((x) => byId.set(String(x.id), x)); // mine wins ties
+  return [...byId.values()];
+}
+
 function threeWayMergeJobs(baseJobs, mineJobs, theirJobs) {
-  const { merged: mergedJobShells, conflicts: jobConflicts } = threeWayMergeList(
-    (baseJobs || []).map((j) => ({ ...j, items: undefined })),
-    (mineJobs || []).map((j) => ({ ...j, items: undefined })),
-    (theirJobs || []).map((j) => ({ ...j, items: undefined }))
-  );
+  const baseById = new Map((baseJobs || []).map((j) => [String(j.id), j]));
+  const mineById = new Map((mineJobs || []).map((j) => [String(j.id), j]));
+  const theirById = new Map((theirJobs || []).map((j) => [String(j.id), j]));
+  const allIds = new Set([...baseById.keys(), ...mineById.keys(), ...theirById.keys()]);
 
-  const baseJobsById = new Map((baseJobs || []).map((j) => [String(j.id), j]));
-  const mineJobsById = new Map((mineJobs || []).map((j) => [String(j.id), j]));
-  const theirJobsById = new Map((theirJobs || []).map((j) => [String(j.id), j]));
-
+  const finalJobs = [];
+  const jobConflicts = [];
   const itemConflicts = [];
-  const finalJobs = mergedJobShells.map((shell) => {
-    const id = String(shell.id);
-    const baseJob = baseJobsById.get(id);
-    const mineJob = mineJobsById.get(id);
-    const theirJob = theirJobsById.get(id);
-    // Only merge items when the job exists on at least the two sides we
-    // actually have data for — otherwise just take whichever full job
-    // object is available (a newly added or one-sided job).
-    const items = threeWayMergeList(
-      baseJob ? baseJob.items : [],
-      mineJob ? mineJob.items : theirJob ? theirJob.items : [],
-      theirJob ? theirJob.items : mineJob ? mineJob.items : []
+
+  for (const id of allIds) {
+    const base = baseById.get(id) || null;
+    const mine = mineById.get(id) || null;
+    const theirs = theirById.get(id) || null;
+
+    if (!mine && !theirs) continue;
+
+    // Merge items first (works even if only one side has the job at all)
+    const itemMerge = threeWayMergeList(
+      base ? base.items : [],
+      mine ? mine.items : theirs ? theirs.items : [],
+      theirs ? theirs.items : mine ? mine.items : []
     );
-    items.conflicts.forEach((c) =>
-      itemConflicts.push({ jobId: id, jobName: shell.name, ...c })
+
+    // Was this job meaningfully touched on a given side? (metadata OR items)
+    const mineMetaChanged = mine && !deepEqual(pickKeys(base, JOB_META_KEYS), pickKeys(mine, JOB_META_KEYS));
+    const theirsMetaChanged = theirs && !deepEqual(pickKeys(base, JOB_META_KEYS), pickKeys(theirs, JOB_META_KEYS));
+    const mineTouched = mineMetaChanged || itemMerge.conflicts.length > 0 || (mine && !deepEqual(base?.items, mine.items));
+    const theirsTouched = theirsMetaChanged || (theirs && !deepEqual(base?.items, theirs.items));
+
+    if (!mine && theirs) {
+      if (base && !theirsTouched) continue; // I deleted it, they didn't touch it — honor deletion
+      finalJobs.push(theirs);
+      if (base) jobConflicts.push({ id, mine: null, theirs, base, kind: "job", subtype: "deletion" });
+      continue;
+    }
+    if (mine && !theirs) {
+      if (base && !mineTouched) continue; // they deleted it, I didn't touch it — honor deletion
+      finalJobs.push(mine);
+      if (base) jobConflicts.push({ id, mine, theirs: null, base, kind: "job", subtype: "deletion" });
+      continue;
+    }
+
+    // Present on both sides — combine the additive parts automatically
+    const containerOptions = [
+      ...new Set([...(mine.containerOptions || []), ...(theirs.containerOptions || [])]),
+    ];
+    const todos = unionById(theirs.todos, mine.todos);
+    const activityLog = unionById(theirs.activityLog, mine.activityLog)
+      .sort((a, b) => (b.id || 0) - (a.id || 0))
+      .slice(0, 50);
+
+    itemMerge.conflicts.forEach((c) =>
+      itemConflicts.push({ jobId: id, jobName: mine.name || theirs.name, ...c })
     );
-    return { ...shell, items: items.merged };
-  });
+
+    let metaResolution = pickKeys(mine, JOB_META_KEYS);
+    let metaConflict = null;
+    if (!mineMetaChanged) {
+      metaResolution = pickKeys(theirs, JOB_META_KEYS);
+    } else if (!theirsMetaChanged) {
+      metaResolution = pickKeys(mine, JOB_META_KEYS);
+    } else if (deepEqual(pickKeys(mine, JOB_META_KEYS), pickKeys(theirs, JOB_META_KEYS))) {
+      metaResolution = pickKeys(mine, JOB_META_KEYS);
+    } else {
+      metaConflict = {
+        id,
+        kind: "job",
+        subtype: "metadata",
+        base: pickKeys(base, JOB_META_KEYS),
+        mine: pickKeys(mine, JOB_META_KEYS),
+        theirs: pickKeys(theirs, JOB_META_KEYS),
+      };
+    }
+
+    const mergedJob = {
+      ...mine,
+      ...metaResolution,
+      items: itemMerge.merged,
+      containerOptions,
+      todos,
+      activityLog,
+    };
+
+    if (metaConflict) jobConflicts.push(metaConflict);
+    finalJobs.push(mergedJob);
+  }
 
   return { jobs: finalJobs, jobConflicts, itemConflicts };
 }
@@ -6197,10 +6276,20 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
                       finalCatalog = winner
                         ? [...finalCatalog.filter((x) => String(x.id) !== String(c.id)), winner]
                         : finalCatalog.filter((x) => String(x.id) !== String(c.id));
-                    } else if (c.kind === "job") {
+                    } else if (c.kind === "job" && c.subtype === "deletion") {
+                      // mine/theirs here are full job objects (or null) —
+                      // safe to splice in directly or remove entirely.
                       finalJobs = winner
                         ? [...finalJobs.filter((j) => String(j.id) !== String(c.id)), winner]
                         : finalJobs.filter((j) => String(j.id) !== String(c.id));
+                    } else if (c.kind === "job" && c.subtype === "metadata") {
+                      // mine/theirs here are only {name, color, parentId} —
+                      // patch just those fields onto the already-merged job
+                      // (which already has the right items/containers/etc.),
+                      // never replace the whole object with a partial one.
+                      finalJobs = finalJobs.map((j) =>
+                        String(j.id) === String(c.id) ? { ...j, ...winner } : j
+                      );
                     } else {
                       finalJobs = finalJobs.map((j) => {
                         if (String(j.id) !== String(c.jobId)) return j;
