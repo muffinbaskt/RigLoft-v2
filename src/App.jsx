@@ -5522,14 +5522,27 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     setLoadingSlow(false);
     const slowTimer = setTimeout(() => setLoadingSlow(true), 3000);
 
+    try {
+      await loadAllDataInner();
+    } catch (err) {
+      // Whatever went wrong, never leave the app stuck on the loading
+      // spinner forever — fall back to the same "couldn't load" screen
+      // used for a genuine connection failure, with a Retry button.
+      console.error("Unexpected error while loading:", err);
+      setLoadFailed(true);
+    } finally {
+      clearTimeout(slowTimer);
+      setLoading(false);
+    }
+  };
+
+  const loadAllDataInner = async () => {
     const jobsResult = await getWithRetry(JOBS_KEY);
     const activeResult = await getWithRetry(ACTIVE_JOB_KEY);
     const catalogResult = await getWithRetry(CATALOG_KEY);
-    clearTimeout(slowTimer);
 
     if (!jobsResult.ok || !catalogResult.ok) {
       setLoadFailed(true);
-      setLoading(false);
       return;
     }
 
@@ -5556,7 +5569,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
 
     const migrateGang = (job) => ({
       ...job,
-      items: job.items.map((i) =>
+      items: (job.items || []).map((i) =>
         migrateItemContainers(i.gang === "Welders" ? { ...i, gang: "Welding" } : i)
       ),
     });
@@ -5571,7 +5584,6 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     jobsUpdatedAtRef.current = jobsResult.updatedAt || null;
     catalogUpdatedAtRef.current = catalogResult.updatedAt || null;
     setConflictWarning(false);
-    setLoading(false);
 
     // If there's a leftover offline queue from a previous session (the app
     // was closed while offline), check it now that we know what the server
