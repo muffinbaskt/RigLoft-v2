@@ -5036,6 +5036,200 @@ async function updateSuggestionRow(id, fields) {
   }
 }
 
+// Compares two timestamps by actual moment in time rather than raw string
+// equality, since the same instant can come back formatted differently
+// depending on its source (browser-generated vs. Postgres-returned).
+function sameInstant(a, b) {
+  if (!a || !b) return a === b;
+  const ta = new Date(a).getTime();
+  const tb = new Date(b).getTime();
+  return !Number.isNaN(ta) && !Number.isNaN(tb) && ta === tb;
+}
+
+// Deterministic stringify (sorted keys) so two objects with the same
+// content but different key order still compare as equal.
+function stableStringify(obj) {
+  if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
+  if (Array.isArray(obj)) return `[${obj.map(stableStringify).join(",")}]`;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
+}
+
+function deepEqual(a, b) {
+  return stableStringify(a) === stableStringify(b);
+}
+
+function deepEqualExcept(a, b, excludeKeys) {
+  const strip = (o) => {
+    const copy = { ...o };
+    excludeKeys.forEach((k) => delete copy[k]);
+    return copy;
+  };
+  return deepEqual(strip(a || {}), strip(b || {}));
+}
+
+// Generic three-way merge for a list of objects with a stable `.id`.
+// Compares "mine" and "theirs" against a common "base" so it can tell
+// apart three situations per entry: only one side touched it (auto-merge,
+// no conflict), neither touched it (unchanged), or both sides changed it
+// differently (a real conflict, needs a human choice).
+function threeWayMergeList(baseList, mineList, theirList) {
+  const baseById = new Map((baseList || []).map((x) => [String(x.id), x]));
+  const mineById = new Map((mineList || []).map((x) => [String(x.id), x]));
+  const theirById = new Map((theirList || []).map((x) => [String(x.id), x]));
+  const allIds = new Set([...baseById.keys(), ...mineById.keys(), ...theirById.keys()]);
+
+  const merged = [];
+  const conflicts = [];
+
+  for (const id of allIds) {
+    const base = baseById.get(id) || null;
+    const mine = mineById.get(id) || null;
+    const theirs = theirById.get(id) || null;
+
+    if (!mine && !theirs) continue; // gone from both, nothing to do
+
+    if (!base && mine && !theirs) {
+      merged.push(mine); // I added it
+      continue;
+    }
+    if (!base && !mine && theirs) {
+      merged.push(theirs); // they added it
+      continue;
+    }
+    if (!base && mine && theirs) {
+      merged.push(deepEqual(mine, theirs) ? mine : mine);
+      if (!deepEqual(mine, theirs)) conflicts.push({ id, mine, theirs, base: null });
+      continue;
+    }
+
+    const mineChanged = !deepEqual(base, mine);
+    const theirsChanged = !deepEqual(base, theirs);
+
+    if (!mine && theirs) {
+      // I deleted it
+      if (!theirsChanged) continue; // they didn't touch it — honor my deletion
+      conflicts.push({ id, mine: null, theirs, base, type: "deleted_by_me" });
+      merged.push(theirs);
+      continue;
+    }
+    if (mine && !theirs) {
+      // they deleted it
+      if (!mineChanged) continue; // I didn't touch it — honor their deletion
+      conflicts.push({ id, mine, theirs: null, base, type: "deleted_by_them" });
+      merged.push(mine);
+      continue;
+    }
+
+    if (!mineChanged && !theirsChanged) {
+      merged.push(base);
+    } else if (mineChanged && !theirsChanged) {
+      merged.push(mine);
+    } else if (!mineChanged && theirsChanged) {
+      merged.push(theirs);
+    } else if (deepEqual(mine, theirs)) {
+      merged.push(mine); // both changed it to the same thing
+    } else {
+      conflicts.push({ id, mine, theirs, base });
+      merged.push(mine); // tentative, pending resolution
+    }
+  }
+
+  return { merged, conflicts };
+}
+
+// Applies the item-level three-way merge to every job, plus a lighter
+// merge of job-level metadata (name, color, etc.) so a rename by one side
+// doesn't collide with an item change by the other.
+function threeWayMergeJobs(baseJobs, mineJobs, theirJobs) {
+  const { merged: mergedJobShells, conflicts: jobConflicts } = threeWayMergeList(
+    (baseJobs || []).map((j) => ({ ...j, items: undefined })),
+    (mineJobs || []).map((j) => ({ ...j, items: undefined })),
+    (theirJobs || []).map((j) => ({ ...j, items: undefined }))
+  );
+
+  const baseJobsById = new Map((baseJobs || []).map((j) => [String(j.id), j]));
+  const mineJobsById = new Map((mineJobs || []).map((j) => [String(j.id), j]));
+  const theirJobsById = new Map((theirJobs || []).map((j) => [String(j.id), j]));
+
+  const itemConflicts = [];
+  const finalJobs = mergedJobShells.map((shell) => {
+    const id = String(shell.id);
+    const baseJob = baseJobsById.get(id);
+    const mineJob = mineJobsById.get(id);
+    const theirJob = theirJobsById.get(id);
+    // Only merge items when the job exists on at least the two sides we
+    // actually have data for — otherwise just take whichever full job
+    // object is available (a newly added or one-sided job).
+    const items = threeWayMergeList(
+      baseJob ? baseJob.items : [],
+      mineJob ? mineJob.items : theirJob ? theirJob.items : [],
+      theirJob ? theirJob.items : mineJob ? mineJob.items : []
+    );
+    items.conflicts.forEach((c) =>
+      itemConflicts.push({ jobId: id, jobName: shell.name, ...c })
+    );
+    return { ...shell, items: items.merged };
+  });
+
+  return { jobs: finalJobs, jobConflicts, itemConflicts };
+}
+
+// Changes made while offline are kept here so they survive closing the
+// app/tab entirely, not just losing network mid-session. This is separate
+// from the main Supabase-backed storage, since it needs to work with zero
+// connectivity.
+const OFFLINE_QUEUE_KEY = "warehub-offline-queue";
+
+function saveOfflineQueue(queue) {
+  try {
+    localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+    return true;
+  } catch {
+    return false; // localStorage full or unavailable — best effort only
+  }
+}
+
+function loadOfflineQueue() {
+  try {
+    const raw = localStorage.getItem(OFFLINE_QUEUE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearOfflineQueue() {
+  try {
+    localStorage.removeItem(OFFLINE_QUEUE_KEY);
+  } catch {
+    // nothing more we can do
+  }
+}
+
+function downloadOfflineBackup(queue) {
+  try {
+    const payload = {
+      exportedFrom: "Riggy (offline conflict backup)",
+      exportedAt: new Date().toISOString(),
+      jobs: queue.jobs,
+      catalog: queue.catalog,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `riggy-offline-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   const [jobs, setJobs] = useState([]);
   const [activeJobId, setActiveJobId] = useState(null);
@@ -5065,6 +5259,14 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   const catalogRef = useRef([]);
   const catalogUpdatedAtRef = useRef(null);
   const [conflictWarning, setConflictWarning] = useState(false);
+
+  // Offline support: snapshot of the last-confirmed-synced timestamps at
+  // the moment connectivity was lost, used later to check whether anything
+  // else changed on the server while disconnected.
+  const offlineSnapshotRef = useRef(null);
+  const [offlineQueued, setOfflineQueued] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
+  const [mergeState, setMergeState] = useState(null);
 
   // Warn before closing/reloading if a save is still pending or in flight —
   // this can't guarantee the save finishes, but it stops you from powering
@@ -5111,11 +5313,107 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     };
   }, []);
 
+  // The core of offline support: when we're back online (either mid-session
+  // or on a fresh app open after being offline when it was last closed),
+  // check whether the server actually still matches what it looked like
+  // when we went offline. If nothing else touched it, sync the queued
+  // changes straight through. If something did, don't silently overwrite —
+  // download a backup of the queued changes first, then let the user choose.
+  const reconcileOfflineChanges = async () => {
+    const queue = loadOfflineQueue();
+    if (!queue) return;
+
+    setReconciling(true);
+    const jobsResult = await getWithRetry(JOBS_KEY);
+    const catalogResult = await getWithRetry(CATALOG_KEY);
+    setReconciling(false);
+
+    if (!jobsResult.ok || !catalogResult.ok) {
+      // Can't confirm the current server state right now — leave the queue
+      // in place and try again next time we're back online.
+      return;
+    }
+
+    const jobsMatch = sameInstant(jobsResult.updatedAt, queue.jobsAsOf);
+    const catalogMatch = sameInstant(catalogResult.updatedAt, queue.catalogAsOf);
+
+    if (jobsMatch && catalogMatch) {
+      // Nothing else touched this at all — sync straight through
+      const jobsSave = await saveWithRetry(JOBS_KEY, JSON.stringify(queue.jobs), queue.jobsAsOf);
+      const catalogSave = await saveWithRetry(
+        CATALOG_KEY,
+        JSON.stringify(queue.catalog),
+        queue.catalogAsOf
+      );
+      if (jobsSave.ok) {
+        jobsUpdatedAtRef.current = jobsSave.updatedAt;
+        setJobs(queue.jobs);
+      }
+      if (catalogSave.ok) {
+        catalogUpdatedAtRef.current = catalogSave.updatedAt;
+        setCatalog(queue.catalog);
+      }
+      clearOfflineQueue();
+      offlineSnapshotRef.current = null;
+      setOfflineQueued(false);
+      setSaveError(!jobsSave.ok ? jobsSave.error : !catalogSave.ok ? catalogSave.error : null);
+      return;
+    }
+
+    // Something else changed while we were offline — figure out exactly
+    // what, at the individual item level, rather than treating the whole
+    // thing as one big conflict.
+    downloadOfflineBackup(queue);
+
+    const theirJobs = JSON.parse(jobsResult.value || "[]");
+    const theirCatalog = JSON.parse(catalogResult.value || "[]");
+
+    const jobMerge = threeWayMergeJobs(queue.baseJobs, queue.jobs, theirJobs);
+    const catalogMerge = threeWayMergeList(queue.baseCatalog, queue.catalog, theirCatalog);
+
+    const allConflicts = [
+      ...jobMerge.itemConflicts.map((c) => ({ ...c, kind: "item" })),
+      ...jobMerge.jobConflicts.map((c) => ({ ...c, kind: "job" })),
+      ...catalogMerge.conflicts.map((c) => ({ ...c, kind: "catalog" })),
+    ];
+
+    if (allConflicts.length === 0) {
+      // Different parts of the data changed on each side — no real overlap,
+      // so the merge is clean even though the whole-blob timestamp differed.
+      const jobsSave = await saveWithRetry(JOBS_KEY, JSON.stringify(jobMerge.jobs));
+      const catalogSave = await saveWithRetry(
+        CATALOG_KEY,
+        JSON.stringify(catalogMerge.merged)
+      );
+      if (jobsSave.ok) {
+        jobsUpdatedAtRef.current = jobsSave.updatedAt;
+        setJobs(jobMerge.jobs);
+      }
+      if (catalogSave.ok) {
+        catalogUpdatedAtRef.current = catalogSave.updatedAt;
+        setCatalog(catalogMerge.merged);
+      }
+      clearOfflineQueue();
+      offlineSnapshotRef.current = null;
+      setOfflineQueued(false);
+      return;
+    }
+
+    // Genuine overlap on specific items — hold onto the clean parts of the
+    // merge and ask only about what's actually contested.
+    setMergeState({
+      jobs: jobMerge.jobs,
+      catalog: catalogMerge.merged,
+      conflicts: allConflicts.map((c) => ({ ...c, resolution: "mine" })),
+    });
+  };
+
   // Track connectivity so we can pause saves gracefully instead of erroring
   useEffect(() => {
     const goOnline = () => {
       setIsOnline(true);
       setRetryTick((t) => t + 1); // flush any pending changes immediately
+      reconcileOfflineChanges();
     };
     const goOffline = () => setIsOnline(false);
     window.addEventListener("online", goOnline);
@@ -5195,11 +5493,47 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     catalogUpdatedAtRef.current = catalogResult.updatedAt || null;
     setConflictWarning(false);
     setLoading(false);
+
+    // If there's a leftover offline queue from a previous session (the app
+    // was closed while offline), check it now that we know what the server
+    // actually looks like — always after the normal load, never racing it.
+    if ((typeof navigator === "undefined" || navigator.onLine) && isEditor) {
+      reconcileOfflineChanges();
+    }
   };
 
   useEffect(() => {
     loadAllData();
   }, []);
+
+  // Called from the jobs/catalog persist effects while offline — captures
+  // a snapshot of "what we last knew the server looked like" the first
+  // time we go offline this session, then keeps the local queue updated
+  // with the latest data as further edits happen, all in localStorage so
+  // it survives closing the app entirely.
+  const persistOfflineQueue = () => {
+    if (!offlineSnapshotRef.current) {
+      // Captured once, the moment we first go offline this session — this
+      // is the "common ancestor" a three-way merge needs, not just the
+      // timestamp, so we can tell exactly which items changed on which side.
+      offlineSnapshotRef.current = {
+        jobsAsOf: jobsUpdatedAtRef.current,
+        catalogAsOf: catalogUpdatedAtRef.current,
+        baseJobs: jobsRef.current,
+        baseCatalog: catalogRef.current,
+      };
+    }
+    saveOfflineQueue({
+      jobs: jobsRef.current,
+      catalog: catalogRef.current,
+      jobsAsOf: offlineSnapshotRef.current.jobsAsOf,
+      catalogAsOf: offlineSnapshotRef.current.catalogAsOf,
+      baseJobs: offlineSnapshotRef.current.baseJobs,
+      baseCatalog: offlineSnapshotRef.current.baseCatalog,
+      savedAt: new Date().toISOString(),
+    });
+    setOfflineQueued(true);
+  };
 
   // Persist jobs whenever they change (after initial load completes), debounced
   // so several quick edits in a row don't each trigger their own blocking save
@@ -5207,6 +5541,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     if (loading || loadFailed || conflictWarning || !isEditor) return;
     if (!isOnline) {
       setPendingSync(true);
+      persistOfflineQueue();
       return;
     }
     if (jobsSaveTimer.current) clearTimeout(jobsSaveTimer.current);
@@ -5254,7 +5589,10 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   // Persist catalog whenever it changes, debounced like jobs
   useEffect(() => {
     if (loading || loadFailed || conflictWarning || !isEditor) return;
-    if (!isOnline) return;
+    if (!isOnline) {
+      persistOfflineQueue();
+      return;
+    }
     if (catalogSaveTimer.current) clearTimeout(catalogSaveTimer.current);
     catalogSaveTimer.current = setTimeout(() => {
       catalogSaveTimer.current = null;
@@ -5692,6 +6030,19 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         </div>
       )}
 
+      {!isOnline && offlineQueued && (
+        <div className="fixed bottom-3 right-3 z-[60] bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-full px-3 py-2 flex items-center gap-2 shadow-lg">
+          📴 Offline — changes saved on this device, will sync when back online
+        </div>
+      )}
+
+      {reconciling && (
+        <div className="fixed bottom-3 right-3 z-[60] bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-full px-3 py-2 flex items-center gap-2 shadow-lg">
+          <div className="w-3 h-3 border-2 border-slate-600 border-t-amber-500 rounded-full animate-spin" />
+          Checking for updates from while you were offline...
+        </div>
+      )}
+
       {conflictWarning && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4">
           <div className="bg-slate-900 border border-amber-600/50 rounded-lg w-full max-w-sm p-5">
@@ -5735,6 +6086,159 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
               Reloading discards any edits made in this tab since it last synced. Overwriting
               discards whatever the other tab/device saved instead.
             </p>
+          </div>
+        </div>
+      )}
+
+      {mergeState && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+          <div className="bg-slate-900 border border-amber-600/50 rounded-lg w-full max-w-lg max-h-full flex flex-col">
+            <div className="px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold mb-1">
+                A few things changed on both sides
+              </h3>
+              <p className="text-xs text-slate-400">
+                Everything else synced automatically with no conflict. A backup of your
+                offline changes was downloaded automatically too, just in case. Only these{" "}
+                {mergeState.conflicts.length} item{mergeState.conflicts.length === 1 ? "" : "s"}{" "}
+                need a decision:
+              </p>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+              {mergeState.conflicts.map((c, idx) => {
+                const label =
+                  c.kind === "catalog"
+                    ? `Catalog: ${(c.mine || c.theirs || c.base)?.name || "item"}`
+                    : c.kind === "job"
+                    ? `Job: ${(c.mine || c.theirs)?.name || "unnamed"}`
+                    : `${mergeState.conflicts[idx].jobName || "Job"} — ${
+                        (c.mine || c.theirs || c.base)?.name || "item"
+                      }`;
+                const mineLabel =
+                  c.mine === null
+                    ? "Deleted (by you)"
+                    : c.kind === "job"
+                    ? c.mine.name
+                    : `Qty ${c.mine.qtyHave ?? "—"} of ${c.mine.qtyNeeded ?? "—"}${
+                        c.mine.containers?.length
+                          ? ` · ${c.mine.containers.map((x) => `${x.name}: ${x.qty}`).join(", ")}`
+                          : ""
+                      }`;
+                const theirsLabel =
+                  c.theirs === null
+                    ? "Deleted (elsewhere)"
+                    : c.kind === "job"
+                    ? c.theirs.name
+                    : `Qty ${c.theirs.qtyHave ?? "—"} of ${c.theirs.qtyNeeded ?? "—"}${
+                        c.theirs.containers?.length
+                          ? ` · ${c.theirs.containers
+                              .map((x) => `${x.name}: ${x.qty}`)
+                              .join(", ")}`
+                          : ""
+                      }`;
+                return (
+                  <div key={idx} className="border border-slate-800 rounded-md p-3">
+                    <p className="text-sm text-slate-100 font-semibold mb-2">{label}</p>
+                    <div className="space-y-1.5">
+                      <label className="flex items-start gap-2 text-xs cursor-pointer">
+                        <input
+                          type="radio"
+                          checked={c.resolution === "mine"}
+                          onChange={() =>
+                            setMergeState((prev) => ({
+                              ...prev,
+                              conflicts: prev.conflicts.map((x, i) =>
+                                i === idx ? { ...x, resolution: "mine" } : x
+                              ),
+                            }))
+                          }
+                          className="mt-0.5 accent-amber-500"
+                        />
+                        <span className="text-slate-300">
+                          <span className="text-amber-400 font-medium">Your version: </span>
+                          {mineLabel}
+                        </span>
+                      </label>
+                      <label className="flex items-start gap-2 text-xs cursor-pointer">
+                        <input
+                          type="radio"
+                          checked={c.resolution === "theirs"}
+                          onChange={() =>
+                            setMergeState((prev) => ({
+                              ...prev,
+                              conflicts: prev.conflicts.map((x, i) =>
+                                i === idx ? { ...x, resolution: "theirs" } : x
+                              ),
+                            }))
+                          }
+                          className="mt-0.5 accent-amber-500"
+                        />
+                        <span className="text-slate-300">
+                          <span className="text-sky-400 font-medium">Their version: </span>
+                          {theirsLabel}
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+              <button
+                onClick={async () => {
+                  let finalJobs = mergeState.jobs;
+                  let finalCatalog = mergeState.catalog;
+
+                  mergeState.conflicts.forEach((c) => {
+                    const winner = c.resolution === "mine" ? c.mine : c.theirs;
+                    if (c.kind === "catalog") {
+                      finalCatalog = winner
+                        ? [...finalCatalog.filter((x) => String(x.id) !== String(c.id)), winner]
+                        : finalCatalog.filter((x) => String(x.id) !== String(c.id));
+                    } else if (c.kind === "job") {
+                      finalJobs = winner
+                        ? [...finalJobs.filter((j) => String(j.id) !== String(c.id)), winner]
+                        : finalJobs.filter((j) => String(j.id) !== String(c.id));
+                    } else {
+                      finalJobs = finalJobs.map((j) => {
+                        if (String(j.id) !== String(c.jobId)) return j;
+                        const items = winner
+                          ? [...j.items.filter((i) => String(i.id) !== String(c.id)), winner]
+                          : j.items.filter((i) => String(i.id) !== String(c.id));
+                        return { ...j, items };
+                      });
+                    }
+                  });
+
+                  const jobsSave = await saveWithRetry(JOBS_KEY, JSON.stringify(finalJobs));
+                  const catalogSave = await saveWithRetry(
+                    CATALOG_KEY,
+                    JSON.stringify(finalCatalog)
+                  );
+                  if (jobsSave.ok) {
+                    jobsUpdatedAtRef.current = jobsSave.updatedAt;
+                    setJobs(finalJobs);
+                  }
+                  if (catalogSave.ok) {
+                    catalogUpdatedAtRef.current = catalogSave.updatedAt;
+                    setCatalog(finalCatalog);
+                  }
+                  clearOfflineQueue();
+                  offlineSnapshotRef.current = null;
+                  setOfflineQueued(false);
+                  setMergeState(null);
+                }}
+                className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Apply and sync
+              </button>
+              <p className="text-xs text-slate-600 mt-3">
+                Your full offline changes are also saved in the backup file that just
+                downloaded, regardless of what you pick here.
+              </p>
+            </div>
           </div>
         </div>
       )}
