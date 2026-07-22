@@ -1,25 +1,50 @@
-{
-  "name": "warehub",
-  "private": true,
-  "version": "1.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@supabase/supabase-js": "^2.45.4",
-    "lucide-react": "^0.383.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.1",
-    "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.47",
-    "tailwindcss": "^3.4.13",
-    "vite": "^5.4.8",
-    "vite-plugin-pwa": "^0.20.5"
-  }
-}
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import { VitePWA } from "vite-plugin-pwa";
+ 
+export default defineConfig({
+  plugins: [
+    react(),
+    VitePWA({
+      registerType: "autoUpdate",
+      includeAssets: ["icon-192.png", "icon-512.png", "icon-512-maskable.png"],
+      manifest: {
+        name: "WareHub",
+        short_name: "WareHub",
+        description: "Job site inventory tracker",
+        theme_color: "#020617",
+        background_color: "#020617",
+        display: "standalone",
+        orientation: "portrait",
+        start_url: "/",
+        scope: "/",
+        icons: [
+          {
+            src: "icon-192.png",
+            sizes: "192x192",
+            type: "image/png",
+          },
+          {
+            src: "icon-512.png",
+            sizes: "512x512",
+            type: "image/png",
+          },
+          {
+            src: "icon-512-maskable.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "maskable",
+          },
+        ],
+      },
+      workbox: {
+        // Cache the app shell (HTML/JS/CSS/icons) so the app still opens
+        // without a connection. Actual job data always goes over the network
+        // to Supabase — never cached — so you're never shown stale numbers,
+        // just the app itself failing to load data gracefully if offline.
+        globPatterns: ["**/*.{js,css,html,png,svg,ico}"],
+      },
+    }),
+  ],
+});
+ 
