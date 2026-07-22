@@ -1909,6 +1909,14 @@ function SuggestionsInboxModal({
             {s.payload.container ? ` · Container: ${s.payload.container}` : ""}
           </p>
         </>
+      ) : s.suggestion_type === "complete_todo" ? (
+        <p className="text-sm text-slate-100 font-semibold">
+          ✓ Mark To Do done: {s.payload.todoText}
+        </p>
+      ) : s.suggestion_type === "add_todo" ? (
+        <p className="text-sm text-slate-100 font-semibold">
+          + New To Do: {s.payload.text}
+        </p>
       ) : (
         <>
           <p className="text-sm text-slate-100 font-semibold">{s.payload.itemName}</p>
@@ -2046,15 +2054,54 @@ function SuggestionsInboxModal({
   );
 }
 
-function TodoListModal({ todos, isEditor, onAddCustom, onToggleDone, onDelete, onClose }) {
+function TodoListModal({
+  todos,
+  isEditor,
+  job,
+  onAddCustom,
+  onToggleDone,
+  onDelete,
+  onClose,
+}) {
   const [newText, setNewText] = useState("");
+  const [sentIds, setSentIds] = useState({});
 
-  const submitCustom = () => {
+  const [taskSuggestionSent, setTaskSuggestionSent] = useState(false);
+
+  const submitCustom = async () => {
     const trimmed = newText.trim();
-    if (trimmed) {
+    if (!trimmed) return;
+    if (isEditor) {
       onAddCustom(trimmed);
       setNewText("");
+      return;
     }
+    setNewText("");
+    await submitSuggestion({
+      jobId: job.id,
+      itemId: null,
+      type: "add_todo",
+      payload: { text: trimmed },
+      note: "",
+    });
+    setTaskSuggestionSent(true);
+    setTimeout(() => setTaskSuggestionSent(false), 2500);
+  };
+
+  const handleCheck = async (t) => {
+    if (isEditor) {
+      onToggleDone(t.id);
+      return;
+    }
+    if (sentIds[t.id]) return;
+    setSentIds((prev) => ({ ...prev, [t.id]: true }));
+    await submitSuggestion({
+      jobId: job.id,
+      itemId: null,
+      type: "complete_todo",
+      payload: { todoId: t.id, todoText: t.text },
+      note: "",
+    });
   };
 
   const pending = todos.filter((t) => !t.done);
@@ -2078,6 +2125,13 @@ function TodoListModal({ todos, isEditor, onAddCustom, onToggleDone, onDelete, o
           </button>
         </div>
 
+        {!isEditor && (
+          <p className="text-xs text-slate-500 px-5 pt-3">
+            Checking something off sends it to the job owner for approval — it won't mark as
+            done until they confirm it.
+          </p>
+        )}
+
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {todos.length === 0 ? (
             <p className="text-sm text-slate-500 text-center py-10">
@@ -2095,12 +2149,19 @@ function TodoListModal({ todos, isEditor, onAddCustom, onToggleDone, onDelete, o
                     >
                       <input
                         type="checkbox"
-                        checked={false}
-                        disabled={!isEditor}
-                        onChange={() => onToggleDone(t.id)}
+                        checked={!isEditor && sentIds[t.id] ? true : false}
+                        disabled={!isEditor && !!sentIds[t.id]}
+                        onChange={() => handleCheck(t)}
                         className="w-4 h-4 rounded accent-emerald-500 mt-0.5 shrink-0 cursor-pointer disabled:cursor-default disabled:opacity-50"
                       />
-                      <p className="text-sm text-slate-100 flex-1 min-w-0">{t.text}</p>
+                      <p className="text-sm text-slate-100 flex-1 min-w-0">
+                        {t.text}
+                        {!isEditor && sentIds[t.id] && (
+                          <span className="block text-xs text-amber-400 mt-0.5">
+                            Sent for approval
+                          </span>
+                        )}
+                      </p>
                       {isEditor && (
                         <button
                           onClick={() => onDelete(t.id)}
@@ -2149,25 +2210,26 @@ function TodoListModal({ todos, isEditor, onAddCustom, onToggleDone, onDelete, o
           )}
         </div>
 
-        {isEditor && (
-          <div className="px-5 py-4 border-t border-slate-800 shrink-0">
-            <div className="flex items-center gap-2">
-              <input
-                value={newText}
-                onChange={(e) => setNewText(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && submitCustom()}
-                placeholder="Add a custom task..."
-                className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-              />
-              <button
-                onClick={submitCustom}
-                className="text-sm bg-amber-500 text-slate-950 font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
-              >
-                Add
-              </button>
-            </div>
+        <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+          {taskSuggestionSent && (
+            <p className="text-xs text-amber-400 mb-2">Task suggestion sent for approval</p>
+          )}
+          <div className="flex items-center gap-2">
+            <input
+              value={newText}
+              onChange={(e) => setNewText(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitCustom()}
+              placeholder={isEditor ? "Add a custom task..." : "Suggest a task..."}
+              className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+            <button
+              onClick={submitCustom}
+              className="text-sm bg-amber-500 text-slate-950 font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
+            >
+              {isEditor ? "Add" : "Suggest"}
+            </button>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );
@@ -4863,6 +4925,7 @@ function JobInventory({
         <TodoListModal
           todos={todos}
           isEditor={isEditor}
+          job={job}
           onAddCustom={addCustomTodo}
           onToggleDone={toggleTodoDone}
           onDelete={deleteTodo}
@@ -5886,6 +5949,47 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         resolved_at: new Date().toISOString(),
         created_item_id: String(newItemId),
       });
+    } else if (s.suggestion_type === "complete_todo") {
+      updateJobById(s.job_id, (prevJob) => ({
+        ...prevJob,
+        todos: (prevJob.todos || []).map((t) =>
+          String(t.id) === String(s.payload.todoId) ? { ...t, done: true } : t
+        ),
+        activityLog: [
+          {
+            id: Date.now(),
+            time: timeStamp(),
+            message: `Approved To Do completion: "${s.payload.todoText}"`,
+          },
+          ...prevJob.activityLog,
+        ].slice(0, 50),
+      }));
+      await updateSuggestionRow(s.id, {
+        status: "approved",
+        resolved_at: new Date().toISOString(),
+      });
+    } else if (s.suggestion_type === "add_todo") {
+      const newTodoId = Date.now();
+      updateJobById(s.job_id, (prevJob) => ({
+        ...prevJob,
+        todos: [
+          ...(prevJob.todos || []),
+          { id: newTodoId, text: s.payload.text, done: false, itemId: null },
+        ],
+        activityLog: [
+          {
+            id: Date.now(),
+            time: timeStamp(),
+            message: `Approved suggested To Do: "${s.payload.text}"`,
+          },
+          ...prevJob.activityLog,
+        ].slice(0, 50),
+      }));
+      await updateSuggestionRow(s.id, {
+        status: "approved",
+        resolved_at: new Date().toISOString(),
+        created_item_id: String(newTodoId),
+      });
     }
     refreshSuggestions();
   };
@@ -5924,6 +6028,36 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
             id: Date.now(),
             time: timeStamp(),
             message: `Reverted approved new item "${s.payload.name}"`,
+          },
+          ...prevJob.activityLog,
+        ].slice(0, 50),
+      }));
+    } else if (s.suggestion_type === "complete_todo") {
+      updateJobById(s.job_id, (prevJob) => ({
+        ...prevJob,
+        todos: (prevJob.todos || []).map((t) =>
+          String(t.id) === String(s.payload.todoId) ? { ...t, done: false } : t
+        ),
+        activityLog: [
+          {
+            id: Date.now(),
+            time: timeStamp(),
+            message: `Reverted To Do completion: "${s.payload.todoText}"`,
+          },
+          ...prevJob.activityLog,
+        ].slice(0, 50),
+      }));
+    } else if (s.suggestion_type === "add_todo" && s.created_item_id) {
+      updateJobById(s.job_id, (prevJob) => ({
+        ...prevJob,
+        todos: (prevJob.todos || []).filter(
+          (t) => String(t.id) !== String(s.created_item_id)
+        ),
+        activityLog: [
+          {
+            id: Date.now(),
+            time: timeStamp(),
+            message: `Reverted approved To Do: "${s.payload.text}"`,
           },
           ...prevJob.activityLog,
         ].slice(0, 50),
