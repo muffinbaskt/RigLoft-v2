@@ -1869,80 +1869,172 @@ function ContainerDetailModal({
   );
 }
 
-function SuggestionsInboxModal({ suggestions, jobs, loading, onApprove, onDeny, onClose }) {
+function SuggestionsInboxModal({
+  suggestions,
+  resolvedSuggestions,
+  resolvedLoading,
+  jobs,
+  loading,
+  onApprove,
+  onDeny,
+  onRevert,
+  onReapprove,
+  onClose,
+}) {
+  const [tab, setTab] = useState("pending");
   const jobName = (jobId) => jobs.find((j) => String(j.id) === String(jobId))?.name || "Unknown job";
+
+  const formatDate = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return d.toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  };
+
+  const suggestionBody = (s) => (
+    <>
+      <p className="text-xs text-slate-500 mb-1.5">
+        {jobName(s.job_id)} · Submitted {formatDate(s.created_at)}
+      </p>
+      {s.suggestion_type === "new_item" ? (
+        <>
+          <p className="text-sm text-slate-100 font-semibold">New item: {s.payload.name}</p>
+          <p className="text-xs text-slate-500">
+            Qty needed: {s.payload.qtyNeeded}
+            {s.payload.container ? ` · Container: ${s.payload.container}` : ""}
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-slate-100 font-semibold">{s.payload.itemName}</p>
+          <p className="text-xs text-slate-500">
+            Qty have → {s.payload.qtyHave}
+            {s.payload.container?.clear
+              ? " · removed from container"
+              : s.payload.container
+              ? ` · ${s.payload.container.name}: ${s.payload.container.qty}`
+              : ""}
+            {" · "}
+            {s.payload.ordered ? "Ordered" : "Not ordered"} ·{" "}
+            {s.payload.received ? "Received" : "Not received"}
+          </p>
+        </>
+      )}
+      {s.note && <p className="text-xs text-slate-400 italic mt-1.5">"{s.note}"</p>}
+    </>
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
       <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
-          <div>
-            <h2 className="text-slate-100 font-semibold text-base">Suggestions</h2>
-            <p className="text-xs text-slate-500">
-              {suggestions.length} pending from viewers
-            </p>
-          </div>
+          <h2 className="text-slate-100 font-semibold text-base">Suggestions</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
             <X className="w-5 h-5" />
           </button>
         </div>
 
+        <div className="flex border-b border-slate-800 shrink-0">
+          <button
+            onClick={() => setTab("pending")}
+            className={`flex-1 text-sm py-2.5 ${
+              tab === "pending"
+                ? "text-amber-400 border-b-2 border-amber-400"
+                : "text-slate-500 hover:text-slate-300"
+            }`}
+          >
+            Pending ({suggestions.length})
+          </button>
+          <button
+            onClick={() => setTab("history")}
+            className={`flex-1 text-sm py-2.5 ${
+              tab === "history"
+                ? "text-amber-400 border-b-2 border-amber-400"
+                : "text-slate-500 hover:text-slate-300"
+            }`}
+          >
+            History
+          </button>
+        </div>
+
         <div className="flex-1 overflow-y-auto px-5 py-4">
-          {loading ? (
+          {tab === "pending" ? (
+            loading ? (
+              <div className="flex justify-center py-10">
+                <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
+              </div>
+            ) : suggestions.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-10">
+                Nothing pending. Suggestions from anyone viewing your shared link show up
+                here.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {suggestions.map((s) => (
+                  <div key={s.id} className="border border-slate-800 rounded-md p-3">
+                    {suggestionBody(s)}
+                    <div className="flex gap-2 mt-3">
+                      <button
+                        onClick={() => onDeny(s)}
+                        className="flex-1 text-xs rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+                      >
+                        Ignore
+                      </button>
+                      <button
+                        onClick={() => onApprove(s)}
+                        className="flex-1 text-xs rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+                      >
+                        Approve
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          ) : resolvedLoading ? (
             <div className="flex justify-center py-10">
               <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
             </div>
-          ) : suggestions.length === 0 ? (
+          ) : resolvedSuggestions.length === 0 ? (
             <p className="text-sm text-slate-500 text-center py-10">
-              Nothing pending. Suggestions from anyone viewing your shared link show up here.
+              Nothing resolved yet. Approved and ignored suggestions will show up here.
             </p>
           ) : (
             <div className="space-y-3">
-              {suggestions.map((s) => (
+              {resolvedSuggestions.map((s) => (
                 <div key={s.id} className="border border-slate-800 rounded-md p-3">
-                  <p className="text-xs text-slate-500 mb-1.5">{jobName(s.job_id)}</p>
-                  {s.suggestion_type === "new_item" ? (
-                    <>
-                      <p className="text-sm text-slate-100 font-semibold">
-                        New item: {s.payload.name}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        Qty needed: {s.payload.qtyNeeded}
-                        {s.payload.container ? ` · Container: ${s.payload.container}` : ""}
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-sm text-slate-100 font-semibold">
-                        {s.payload.itemName}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        Qty have → {s.payload.qtyHave}
-                        {s.payload.container
-                          ? ` · ${s.payload.container.name}: ${s.payload.container.qty}`
-                          : ""}
-                        {" · "}
-                        {s.payload.ordered ? "Ordered" : "Not ordered"} ·{" "}
-                        {s.payload.received ? "Received" : "Not received"}
-                      </p>
-                    </>
-                  )}
-                  {s.note && (
-                    <p className="text-xs text-slate-400 italic mt-1.5">"{s.note}"</p>
-                  )}
-                  <div className="flex gap-2 mt-3">
-                    <button
-                      onClick={() => onDeny(s)}
-                      className="flex-1 text-xs rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+                  {suggestionBody(s)}
+                  <p className="text-xs mt-1.5">
+                    <span
+                      className={
+                        s.status === "approved" ? "text-emerald-400" : "text-slate-500"
+                      }
                     >
-                      Ignore
-                    </button>
-                    <button
-                      onClick={() => onApprove(s)}
-                      className="flex-1 text-xs rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
-                    >
-                      Approve
-                    </button>
+                      {s.status === "approved" ? "✓ Approved" : "✕ Ignored"}
+                    </span>
+                    <span className="text-slate-600"> · {formatDate(s.resolved_at)}</span>
+                  </p>
+                  <div className="mt-3">
+                    {s.status === "approved" ? (
+                      <button
+                        onClick={() => onRevert(s)}
+                        className="w-full text-xs rounded-md py-2 border border-red-700/50 text-red-400 hover:bg-red-500/10"
+                      >
+                        Revert this change
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => onReapprove(s)}
+                        className="w-full text-xs rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+                      >
+                        Approve after all
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -4912,6 +5004,7 @@ async function fetchPendingSuggestions() {
     const { data, error } = await supabase
       .from("suggestions")
       .select("*")
+      .eq("status", "pending")
       .order("created_at", { ascending: false });
     if (error) return { ok: false, error: error.message };
     return { ok: true, suggestions: data || [] };
@@ -4920,9 +5013,23 @@ async function fetchPendingSuggestions() {
   }
 }
 
-async function resolveSuggestion(id) {
+async function fetchResolvedSuggestions() {
   try {
-    const { error } = await supabase.from("suggestions").delete().eq("id", id);
+    const { data, error } = await supabase
+      .from("suggestions")
+      .select("*")
+      .in("status", ["approved", "denied"])
+      .order("resolved_at", { ascending: false });
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, suggestions: data || [] };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
+async function updateSuggestionRow(id, fields) {
+  try {
+    const { error } = await supabase.from("suggestions").update(fields).eq("id", id);
     return { ok: !error, error: error ? error.message : null };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };
@@ -5196,6 +5303,17 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     }
   };
 
+  const [resolvedSuggestionsList, setResolvedSuggestionsList] = useState([]);
+  const [resolvedSuggestionsLoading, setResolvedSuggestionsLoading] = useState(false);
+
+  const refreshResolvedSuggestions = async () => {
+    if (!isEditor) return;
+    setResolvedSuggestionsLoading(true);
+    const result = await fetchResolvedSuggestions();
+    setResolvedSuggestionsLoading(false);
+    if (result.ok) setResolvedSuggestionsList(result.suggestions);
+  };
+
   useEffect(() => {
     if (isEditor) refreshSuggestions();
   }, [isEditor]);
@@ -5203,11 +5321,21 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   const approveSuggestion = async (s) => {
     const job = jobs.find((j) => String(j.id) === String(s.job_id));
     if (!job) {
-      await resolveSuggestion(s.id);
+      await updateSuggestionRow(s.id, { status: "denied", resolved_at: new Date().toISOString() });
       refreshSuggestions();
       return;
     }
     if (s.suggestion_type === "edit_item") {
+      const before = job.items.find((i) => String(i.id) === String(s.item_id));
+      const previousState = before
+        ? {
+            containers: before.containers || [],
+            qtyHave: before.qtyHave,
+            ordered: before.ordered,
+            received: before.received,
+            status: before.status,
+          }
+        : null;
       updateJobById(s.job_id, (prevJob) => ({
         ...prevJob,
         items: prevJob.items.map((i) => {
@@ -5247,14 +5375,20 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           ...prevJob.activityLog,
         ].slice(0, 50),
       }));
+      await updateSuggestionRow(s.id, {
+        status: "approved",
+        resolved_at: new Date().toISOString(),
+        previous_state: previousState,
+      });
     } else if (s.suggestion_type === "new_item") {
+      const newItemId = Date.now();
       updateJobById(s.job_id, (prevJob) => {
         const containers = s.payload.container
           ? [{ name: s.payload.container, qty: s.payload.qtyNeeded }]
           : [];
         const newItem = {
           ...emptyItem(STORAGE_OPTIONS[0]),
-          id: Date.now(),
+          id: newItemId,
           name: s.payload.name,
           qtyNeeded: s.payload.qtyNeeded,
           containers,
@@ -5279,14 +5413,64 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           ].slice(0, 50),
         };
       });
+      await updateSuggestionRow(s.id, {
+        status: "approved",
+        resolved_at: new Date().toISOString(),
+        created_item_id: String(newItemId),
+      });
     }
-    await resolveSuggestion(s.id);
     refreshSuggestions();
   };
 
   const denySuggestion = async (s) => {
-    await resolveSuggestion(s.id);
+    await updateSuggestionRow(s.id, { status: "denied", resolved_at: new Date().toISOString() });
     refreshSuggestions();
+  };
+
+  // Genuinely undoes an approved change — restores the item to exactly how
+  // it was before approval (for edit_item) or removes the item that was
+  // created (for new_item) — then puts the suggestion back as pending so
+  // it can be reconsidered.
+  const revertSuggestion = async (s) => {
+    if (s.suggestion_type === "edit_item" && s.previous_state) {
+      updateJobById(s.job_id, (prevJob) => ({
+        ...prevJob,
+        items: prevJob.items.map((i) =>
+          String(i.id) === String(s.item_id) ? { ...i, ...s.previous_state } : i
+        ),
+        activityLog: [
+          {
+            id: Date.now(),
+            time: timeStamp(),
+            message: `Reverted approved change to "${s.payload.itemName}"`,
+          },
+          ...prevJob.activityLog,
+        ].slice(0, 50),
+      }));
+    } else if (s.suggestion_type === "new_item" && s.created_item_id) {
+      updateJobById(s.job_id, (prevJob) => ({
+        ...prevJob,
+        items: prevJob.items.filter((i) => String(i.id) !== String(s.created_item_id)),
+        activityLog: [
+          {
+            id: Date.now(),
+            time: timeStamp(),
+            message: `Reverted approved new item "${s.payload.name}"`,
+          },
+          ...prevJob.activityLog,
+        ].slice(0, 50),
+      }));
+    }
+    await updateSuggestionRow(s.id, { status: "pending", resolved_at: null });
+    refreshSuggestions();
+    refreshResolvedSuggestions();
+  };
+
+  // Re-runs approval on a previously ignored suggestion — same effect as
+  // approving it fresh from the main inbox.
+  const reapproveSuggestion = async (s) => {
+    await approveSuggestion(s);
+    refreshResolvedSuggestions();
   };
 
   const createJob = (name, color, parentId = null) => {
@@ -5590,6 +5774,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           onOpenSuggestions={() => {
             setSuggestionsOpen(true);
             refreshSuggestions();
+            refreshResolvedSuggestions();
           }}
         />
       ) : (
@@ -5619,10 +5804,14 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
       {suggestionsOpen && (
         <SuggestionsInboxModal
           suggestions={suggestionsList}
+          resolvedSuggestions={resolvedSuggestionsList}
+          resolvedLoading={resolvedSuggestionsLoading}
           jobs={jobs}
           loading={suggestionsLoading}
           onApprove={approveSuggestion}
           onDeny={denySuggestion}
+          onRevert={revertSuggestion}
+          onReapprove={reapproveSuggestion}
           onClose={() => setSuggestionsOpen(false)}
         />
       )}
