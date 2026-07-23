@@ -4922,19 +4922,29 @@ function JobInventory({
         </div>
         <div className="flex items-center gap-2 mb-4">
           <div className="w-3.5 shrink-0" />
-          <div className="flex-1 min-w-0">
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="w-full appearance-none bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md pl-3 pr-8 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60"
-            >
-              <option value="All">All statuses</option>
-              {STATUS_OPTIONS.map((s) => (
-                <option key={s.value} value={s.value}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setStatusFilter("All")}
+              title="All statuses"
+              className={`w-8 h-8 rounded-full shrink-0 transition-transform ${
+                statusFilter === "All" ? "ring-2 ring-offset-2 ring-offset-slate-950 ring-slate-100 scale-105" : "opacity-70 hover:opacity-100"
+              }`}
+              style={{
+                background: "conic-gradient(#10b981 0deg 120deg, #fbbf24 120deg 240deg, #ef4444 240deg 360deg)",
+              }}
+            />
+            {STATUS_OPTIONS.map((s) => (
+              <button
+                key={s.value}
+                onClick={() => setStatusFilter(s.value)}
+                title={s.label}
+                className={`w-8 h-8 rounded-full shrink-0 transition-transform ${STATUS_DOT[s.value]} ${
+                  statusFilter === s.value
+                    ? "ring-2 ring-offset-2 ring-offset-slate-950 ring-slate-100 scale-105"
+                    : "opacity-70 hover:opacity-100"
+                }`}
+              />
+            ))}
           </div>
           <div className="flex-1 min-w-0">
             <select
