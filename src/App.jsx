@@ -1637,7 +1637,11 @@ function CatalogModal({ catalog, isEditor, onSave, onBulkSave, onDelete, onBulkS
   ].sort((a, b) => a.localeCompare(b));
 
   const filteredCatalog = catalog
-    .filter((c) => c.name.toLowerCase().includes(searchQuery.trim().toLowerCase()))
+    .filter((c) => {
+      const q = searchQuery.trim().toLowerCase();
+      if (!q) return true;
+      return c.name.toLowerCase().includes(q) || (c.category || "").toLowerCase().includes(q);
+    })
     .sort((a, b) => a.name.localeCompare(b.name));
 
   const toggleSelect = (id) => {
@@ -3859,6 +3863,7 @@ function JobPicker({
           .filter(
             (i) =>
               i.name.toLowerCase().includes(query) ||
+              (i.category || "").toLowerCase().includes(query) ||
               (i.serials || []).some((s) => s.toLowerCase().includes(query))
           )
           .map((i) => ({
@@ -4244,6 +4249,46 @@ function JobInventory({
     }));
   };
 
+  const [categorySyncMessage, setCategorySyncMessage] = useState(null);
+
+  const syncCategoriesFromCatalog = () => {
+    // Only fills in items that don't already have a category set — never
+    // overwrites a category you deliberately chose by hand.
+    const updated = items.map((i) => {
+      if (i.category) return i;
+      const match = findCatalogMatch(i.name, catalog);
+      return match && match.category ? { ...i, category: match.category } : i;
+    });
+    const changedCount = updated.filter((u, idx) => u.category !== items[idx].category).length;
+    const newCategoryNames = [...new Set(updated.map((u) => u.category).filter(Boolean))];
+
+    if (changedCount > 0) {
+      onUpdateJob((prevJob) => ({
+        ...prevJob,
+        items: updated,
+        categoryOptions: [
+          ...new Set([...(prevJob.categoryOptions || []), ...newCategoryNames]),
+        ],
+        activityLog: [
+          {
+            id: Date.now(),
+            time: timeStamp(),
+            message: `Synced categories from catalog for ${changedCount} item${
+              changedCount === 1 ? "" : "s"
+            }`,
+          },
+          ...prevJob.activityLog,
+        ].slice(0, 50),
+      }));
+    }
+    setCategorySyncMessage(
+      changedCount > 0
+        ? `Updated ${changedCount} item${changedCount === 1 ? "" : "s"} from the catalog`
+        : "No items needed updating — everything already matches or has no catalog category"
+    );
+    setTimeout(() => setCategorySyncMessage(null), 3500);
+  };
+
   const renameContainer = (oldName, newName) => {
     onUpdateJob((prevJob) => ({
       ...prevJob,
@@ -4606,6 +4651,11 @@ function JobInventory({
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
+      {categorySyncMessage && (
+        <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[60] bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-full px-4 py-2 shadow-lg max-w-xs text-center">
+          {categorySyncMessage}
+        </div>
+      )}
       {/* Header */}
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
         <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between gap-2">
@@ -4744,6 +4794,18 @@ function JobInventory({
                     <BookOpen className="w-4 h-4 text-slate-400" />
                     Item catalog
                   </button>
+                  {isEditor && (
+                    <button
+                      onClick={() => {
+                        syncCategoriesFromCatalog();
+                        setMenuOpen(false);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                    >
+                      <Layers className="w-4 h-4 text-slate-400" />
+                      Sync categories from catalog
+                    </button>
+                  )}
                 </div>
               </>
             )}
