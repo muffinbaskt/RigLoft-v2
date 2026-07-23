@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
+  ChevronRight,
   History,
   Filter,
   Briefcase,
@@ -163,6 +164,7 @@ function newJob(name, parentId = null, color = null) {
     color,
     items: [],
     containerOptions: [],
+    categoryOptions: [],
     todos: [],
     activityLog: [{ id: Date.now(), time: timeStamp(), message: `Job "${name}" created.` }],
   };
@@ -194,6 +196,8 @@ function diffItems(before, after) {
     changes.push(`status → ${label}`);
   }
   if (before.gang !== after.gang) changes.push(`gang → ${after.gang}`);
+  if ((before.category || "") !== (after.category || ""))
+    changes.push(`category → ${after.category || "(none)"}`);
   if (before.needsTransfer !== after.needsTransfer)
     changes.push(`needs transfer → ${after.needsTransfer ? "yes" : "no"}`);
   const beforeSerials = (before.serials || []).join(", ");
@@ -226,6 +230,7 @@ function emptyItem(defaultStorage) {
     containers: [], // [{ name, qty }] — qtyHave is always the sum of these
     status: "red",
     gang: GANG_OPTIONS[0],
+    category: "",
     serials: [],
     needsTransfer: false,
     notes: "",
@@ -345,6 +350,7 @@ function parseImportText(text, catalog) {
         matched: !!match,
         gang: match ? match.gang : "Unassigned",
         storage: match ? match.storage : "Unassigned",
+        category: match ? match.category || "" : "",
         container: containerPart,
         serials,
         needsTransfer: match ? !!match.needsTransfer : false,
@@ -412,7 +418,7 @@ function StatusDot({ status, size = "md" }) {
   return <span className={`inline-block rounded-full ${dim} ${STATUS_DOT[status]}`} />;
 }
 
-function AddContainer({ onAdd }) {
+function AddContainer({ onAdd, label = "Add container", placeholder = "e.g. Conex 20-01" }) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
 
@@ -433,7 +439,7 @@ function AddContainer({ onAdd }) {
         className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 whitespace-nowrap"
       >
         <Plus className="w-3 h-3" />
-        Add container
+        {label}
       </button>
     );
   }
@@ -451,7 +457,7 @@ function AddContainer({ onAdd }) {
             setValue("");
           }
         }}
-        placeholder="e.g. Conex 20-01"
+        placeholder={placeholder}
         className="w-36 bg-slate-800 border border-slate-700 text-slate-100 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60"
       />
       <button
@@ -475,7 +481,18 @@ function AddContainer({ onAdd }) {
   );
 }
 
-function ItemForm({ initial, containerOptions, onAddContainer, onSave, onCancel, existingItems = [] }) {
+function ItemForm({
+  initial,
+  containerOptions,
+  onAddContainer,
+  categoryOptions = [],
+  onAddCategory,
+  onSave,
+  onCancel,
+  existingItems = [],
+  catalog = [],
+  onSaveCatalogItem,
+}) {
   const [item, setItem] = useState(
     migrateItemContainers({
       serials: [],
@@ -488,7 +505,16 @@ function ItemForm({ initial, containerOptions, onAddContainer, onSave, onCancel,
     })
   );
   const [serialsText, setSerialsText] = useState((initial.serials || []).join(", "));
+  const [addToCatalog, setAddToCatalog] = useState(false);
   const set = (field) => (val) => setItem((prev) => ({ ...prev, [field]: val }));
+
+  const existingCatalogMatch = item.name.trim()
+    ? catalog.find(
+        (c) =>
+          normalizeText(c.name).replace(/\s+/g, "") ===
+          normalizeText(item.name).replace(/\s+/g, "")
+      )
+    : null;
 
   const handleSerialsChange = (text) => {
     setSerialsText(text);
@@ -611,6 +637,32 @@ function ItemForm({ initial, containerOptions, onAddContainer, onSave, onCancel,
               <label className="block text-xs font-medium text-slate-400 mb-1.5">Gang</label>
               <Select value={item.gang} onChange={set("gang")} options={GANG_OPTIONS} />
             </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-medium text-slate-400">
+                Category <span className="text-slate-600">(optional, separate from gang)</span>
+              </label>
+              <AddContainer
+                onAdd={(name) => {
+                  onAddCategory(name);
+                  set("category")(name);
+                }}
+                label="Add category"
+                placeholder="e.g. Rigging, Hand Tools"
+              />
+            </div>
+            <Select
+              value={item.category || ""}
+              onChange={set("category")}
+              options={["", ...[...categoryOptions].sort((a, b) => a.localeCompare(b))]}
+              labels={{ "": "No category" }}
+            />
+            <p className="text-xs text-slate-600 mt-1">
+              A quick grouping like "Rigging" or "Consumables" — searchable, but never changes
+              which gang this belongs to.
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -801,6 +853,22 @@ function ItemForm({ initial, containerOptions, onAddContainer, onSave, onCancel,
               className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60 resize-none"
             />
           </div>
+
+          {onSaveCatalogItem && (
+            <label className="flex items-start gap-2 text-xs text-slate-300 cursor-pointer select-none bg-slate-800/50 border border-slate-700 rounded-md p-2.5">
+              <input
+                type="checkbox"
+                checked={addToCatalog}
+                onChange={(e) => setAddToCatalog(e.target.checked)}
+                className="w-3.5 h-3.5 rounded accent-amber-500 mt-0.5 shrink-0"
+              />
+              <span>
+                {existingCatalogMatch
+                  ? `Update "${existingCatalogMatch.name}" in the catalog with this gang/storage`
+                  : "Also add this item to the catalog (auto-fills gang/storage on future imports)"}
+              </span>
+            </label>
+          )}
         </div>
 
         <div className="flex gap-3 px-5 py-4 border-t border-slate-800 shrink-0">
@@ -819,6 +887,16 @@ function ItemForm({ initial, containerOptions, onAddContainer, onSave, onCancel,
                 .filter((c) => c.name)
                 .map((c) => ({ name: c.name, qty: Number(c.qty) || 0 }));
               const finalQtyHave = totalHave(cleanContainers);
+
+              if (addToCatalog && onSaveCatalogItem) {
+                onSaveCatalogItem({
+                  id: existingCatalogMatch ? existingCatalogMatch.id : Date.now(),
+                  name: item.name.trim(),
+                  gang: item.gang,
+                  storage: item.storage,
+                  needsTransfer: !!item.needsTransfer,
+                });
+              }
 
               onSave({
                 ...item,
@@ -1180,12 +1258,13 @@ function emptyCatalogItem() {
     name: "",
     gang: GANG_OPTIONS[0],
     storage: STORAGE_OPTIONS[0],
+    category: "",
     needsTransfer: false,
   };
 }
 
-function CatalogItemForm({ initial, onSave, onCancel }) {
-  const [item, setItem] = useState({ needsTransfer: false, ...initial });
+function CatalogItemForm({ initial, existingCategories = [], onSave, onCancel }) {
+  const [item, setItem] = useState({ needsTransfer: false, category: "", ...initial });
   const set = (field) => (val) => setItem((prev) => ({ ...prev, [field]: val }));
   const canSave = item.name.trim().length > 0;
 
@@ -1219,6 +1298,23 @@ function CatalogItemForm({ initial, onSave, onCancel }) {
               Default storage location
             </label>
             <Select value={item.storage} onChange={set("storage")} options={STORAGE_OPTIONS} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              Category <span className="text-slate-600">(optional)</span>
+            </label>
+            <input
+              list="catalog-category-options"
+              value={item.category || ""}
+              onChange={(e) => set("category")(e.target.value)}
+              placeholder="e.g. Rigging, Hand Tools"
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60"
+            />
+            <datalist id="catalog-category-options">
+              {existingCategories.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">
@@ -1525,16 +1621,48 @@ function CatalogBulkAddModal({ onImport, onCancel }) {
   );
 }
 
-function CatalogModal({ catalog, isEditor, onSave, onBulkSave, onDelete, onClose }) {
+function CatalogModal({ catalog, isEditor, onSave, onBulkSave, onDelete, onBulkSetCategory, onClose }) {
   const [editing, setEditing] = useState(null);
   const [bulkAdding, setBulkAdding] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState({});
+  const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
+  const [newCategoryText, setNewCategoryText] = useState("");
+
+  const existingCategories = [
+    ...new Set(catalog.map((c) => c.category).filter(Boolean)),
+  ].sort((a, b) => a.localeCompare(b));
+
+  const filteredCatalog = catalog
+    .filter((c) => c.name.toLowerCase().includes(searchQuery.trim().toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const toggleSelect = (id) => {
+    setSelectedIds((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+  const selectedCatalogIds = Object.keys(selectedIds)
+    .filter((id) => selectedIds[id])
+    .map(Number);
+  const clearSelection = () => {
+    setSelectedIds({});
+    setSelectMode(false);
+  };
+
+  const applyCategory = (category) => {
+    onBulkSetCategory(selectedCatalogIds, category);
+    setCategoryPickerOpen(false);
+    setNewCategoryText("");
+    clearSelection();
+  };
 
   if (editing) {
     return (
       <CatalogItemForm
         initial={editing}
+        existingCategories={existingCategories}
         onSave={(item) => {
           onSave(item);
           setEditing(null);
@@ -1572,6 +1700,22 @@ function CatalogModal({ catalog, isEditor, onSave, onBulkSave, onDelete, onClose
               </p>
             </div>
             <div className="flex items-center gap-1 shrink-0">
+              {isEditor && catalog.length > 0 && (
+                <button
+                  onClick={() => {
+                    if (selectMode) clearSelection();
+                    else setSelectMode(true);
+                  }}
+                  title={selectMode ? "Cancel selecting" : "Select items"}
+                  className={`text-xs rounded-md px-2.5 py-1.5 font-medium ${
+                    selectMode
+                      ? "bg-amber-500/15 border border-amber-500/50 text-amber-300"
+                      : "border border-slate-700 text-slate-300 hover:bg-slate-800"
+                  }`}
+                >
+                  {selectMode ? "Cancel" : "Select"}
+                </button>
+              )}
               <button
                 onClick={() => setExportOpen(true)}
                 title="Export catalog"
@@ -1585,27 +1729,89 @@ function CatalogModal({ catalog, isEditor, onSave, onBulkSave, onDelete, onClose
             </div>
           </div>
 
+          <div className="px-5 pt-4 shrink-0">
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search catalog..."
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md pl-9 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+          </div>
+
+          {selectMode && (
+            <div className="flex items-center flex-wrap gap-2 mx-5 mt-3 p-2.5 bg-slate-800/60 border border-amber-600/40 rounded-md shrink-0">
+              <span className="text-xs text-slate-300 font-medium">
+                {selectedCatalogIds.length} selected
+              </span>
+              <button
+                onClick={() =>
+                  setSelectedIds(
+                    filteredCatalog.reduce((acc, c) => ({ ...acc, [c.id]: true }), {})
+                  )
+                }
+                className="text-xs text-amber-400 hover:text-amber-300"
+              >
+                Select all ({filteredCatalog.length})
+              </button>
+              <div className="flex-1" />
+              {selectedCatalogIds.length > 0 && (
+                <button
+                  onClick={() => setCategoryPickerOpen(true)}
+                  className="text-xs bg-amber-500 text-slate-950 font-semibold rounded-md px-2.5 py-1.5 hover:bg-amber-400"
+                >
+                  Set category
+                </button>
+              )}
+            </div>
+          )}
+
           <div className="flex-1 overflow-y-auto px-5 py-4">
             {catalog.length === 0 ? (
               <p className="text-sm text-slate-500 text-center py-10">
                 No catalog items yet. Add the materials you commonly order, along with their
                 usual gang and storage, so future imports can auto-fill them.
               </p>
+            ) : filteredCatalog.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-10">
+                No catalog items match "{searchQuery}".
+              </p>
             ) : (
               <div className="space-y-2">
-                {catalog.map((c) => (
+                {filteredCatalog.map((c) => (
                   <div
                     key={c.id}
-                    className="border border-slate-800 rounded-md p-3 flex items-center justify-between gap-2"
+                    onClick={() => selectMode && toggleSelect(c.id)}
+                    className={`border rounded-md p-3 flex items-center justify-between gap-2 ${
+                      selectMode ? "cursor-pointer" : ""
+                    } ${
+                      selectedIds[c.id]
+                        ? "border-amber-500/70 bg-amber-500/5"
+                        : "border-slate-800"
+                    }`}
                   >
-                    <div className="min-w-0">
-                      <p className="text-sm text-slate-100 truncate">{c.name}</p>
-                      <p className="text-xs text-slate-500">
-                        {c.gang} · {c.storage}
-                        {c.needsTransfer ? " · 🚚 transfer" : ""}
-                      </p>
+                    <div className="flex items-center gap-3 min-w-0">
+                      {selectMode && (
+                        <input
+                          type="checkbox"
+                          checked={!!selectedIds[c.id]}
+                          onChange={() => toggleSelect(c.id)}
+                          onClick={(e) => e.stopPropagation()}
+                          className="w-4 h-4 rounded accent-amber-500 shrink-0"
+                        />
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-sm text-slate-100 truncate">{c.name}</p>
+                        <p className="text-xs text-slate-500">
+                          {c.gang} · {c.storage}
+                          {c.category ? ` · ${c.category}` : ""}
+                          {c.needsTransfer ? " · 🚚 transfer" : ""}
+                        </p>
+                      </div>
                     </div>
-                    {isEditor && (
+                    {isEditor && !selectMode && (
                       <div className="flex gap-1 shrink-0">
                         <button
                           onClick={() => setEditing(c)}
@@ -1627,7 +1833,7 @@ function CatalogModal({ catalog, isEditor, onSave, onBulkSave, onDelete, onClose
             )}
           </div>
 
-          {isEditor && (
+          {isEditor && !selectMode && (
             <div className="flex gap-3 px-5 py-4 border-t border-slate-800 shrink-0">
               <button
                 onClick={() => setBulkAdding(true)}
@@ -1647,6 +1853,59 @@ function CatalogModal({ catalog, isEditor, onSave, onBulkSave, onDelete, onClose
           )}
         </div>
       </div>
+
+      {categoryPickerOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-3">
+              Set category for {selectedCatalogIds.length} item
+              {selectedCatalogIds.length === 1 ? "" : "s"}
+            </h3>
+            {existingCategories.length > 0 && (
+              <div className="space-y-1.5 mb-4 max-h-48 overflow-y-auto">
+                {existingCategories.map((cat) => (
+                  <button
+                    key={cat}
+                    onClick={() => applyCategory(cat)}
+                    className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-700 text-slate-200 hover:bg-slate-800"
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-2 mb-4">
+              <input
+                autoFocus
+                value={newCategoryText}
+                onChange={(e) => setNewCategoryText(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && newCategoryText.trim() && applyCategory(newCategoryText.trim())}
+                placeholder="Or type a new category..."
+                className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+              <button
+                onClick={() => newCategoryText.trim() && applyCategory(newCategoryText.trim())}
+                disabled={!newCategoryText.trim()}
+                className="text-sm bg-amber-500 text-slate-950 font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400 disabled:opacity-40"
+              >
+                Apply
+              </button>
+            </div>
+            <button
+              onClick={() => applyCategory("")}
+              className="w-full text-xs text-slate-500 hover:text-slate-300 mb-2"
+            >
+              Clear category from selected items
+            </button>
+            <button
+              onClick={() => setCategoryPickerOpen(false)}
+              className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {deleteTarget && (
         <ConfirmDelete
@@ -2774,6 +3033,7 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
           matched: !!match,
           gang: match ? match.gang : "Unassigned",
           storage: match ? match.storage : "Unassigned",
+          category: match ? match.category || "" : "",
           needsTransfer: match ? !!match.needsTransfer : false,
           duplicateOf: dup || null,
         };
@@ -3349,6 +3609,11 @@ function ItemCard({ item, selectMode, selected, isEditor, onToggleSelect, onEdit
         <span className={`text-xs rounded-full px-2.5 py-1 border ${GANG_COLOR[item.gang]}`}>
           {item.gang}
         </span>
+        {item.category && (
+          <span className="text-xs rounded-full px-2.5 py-1 border border-teal-500/30 bg-teal-500/10 text-teal-300">
+            {item.category}
+          </span>
+        )}
         <span className="text-xs rounded-full px-2.5 py-1 border border-slate-700 text-slate-400">
           {item.storage === "Other" && item.storageDetail ? item.storageDetail : item.storage}
         </span>
@@ -3907,11 +4172,13 @@ function JobInventory({
   onUpdateJob,
   onBackToJobs,
   catalog,
+  onSaveCatalogItem,
   onOpenCatalog,
   onRenameJob,
 }) {
   const items = job.items || [];
   const containerOptions = job.containerOptions || [];
+  const categoryOptions = job.categoryOptions || [];
   const activityLog = job.activityLog || [];
   const [formState, setFormState] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -3920,11 +4187,13 @@ function JobInventory({
   const [gangFilter, setGangFilter] = useState("All");
   const [storageFilter, setStorageFilter] = useState("All");
   const [containerFilter, setContainerFilter] = useState("All");
+  const [categoryFilter, setCategoryFilter] = useState("All");
   const [procFilter, setProcFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState("default");
-  const [groupByGang, setGroupByGang] = useState(false);
+  const [groupByGang, setGroupByGang] = useState(true);
+  const [collapsedGangs, setCollapsedGangs] = useState({});
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState({});
   const [bulkGangPicker, setBulkGangPicker] = useState(false);
@@ -3963,6 +4232,15 @@ function JobInventory({
         { id: Date.now(), time: timeStamp(), message: `Added container "${name}"` },
         ...prevJob.activityLog,
       ].slice(0, 50),
+    }));
+  };
+
+  const addCategory = (name) => {
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      categoryOptions: (prevJob.categoryOptions || []).includes(name)
+        ? prevJob.categoryOptions
+        : [...(prevJob.categoryOptions || []), name],
     }));
   };
 
@@ -4046,6 +4324,7 @@ function JobInventory({
     const q = searchQuery.trim().toLowerCase();
     return (
       item.name.toLowerCase().includes(q) ||
+      (item.category || "").toLowerCase().includes(q) ||
       (item.containers || []).some((c) => c.name.toLowerCase().includes(q)) ||
       (item.notes || "").toLowerCase().includes(q) ||
       (item.serials || []).some((sn) => sn.toLowerCase().includes(q))
@@ -4079,6 +4358,7 @@ function JobInventory({
         (storageFilter === "All" || i.storage === storageFilter) &&
         (containerFilter === "All" ||
           (i.containers || []).some((c) => c.name === containerFilter)) &&
+        (categoryFilter === "All" || i.category === categoryFilter) &&
         (statusFilter === "All" || i.status === statusFilter) &&
         matchesProcFilter(i) &&
         matchesSearch(i)
@@ -4275,6 +4555,7 @@ function JobInventory({
         qtyHave: totalHave(containers),
         status: containers.length > 0 ? "green" : "red",
         gang: p.gang,
+        category: p.category || "",
         serials: p.serials || [],
         needsTransfer: !!p.needsTransfer,
         ordered: !!p.ordered,
@@ -4285,6 +4566,9 @@ function JobInventory({
         newItems.flatMap((i) => i.containers.map((c) => c.name)).filter(Boolean)
       ),
     ];
+    const newCategoryNames = [
+      ...new Set(newItems.map((i) => i.category).filter(Boolean)),
+    ];
     const matchedCount = previewRows.filter((p) => p.matched).length;
     onUpdateJob((prevJob) => ({
       ...prevJob,
@@ -4292,6 +4576,12 @@ function JobInventory({
       containerOptions: [
         ...prevJob.containerOptions,
         ...newContainerNames.filter((name) => !prevJob.containerOptions.includes(name)),
+      ],
+      categoryOptions: [
+        ...(prevJob.categoryOptions || []),
+        ...newCategoryNames.filter(
+          (name) => !(prevJob.categoryOptions || []).includes(name)
+        ),
       ],
       activityLog: [
         {
@@ -4559,6 +4849,14 @@ function JobInventory({
               labels={{ All: "All containers" }}
             />
           </div>
+          <div className="flex-1 min-w-0">
+            <Select
+              value={categoryFilter}
+              onChange={setCategoryFilter}
+              options={["All", ...[...categoryOptions].sort((a, b) => a.localeCompare(b))]}
+              labels={{ All: "All categories" }}
+            />
+          </div>
         </div>
         <div className="flex items-center gap-2 mb-4">
           <div className="w-3.5 shrink-0" />
@@ -4609,17 +4907,18 @@ function JobInventory({
             <button
               onClick={() => setGroupByGang((v) => !v)}
               className={`flex items-center gap-1 text-xs rounded-full px-2.5 py-1 border whitespace-nowrap ${
-                groupByGang
+                !groupByGang
                   ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
                   : "border-slate-700 text-slate-500 hover:text-slate-300"
               }`}
             >
               <Layers className="w-3 h-3" />
-              Group by gang
+              {groupByGang ? "Show all" : "Grouped by gang"}
             </button>
             {(gangFilter !== "All" ||
               storageFilter !== "All" ||
               containerFilter !== "All" ||
+              categoryFilter !== "All" ||
               statusFilter !== "All" ||
               procFilter !== "All" ||
               searchQuery) && (
@@ -4628,6 +4927,7 @@ function JobInventory({
                   setGangFilter("All");
                   setStorageFilter("All");
                   setContainerFilter("All");
+                  setCategoryFilter("All");
                   setStatusFilter("All");
                   setProcFilter("All");
                   setSearchQuery("");
@@ -4734,34 +5034,59 @@ function JobInventory({
                 const order = [...GANG_OPTIONS];
                 return order.indexOf(a) - order.indexOf(b);
               })
-              .map(([gang, gangItems]) => (
-                <div key={gang}>
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className={`text-xs rounded-full px-2.5 py-1 border ${GANG_COLOR[gang]}`}>
-                      {gang}
-                    </span>
-                    <span className="text-xs text-slate-600">
-                      {gangItems.length} item{gangItems.length === 1 ? "" : "s"}
-                    </span>
-                  </div>
-                  <div className="space-y-2.5">
-                    {gangItems.map((item) => (
-                      <ItemCard
-                        key={item.id}
-                        item={item}
-                        selectMode={selectMode}
-                        selected={!!selectedIds[item.id]}
-                        isEditor={isEditor}
-                        onToggleSelect={toggleItemSelect}
-                        onEdit={setFormState}
-                        onDelete={setDeleteTarget}
-                        onViewSerials={setSerialsView}
-                        onSuggestEdit={setSuggestEditTarget}
+              .map(([gang, gangItems]) => {
+                const isCollapsed = !!collapsedGangs[gang];
+                return (
+                  <div key={gang}>
+                    <button
+                      onClick={() =>
+                        setCollapsedGangs((prev) => ({ ...prev, [gang]: !prev[gang] }))
+                      }
+                      className="w-full flex items-center gap-2 mb-2 text-left"
+                    >
+                      <ChevronRight
+                        className={`w-3.5 h-3.5 text-slate-500 shrink-0 transition-transform ${
+                          isCollapsed ? "" : "rotate-90"
+                        }`}
                       />
-                    ))}
+                      {isCollapsed ? (
+                        <span className="text-xs text-slate-400">
+                          {gang} — {gangItems.length} item{gangItems.length === 1 ? "" : "s"}
+                        </span>
+                      ) : (
+                        <>
+                          <span
+                            className={`text-xs rounded-full px-2.5 py-1 border ${GANG_COLOR[gang]}`}
+                          >
+                            {gang}
+                          </span>
+                          <span className="text-xs text-slate-600">
+                            {gangItems.length} item{gangItems.length === 1 ? "" : "s"}
+                          </span>
+                        </>
+                      )}
+                    </button>
+                    {!isCollapsed && (
+                      <div className="space-y-2.5">
+                        {gangItems.map((item) => (
+                          <ItemCard
+                            key={item.id}
+                            item={item}
+                            selectMode={selectMode}
+                            selected={!!selectedIds[item.id]}
+                            isEditor={isEditor}
+                            onToggleSelect={toggleItemSelect}
+                            onEdit={setFormState}
+                            onDelete={setDeleteTarget}
+                            onViewSerials={setSerialsView}
+                            onSuggestEdit={setSuggestEditTarget}
+                          />
+                        ))}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
           </div>
         ) : (
           <div className="space-y-2.5">
@@ -4815,9 +5140,13 @@ function JobInventory({
           initial={formState}
           containerOptions={containerOptions}
           onAddContainer={addContainer}
+          categoryOptions={categoryOptions}
+          onAddCategory={addCategory}
           onSave={saveItem}
           onCancel={() => setFormState(null)}
           existingItems={items}
+          catalog={catalog}
+          onSaveCatalogItem={onSaveCatalogItem}
         />
       )}
 
@@ -6377,6 +6706,12 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     setCatalog((prev) => prev.filter((c) => c.id !== id));
   };
 
+  const bulkSetCatalogCategory = (ids, category) => {
+    setCatalog((prev) =>
+      prev.map((c) => (ids.includes(c.id) ? { ...c, category } : c))
+    );
+  };
+
   const resetAllData = async () => {
     const fresh = [seedJob()];
     setJobs(fresh);
@@ -6827,6 +7162,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           onUpdateJob={updateActiveJob}
           onBackToJobs={() => setShowPicker(true)}
           catalog={catalog}
+          onSaveCatalogItem={saveCatalogItem}
           onOpenCatalog={() => setCatalogModalOpen(true)}
           onRenameJob={(name, color) => renameJob(activeJob.id, name, color)}
         />
@@ -6839,6 +7175,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           onSave={saveCatalogItem}
           onBulkSave={bulkSaveCatalogItems}
           onDelete={deleteCatalogItem}
+          onBulkSetCategory={bulkSetCatalogCategory}
           onClose={() => setCatalogModalOpen(false)}
         />
       )}
