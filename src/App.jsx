@@ -2384,6 +2384,23 @@ function SuggestionsInboxModal({
   );
 }
 
+// Standard sizes that should always be there for these specific categories,
+// so you're not retyping the same list every job — quantities always start
+// at 0 and "Add entry" still works normally for anything one-off or new.
+const REQUISITION_TEMPLATES = {
+  Shims: [
+    '1/16"',
+    '1/8"',
+    '1/4"',
+    '1/2"',
+    '1"',
+    "Safety Cable Washer Bar",
+    "Wedge",
+    "Tag Line Hook",
+  ],
+  "Safety Post": ["#7 (Hook Pole)", "#9 (Rectangle)", "#10 (V)"],
+};
+
 function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
   const requisitions = job.requisitions || [];
   const [addingCategory, setAddingCategory] = useState(false);
@@ -2408,9 +2425,14 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
   const addCategory = () => {
     const trimmed = newCategoryName.trim();
     if (!trimmed) return;
+    const template = REQUISITION_TEMPLATES[trimmed];
+    const templateEntries = template
+      ? template.map((spec, idx) => ({ id: Date.now() + idx, category: trimmed, spec, qty: 0 }))
+      : [];
     onUpdateJob((prevJob) => ({
       ...prevJob,
       requisitionCategoryOrder: [...(prevJob.requisitionCategoryOrder || []), trimmed],
+      requisitions: [...(prevJob.requisitions || []), ...templateEntries],
     }));
     setNewCategoryName("");
     setAddingCategory(false);
@@ -2453,6 +2475,28 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
     setEditingEntry(null);
   };
 
+  const qtyInputRefs = useRef({});
+
+  const updateQty = (id, value) => {
+    const qty = value === "" ? 0 : Number(value) || 0;
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      requisitions: (prevJob.requisitions || []).map((r) =>
+        r.id === id ? { ...r, qty } : r
+      ),
+    }));
+  };
+
+  const focusNextQty = (rows, currentId) => {
+    const idx = rows.findIndex((r) => r.id === currentId);
+    const next = rows[idx + 1];
+    const el = next && qtyInputRefs.current[next.id];
+    if (el) {
+      el.focus();
+      el.select();
+    }
+  };
+
   const deleteEntry = (id) => {
     onUpdateJob((prevJob) => ({
       ...prevJob,
@@ -2464,17 +2508,28 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
-        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="w-8 h-8 rounded-md bg-slate-800 flex items-center justify-center shrink-0 hover:bg-slate-700"
-          >
-            <ChevronLeft className="w-4.5 h-4.5 text-slate-300" />
-          </button>
-          <div>
-            <h1 className="font-bold text-slate-100 leading-tight">Requisitions</h1>
-            <p className="text-xs text-slate-500 leading-tight">{job.name}</p>
+        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              onClick={onBack}
+              className="w-8 h-8 rounded-md bg-slate-800 flex items-center justify-center shrink-0 hover:bg-slate-700"
+            >
+              <ChevronLeft className="w-4.5 h-4.5 text-slate-300" />
+            </button>
+            <div className="min-w-0">
+              <h1 className="font-bold text-slate-100 leading-tight truncate">Requisitions</h1>
+              <p className="text-xs text-slate-500 leading-tight truncate">{job.name}</p>
+            </div>
           </div>
+          {isEditor && (
+            <button
+              onClick={() => setAddingCategory(true)}
+              className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400 shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              <span className="hidden sm:inline">Add category</span>
+            </button>
+          )}
         </div>
       </header>
 
@@ -2485,15 +2540,6 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
               No requisition categories yet — add one to get started (e.g. Shims, Safety
               Post, Wire).
             </p>
-            {isEditor && (
-              <button
-                onClick={() => setAddingCategory(true)}
-                className="inline-flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-4 py-2 hover:bg-amber-400"
-              >
-                <Plus className="w-4 h-4" />
-                Add category
-              </button>
-            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -2561,7 +2607,23 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
                         >
                           <span className="text-sm text-slate-200 truncate">{r.spec}</span>
                           <div className="flex items-center gap-2 shrink-0">
-                            <span className="text-sm text-slate-400">x {r.qty}</span>
+                            <span className="text-xs text-slate-500">x</span>
+                            <input
+                              ref={(el) => (qtyInputRefs.current[r.id] = el)}
+                              type="number"
+                              min="0"
+                              value={r.qty}
+                              disabled={!isEditor}
+                              onChange={(e) => updateQty(r.id, e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  focusNextQty(rows, r.id);
+                                }
+                              }}
+                              onFocus={(e) => e.target.select()}
+                              className="w-16 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60 disabled:opacity-70"
+                            />
                             {isEditor && (
                               <>
                                 <button
@@ -2637,43 +2699,33 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
           </div>
         )}
 
-        {isEditor && (
+        {isEditor && addingCategory && (
           <div className="mt-4">
-            {addingCategory ? (
-              <div className="flex items-center gap-2 max-w-sm">
-                <input
-                  autoFocus
-                  value={newCategoryName}
-                  onChange={(e) => setNewCategoryName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && addCategory()}
-                  placeholder="e.g. Shims, Safety Post, Wire"
-                  className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-                />
-                <button
-                  onClick={addCategory}
-                  className="text-sm bg-amber-500 text-slate-950 font-semibold rounded-md px-3.5 py-2 shrink-0"
-                >
-                  Add
-                </button>
-                <button
-                  onClick={() => {
-                    setAddingCategory(false);
-                    setNewCategoryName("");
-                  }}
-                  className="text-slate-500 hover:text-slate-300 p-2 shrink-0"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            ) : (
+            <div className="flex items-center gap-2 max-w-sm">
+              <input
+                autoFocus
+                value={newCategoryName}
+                onChange={(e) => setNewCategoryName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addCategory()}
+                placeholder="e.g. Shims, Safety Post, Wire"
+                className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
               <button
-                onClick={() => setAddingCategory(true)}
-                className="flex items-center gap-1.5 text-sm text-amber-400 hover:text-amber-300"
+                onClick={addCategory}
+                className="text-sm bg-amber-500 text-slate-950 font-semibold rounded-md px-3.5 py-2 shrink-0"
               >
-                <Plus className="w-4 h-4" />
-                Add category
+                Add
               </button>
-            )}
+              <button
+                onClick={() => {
+                  setAddingCategory(false);
+                  setNewCategoryName("");
+                }}
+                className="text-slate-500 hover:text-slate-300 p-2 shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         )}
       </main>
