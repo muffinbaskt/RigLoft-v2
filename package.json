@@ -1,5 +1,5 @@
 {
-  "name": "warehub",
+  "name": "riggy",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -12,7 +12,8 @@
     "@supabase/supabase-js": "^2.45.4",
     "lucide-react": "^0.383.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "workbox-precaching": "^7.1.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
