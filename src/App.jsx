@@ -2637,7 +2637,7 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
           </div>
         )}
 
-        {isEditor && categories.length > 0 && (
+        {isEditor && (
           <div className="mt-4">
             {addingCategory ? (
               <div className="flex items-center gap-2 max-w-sm">
