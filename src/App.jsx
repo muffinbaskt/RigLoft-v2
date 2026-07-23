@@ -1878,6 +1878,7 @@ function SuggestionsInboxModal({
   loading,
   onApprove,
   onDeny,
+  onDelete,
   onRevert,
   onReapprove,
   onClose,
@@ -2040,6 +2041,13 @@ function SuggestionsInboxModal({
                     {suggestionBody(s)}
                     <div className="flex gap-2 mt-3">
                       <button
+                        onClick={() => onDelete(s)}
+                        title="Delete — no history kept"
+                        className="text-slate-500 hover:text-red-400 px-2.5 rounded-md border border-slate-700 hover:bg-slate-800"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
                         onClick={() => onDeny(s)}
                         className="flex-1 text-xs rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
                       >
@@ -2079,22 +2087,29 @@ function SuggestionsInboxModal({
                     </span>
                     <span className="text-slate-600"> · {formatDate(s.resolved_at)}</span>
                   </p>
-                  <div className="mt-3">
+                  <div className="mt-3 flex gap-2">
                     {s.status === "approved" ? (
                       <button
                         onClick={() => onRevert(s)}
-                        className="w-full text-xs rounded-md py-2 border border-red-700/50 text-red-400 hover:bg-red-500/10"
+                        className="flex-1 text-xs rounded-md py-2 border border-red-700/50 text-red-400 hover:bg-red-500/10"
                       >
                         Revert this change
                       </button>
                     ) : (
                       <button
                         onClick={() => onReapprove(s)}
-                        className="w-full text-xs rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+                        className="flex-1 text-xs rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
                       >
                         Approve after all
                       </button>
                     )}
+                    <button
+                      onClick={() => onDelete(s)}
+                      title="Remove from history"
+                      className="text-slate-500 hover:text-red-400 px-2.5 rounded-md border border-slate-700 hover:bg-slate-800"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
               ))}
@@ -5153,6 +5168,15 @@ async function updateSuggestionRow(id, fields) {
   }
 }
 
+async function deleteSuggestionRow(id) {
+  try {
+    const { error } = await supabase.from("suggestions").delete().eq("id", id);
+    return { ok: !error, error: error ? error.message : null };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
 // Public VAPID key — safe to be visible in client code, this is how the
 // browser verifies push messages actually came from your server, not a
 // secret in the traditional sense. The matching private key lives only in
@@ -6216,6 +6240,12 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     refreshSuggestions();
   };
 
+  const deleteSuggestion = async (s) => {
+    await deleteSuggestionRow(s.id);
+    refreshSuggestions();
+    refreshResolvedSuggestions();
+  };
+
   // Genuinely undoes an approved change — restores the item to exactly how
   // it was before approval (for edit_item) or removes the item that was
   // created (for new_item) — then puts the suggestion back as pending so
@@ -6822,6 +6852,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           loading={suggestionsLoading}
           onApprove={approveSuggestion}
           onDeny={denySuggestion}
+          onDelete={deleteSuggestion}
           onRevert={revertSuggestion}
           onReapprove={reapproveSuggestion}
           onClose={() => setSuggestionsOpen(false)}
