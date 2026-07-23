@@ -2384,6 +2384,321 @@ function SuggestionsInboxModal({
   );
 }
 
+function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
+  const requisitions = job.requisitions || [];
+  const [addingCategory, setAddingCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [addRowFor, setAddRowFor] = useState(null);
+  const [newSpec, setNewSpec] = useState("");
+  const [newQty, setNewQty] = useState("");
+  const [editingEntry, setEditingEntry] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteCategoryTarget, setDeleteCategoryTarget] = useState(null);
+
+  const categoryOrder = job.requisitionCategoryOrder || [];
+  const categories = [
+    ...categoryOrder,
+    ...[...new Set(requisitions.map((r) => r.category))].filter(
+      (c) => !categoryOrder.includes(c)
+    ),
+  ];
+
+  const entriesFor = (cat) => requisitions.filter((r) => r.category === cat);
+
+  const addCategory = () => {
+    const trimmed = newCategoryName.trim();
+    if (!trimmed) return;
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      requisitionCategoryOrder: [...(prevJob.requisitionCategoryOrder || []), trimmed],
+    }));
+    setNewCategoryName("");
+    setAddingCategory(false);
+  };
+
+  const deleteCategory = (cat) => {
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      requisitions: (prevJob.requisitions || []).filter((r) => r.category !== cat),
+      requisitionCategoryOrder: (prevJob.requisitionCategoryOrder || []).filter(
+        (c) => c !== cat
+      ),
+    }));
+    setDeleteCategoryTarget(null);
+  };
+
+  const addEntry = (category) => {
+    const spec = newSpec.trim();
+    const qty = Number(newQty) || 0;
+    if (!spec) return;
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      requisitions: [
+        ...(prevJob.requisitions || []),
+        { id: Date.now(), category, spec, qty },
+      ],
+    }));
+    setNewSpec("");
+    setNewQty("");
+    setAddRowFor(null);
+  };
+
+  const saveEntry = () => {
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      requisitions: (prevJob.requisitions || []).map((r) =>
+        r.id === editingEntry.id ? editingEntry : r
+      ),
+    }));
+    setEditingEntry(null);
+  };
+
+  const deleteEntry = (id) => {
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      requisitions: (prevJob.requisitions || []).filter((r) => r.id !== id),
+    }));
+    setDeleteTarget(null);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
+        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center gap-3">
+          <button
+            onClick={onBack}
+            className="w-8 h-8 rounded-md bg-slate-800 flex items-center justify-center shrink-0 hover:bg-slate-700"
+          >
+            <ChevronLeft className="w-4.5 h-4.5 text-slate-300" />
+          </button>
+          <div>
+            <h1 className="font-bold text-slate-100 leading-tight">Requisitions</h1>
+            <p className="text-xs text-slate-500 leading-tight">{job.name}</p>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-5xl mx-auto px-4 py-5">
+        {categories.length === 0 ? (
+          <div className="text-center py-16 border border-dashed border-slate-800 rounded-lg">
+            <p className="text-slate-500 text-sm mb-4">
+              No requisition categories yet — add one to get started (e.g. Shims, Safety
+              Post, Wire).
+            </p>
+            {isEditor && (
+              <button
+                onClick={() => setAddingCategory(true)}
+                className="inline-flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-4 py-2 hover:bg-amber-400"
+              >
+                <Plus className="w-4 h-4" />
+                Add category
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {categories.map((cat) => {
+              const rows = entriesFor(cat);
+              return (
+                <div
+                  key={cat}
+                  className="border border-slate-800 rounded-lg overflow-hidden flex flex-col"
+                >
+                  <div className="flex items-center justify-between px-4 py-3 bg-slate-900 border-b border-slate-800">
+                    <h3 className="font-semibold text-slate-100">{cat}</h3>
+                    {isEditor && (
+                      <button
+                        onClick={() => setDeleteCategoryTarget(cat)}
+                        className="text-slate-600 hover:text-red-400 p-1"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="p-3 space-y-1.5 flex-1">
+                    {rows.length === 0 && (
+                      <p className="text-xs text-slate-600 text-center py-4">Nothing here yet.</p>
+                    )}
+                    {rows.map((r) =>
+                      editingEntry && editingEntry.id === r.id ? (
+                        <div key={r.id} className="flex items-center gap-1.5">
+                          <input
+                            autoFocus
+                            value={editingEntry.spec}
+                            onChange={(e) =>
+                              setEditingEntry({ ...editingEntry, spec: e.target.value })
+                            }
+                            className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                          />
+                          <input
+                            type="number"
+                            value={editingEntry.qty}
+                            onChange={(e) =>
+                              setEditingEntry({
+                                ...editingEntry,
+                                qty: Number(e.target.value) || 0,
+                              })
+                            }
+                            className="w-16 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                          />
+                          <button
+                            onClick={saveEntry}
+                            className="text-xs bg-amber-500 text-slate-950 font-semibold rounded-md px-2 py-1.5 shrink-0"
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={() => setEditingEntry(null)}
+                            className="text-slate-500 hover:text-slate-300 p-1 shrink-0"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div
+                          key={r.id}
+                          className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md hover:bg-slate-800/60"
+                        >
+                          <span className="text-sm text-slate-200 truncate">{r.spec}</span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-sm text-slate-400">x {r.qty}</span>
+                            {isEditor && (
+                              <>
+                                <button
+                                  onClick={() => setEditingEntry(r)}
+                                  className="text-slate-600 hover:text-slate-300 p-1"
+                                >
+                                  <Pencil className="w-3 h-3" />
+                                </button>
+                                <button
+                                  onClick={() => setDeleteTarget(r)}
+                                  className="text-slate-600 hover:text-red-400 p-1"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    )}
+                  </div>
+                  {isEditor && (
+                    <div className="p-3 border-t border-slate-800">
+                      {addRowFor === cat ? (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            autoFocus
+                            value={newSpec}
+                            onChange={(e) => setNewSpec(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && addEntry(cat)}
+                            placeholder='e.g. 1/16"'
+                            className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                          />
+                          <input
+                            type="number"
+                            value={newQty}
+                            onChange={(e) => setNewQty(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && addEntry(cat)}
+                            placeholder="qty"
+                            className="w-16 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                          />
+                          <button
+                            onClick={() => addEntry(cat)}
+                            className="text-xs bg-amber-500 text-slate-950 font-semibold rounded-md px-2 py-1.5 shrink-0"
+                          >
+                            Add
+                          </button>
+                          <button
+                            onClick={() => {
+                              setAddRowFor(null);
+                              setNewSpec("");
+                              setNewQty("");
+                            }}
+                            className="text-slate-500 hover:text-slate-300 p-1 shrink-0"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setAddRowFor(cat)}
+                          className="w-full flex items-center justify-center gap-1.5 text-xs text-amber-400 hover:text-amber-300 py-1"
+                        >
+                          <Plus className="w-3 h-3" />
+                          Add entry
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {isEditor && categories.length > 0 && (
+          <div className="mt-4">
+            {addingCategory ? (
+              <div className="flex items-center gap-2 max-w-sm">
+                <input
+                  autoFocus
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && addCategory()}
+                  placeholder="e.g. Shims, Safety Post, Wire"
+                  className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                />
+                <button
+                  onClick={addCategory}
+                  className="text-sm bg-amber-500 text-slate-950 font-semibold rounded-md px-3.5 py-2 shrink-0"
+                >
+                  Add
+                </button>
+                <button
+                  onClick={() => {
+                    setAddingCategory(false);
+                    setNewCategoryName("");
+                  }}
+                  className="text-slate-500 hover:text-slate-300 p-2 shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setAddingCategory(true)}
+                className="flex items-center gap-1.5 text-sm text-amber-400 hover:text-amber-300"
+              >
+                <Plus className="w-4 h-4" />
+                Add category
+              </button>
+            )}
+          </div>
+        )}
+      </main>
+
+      {deleteTarget && (
+        <ConfirmDelete
+          title="Remove entry?"
+          message={`"${deleteTarget.spec}" will be removed.`}
+          onConfirm={() => deleteEntry(deleteTarget.id)}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+
+      {deleteCategoryTarget && (
+        <ConfirmDelete
+          title="Remove category?"
+          message={`"${deleteCategoryTarget}" and everything in it will be removed.`}
+          onConfirm={() => deleteCategory(deleteCategoryTarget)}
+          onCancel={() => setDeleteCategoryTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 function TodoListModal({
   todos,
   isEditor,
@@ -4215,6 +4530,7 @@ function JobInventory({
   const [suggestNewItemOpen, setSuggestNewItemOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
+  const [requisitionsOpen, setRequisitionsOpen] = useState(false);
 
   const logActivity = (message, extra = {}) => {
     onUpdateJob((prevJob) => ({
@@ -4649,6 +4965,17 @@ function JobInventory({
     outstanding: items.filter((i) => i.status !== "green").length,
   };
 
+  if (requisitionsOpen) {
+    return (
+      <RequisitionsPage
+        job={job}
+        isEditor={isEditor}
+        onUpdateJob={onUpdateJob}
+        onBack={() => setRequisitionsOpen(false)}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       {categorySyncMessage && (
@@ -4681,6 +5008,13 @@ function JobInventory({
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0 relative">
+            <button
+              onClick={() => setRequisitionsOpen(true)}
+              title="Requisitions"
+              className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 text-xs font-bold rounded-md px-2.5 py-2 hover:bg-slate-700"
+            >
+              REQ
+            </button>
             <button
               onClick={() => setMenuOpen((v) => !v)}
               title="More actions"
