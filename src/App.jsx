@@ -27,6 +27,7 @@ import {
   LogOut,
   ListChecks,
   Inbox,
+  Bell,
 } from "lucide-react";
 
 const STORAGE_OPTIONS = [
@@ -1882,6 +1883,25 @@ function SuggestionsInboxModal({
   onClose,
 }) {
   const [tab, setTab] = useState("pending");
+  const [notifStatus, setNotifStatus] = useState("checking");
+  const [notifBusy, setNotifBusy] = useState(false);
+
+  useEffect(() => {
+    getNotificationStatus().then(setNotifStatus);
+  }, []);
+
+  const toggleNotifications = async () => {
+    setNotifBusy(true);
+    if (notifStatus === "subscribed") {
+      await disablePushNotifications();
+      setNotifStatus("not-subscribed");
+    } else {
+      const result = await enablePushNotifications();
+      setNotifStatus(result.ok ? "subscribed" : "denied");
+    }
+    setNotifBusy(false);
+  };
+
   const jobName = (jobId) => jobs.find((j) => String(j.id) === String(jobId))?.name || "Unknown job";
 
   const formatDate = (iso) => {
@@ -1946,6 +1966,38 @@ function SuggestionsInboxModal({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {notifStatus !== "checking" && notifStatus !== "unsupported" && (
+          <div className="px-5 py-3 border-b border-slate-800 shrink-0 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <Bell
+                className={`w-4 h-4 shrink-0 ${
+                  notifStatus === "subscribed" ? "text-amber-400" : "text-slate-500"
+                }`}
+              />
+              <span className="text-xs text-slate-400 truncate">
+                {notifStatus === "subscribed"
+                  ? "Notifying this device of new suggestions"
+                  : notifStatus === "denied"
+                  ? "Notifications blocked — check your browser's site settings"
+                  : "Get notified on this device when a suggestion comes in"}
+              </span>
+            </div>
+            {notifStatus !== "denied" && (
+              <button
+                onClick={toggleNotifications}
+                disabled={notifBusy}
+                className={`text-xs rounded-md px-2.5 py-1.5 shrink-0 font-medium ${
+                  notifStatus === "subscribed"
+                    ? "border border-slate-700 text-slate-300 hover:bg-slate-800"
+                    : "bg-amber-500 text-slate-950 hover:bg-amber-400"
+                } disabled:opacity-50`}
+              >
+                {notifBusy ? "..." : notifStatus === "subscribed" ? "Turn off" : "Turn on"}
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="flex border-b border-slate-800 shrink-0">
           <button
@@ -5096,6 +5148,80 @@ async function updateSuggestionRow(id, fields) {
   try {
     const { error } = await supabase.from("suggestions").update(fields).eq("id", id);
     return { ok: !error, error: error ? error.message : null };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
+// Public VAPID key — safe to be visible in client code, this is how the
+// browser verifies push messages actually came from your server, not a
+// secret in the traditional sense. The matching private key lives only in
+// the Supabase Edge Function that sends notifications.
+const VAPID_PUBLIC_KEY =
+  "BAFxZKXXoeA1H9n7wwwCWR8GU2zyMy4n_YqrLAXXK7qLs8Rs2STK6BlRqOu4syVIm-avrtkCTO2sjTfzLJxjrMc";
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
+}
+
+async function getNotificationStatus() {
+  if (typeof Notification === "undefined" || !("serviceWorker" in navigator)) {
+    return "unsupported";
+  }
+  if (Notification.permission === "denied") return "denied";
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const existing = await registration.pushManager.getSubscription();
+    return existing ? "subscribed" : "not-subscribed";
+  } catch {
+    return "not-subscribed";
+  }
+}
+
+async function enablePushNotifications() {
+  if (typeof Notification === "undefined" || !("serviceWorker" in navigator)) {
+    return { ok: false, error: "Push notifications aren't supported in this browser." };
+  }
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    return { ok: false, error: "Notification permission was not granted." };
+  }
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+    }
+    const json = subscription.toJSON();
+    const { error } = await supabase.from("push_subscriptions").upsert(
+      {
+        endpoint: json.endpoint,
+        p256dh: json.keys.p256dh,
+        auth: json.keys.auth,
+      },
+      { onConflict: "endpoint" }
+    );
+    return { ok: !error, error: error ? error.message : null };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
+async function disablePushNotifications() {
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const subscription = await registration.pushManager.getSubscription();
+    if (subscription) {
+      await supabase.from("push_subscriptions").delete().eq("endpoint", subscription.endpoint);
+      await subscription.unsubscribe();
+    }
+    return { ok: true };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };
   }
