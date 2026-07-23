@@ -6,6 +6,15 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
+      // Switched from the default auto-generated service worker to a
+      // custom one (src/sw.js), since push notifications need our own
+      // "push" and "notificationclick" event handling added in.
+      strategies: "injectManifest",
+      srcDir: "src",
+      filename: "sw.js",
+      injectManifest: {
+        globPatterns: ["**/*.{js,css,html,png,svg,ico}"],
+      },
       registerType: "autoUpdate",
       includeAssets: ["icon-192.png", "icon-512.png", "icon-512-maskable.png"],
       manifest: {
@@ -36,13 +45,6 @@ export default defineConfig({
             purpose: "maskable",
           },
         ],
-      },
-      workbox: {
-        // Cache the app shell (HTML/JS/CSS/icons) so the app still opens
-        // without a connection. Actual job data always goes over the network
-        // to Supabase — never cached — so you're never shown stale numbers,
-        // just the app itself failing to load data gracefully if offline.
-        globPatterns: ["**/*.{js,css,html,png,svg,ico}"],
       },
     }),
   ],
