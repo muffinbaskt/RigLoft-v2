@@ -2411,6 +2411,7 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
   const [editingEntry, setEditingEntry] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteCategoryTarget, setDeleteCategoryTarget] = useState(null);
+  const [checkMode, setCheckMode] = useState({});
 
   const categoryOrder = job.requisitionCategoryOrder || [];
   const categories = [
@@ -2497,6 +2498,15 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
     }
   };
 
+  const toggleFulfilled = (id) => {
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      requisitions: (prevJob.requisitions || []).map((r) =>
+        r.id === id ? { ...r, fulfilled: !r.fulfilled } : r
+      ),
+    }));
+  };
+
   const deleteEntry = (id) => {
     onUpdateJob((prevJob) => ({
       ...prevJob,
@@ -2552,21 +2562,65 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
                 >
                   <div className="flex items-center justify-between px-4 py-3 bg-slate-900 border-b border-slate-800">
                     <h3 className="font-semibold text-slate-100">{cat}</h3>
-                    {isEditor && (
-                      <button
-                        onClick={() => setDeleteCategoryTarget(cat)}
-                        className="text-slate-600 hover:text-red-400 p-1"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
+                    <div className="flex items-center gap-1">
+                      {isEditor && rows.length > 0 && (
+                        <button
+                          onClick={() =>
+                            setCheckMode((prev) => ({ ...prev, [cat]: !prev[cat] }))
+                          }
+                          className={`text-xs rounded-md px-2 py-1 font-medium ${
+                            checkMode[cat]
+                              ? "bg-emerald-500/15 border border-emerald-500/50 text-emerald-300"
+                              : "border border-slate-700 text-slate-400 hover:text-slate-200"
+                          }`}
+                        >
+                          {checkMode[cat] ? "Done" : "Check off"}
+                        </button>
+                      )}
+                      {isEditor && (
+                        <button
+                          onClick={() => setDeleteCategoryTarget(cat)}
+                          className="text-slate-600 hover:text-red-400 p-1"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div className="p-3 space-y-1.5 flex-1">
                     {rows.length === 0 && (
                       <p className="text-xs text-slate-600 text-center py-4">Nothing here yet.</p>
                     )}
                     {rows.map((r) =>
-                      editingEntry && editingEntry.id === r.id ? (
+                      checkMode[cat] ? (
+                        <button
+                          key={r.id}
+                          onClick={() => toggleFulfilled(r.id)}
+                          className={`w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-md border text-left transition-colors ${
+                            r.fulfilled
+                              ? "bg-emerald-500/15 border-emerald-500/60"
+                              : "bg-slate-800/40 border-slate-700 hover:border-slate-600"
+                          }`}
+                        >
+                          <span
+                            className={`text-sm truncate ${
+                              r.fulfilled ? "text-emerald-300" : "text-slate-200"
+                            }`}
+                          >
+                            {r.spec}
+                          </span>
+                          <span className="flex items-center gap-2 shrink-0">
+                            <span
+                              className={`text-xs ${
+                                r.fulfilled ? "text-emerald-400" : "text-slate-500"
+                              }`}
+                            >
+                              x {r.qty}
+                            </span>
+                            {r.fulfilled && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+                          </span>
+                        </button>
+                      ) : editingEntry && editingEntry.id === r.id ? (
                         <div key={r.id} className="flex items-center gap-1.5">
                           <input
                             autoFocus
