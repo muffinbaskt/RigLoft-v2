@@ -2657,9 +2657,22 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
                       ) : (
                         <div
                           key={r.id}
-                          className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md hover:bg-slate-800/60"
+                          className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md hover:bg-slate-800/60 ${
+                            r.fulfilled ? "bg-emerald-500/10 border border-emerald-500/30" : ""
+                          }`}
                         >
-                          <span className="text-sm text-slate-200 truncate">{r.spec}</span>
+                          <span className="flex items-center gap-1.5 min-w-0">
+                            {r.fulfilled && (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                            )}
+                            <span
+                              className={`text-sm truncate ${
+                                r.fulfilled ? "text-emerald-300" : "text-slate-200"
+                              }`}
+                            >
+                              {r.spec}
+                            </span>
+                          </span>
                           <div className="flex items-center gap-2 shrink-0">
                             <span className="text-xs text-slate-500">x</span>
                             <input
