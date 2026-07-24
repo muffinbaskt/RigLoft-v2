@@ -786,22 +786,30 @@ function ItemForm({
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">Status in job</label>
-            <div className="flex gap-2">
-              {STATUS_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => set("status")(opt.value)}
-                  className={`flex-1 flex items-center justify-center gap-1.5 text-sm rounded-md py-2 border transition-colors ${
-                    item.status === opt.value
-                      ? "border-slate-500 bg-slate-800 text-slate-100"
-                      : "border-slate-700 text-slate-500 hover:text-slate-300"
-                  }`}
-                >
-                  <StatusDot status={opt.value} size="sm" />
-                  {opt.label}
-                </button>
-              ))}
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              Status in job
+            </label>
+            <div className="flex items-center gap-2 bg-slate-800/50 border border-slate-700 rounded-md px-3 py-2">
+              <StatusDot
+                status={
+                  currentTotalHave >= Number(item.qtyNeeded || 0)
+                    ? "green"
+                    : currentTotalHave > 0
+                    ? "yellow"
+                    : "red"
+                }
+                size="sm"
+              />
+              <span className="text-sm text-slate-300">
+                {currentTotalHave >= Number(item.qtyNeeded || 0)
+                  ? "Complete"
+                  : currentTotalHave > 0
+                  ? "Partial"
+                  : "None"}
+              </span>
+              <span className="text-xs text-slate-600 ml-auto">
+                Set automatically from qty have vs. qty needed
+              </span>
             </div>
           </div>
 
@@ -887,6 +895,8 @@ function ItemForm({
                 .filter((c) => c.name)
                 .map((c) => ({ name: c.name, qty: Number(c.qty) || 0 }));
               const finalQtyHave = totalHave(cleanContainers);
+              const finalStatus =
+                finalQtyHave >= finalQtyNeeded ? "green" : finalQtyHave > 0 ? "yellow" : "red";
 
               if (addToCatalog && onSaveCatalogItem) {
                 onSaveCatalogItem({
@@ -904,6 +914,7 @@ function ItemForm({
                 qtyHave: finalQtyHave,
                 containers: cleanContainers,
                 serials: finalSerials,
+                status: finalStatus,
               });
             }}
             disabled={!canSave}
