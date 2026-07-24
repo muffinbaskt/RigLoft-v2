@@ -2490,7 +2490,7 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
 
   const focusNextQty = (rows, currentId) => {
     const idx = rows.findIndex((r) => r.id === currentId);
-    const next = rows[idx + 1];
+    const next = rows.slice(idx + 1).find((r) => !r.fulfilled);
     const el = next && qtyInputRefs.current[next.id];
     if (el) {
       el.focus();
@@ -2662,7 +2662,16 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
                           }`}
                         >
                           <span className="flex items-center gap-1.5 min-w-0">
-                            {r.fulfilled && (
+                            {r.fulfilled && isEditor && (
+                              <button
+                                onClick={() => toggleFulfilled(r.id)}
+                                title="Uncheck to edit quantity again"
+                                className="shrink-0"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 hover:text-emerald-300" />
+                              </button>
+                            )}
+                            {r.fulfilled && !isEditor && (
                               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                             )}
                             <span
@@ -2680,7 +2689,8 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
                               type="number"
                               min="0"
                               value={r.qty}
-                              disabled={!isEditor}
+                              disabled={!isEditor || r.fulfilled}
+                              title={r.fulfilled ? "Uncheck this item to edit its quantity" : ""}
                               onChange={(e) => updateQty(r.id, e.target.value)}
                               onKeyDown={(e) => {
                                 if (e.key === "Enter") {
