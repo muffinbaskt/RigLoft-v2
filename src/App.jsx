@@ -4236,6 +4236,9 @@ function JobNameModal({
 
 function JobCard({ job, indent, outstanding, isEditor, onSelect, onRename, onDelete }) {
   const borderClass = job.color ? JOB_COLOR_BORDER[job.color] : "border-l-slate-800";
+  const items = job.items || [];
+  const completeCount = items.filter((i) => i.status === "green").length;
+  const completePct = items.length > 0 ? Math.round((completeCount / items.length) * 100) : 0;
   return (
     <button
       onClick={onSelect}
@@ -4244,16 +4247,27 @@ function JobCard({ job, indent, outstanding, isEditor, onSelect, onRename, onDel
       }`}
       style={indent ? { width: "calc(100% - 1.5rem)" } : undefined}
     >
-      <div className="flex items-center gap-3 min-w-0">
+      <div className="flex items-center gap-3 min-w-0 flex-1">
         <div className="w-9 h-9 rounded-md bg-slate-800 flex items-center justify-center shrink-0">
           <Briefcase className="w-4 h-4 text-slate-400" />
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="font-semibold text-slate-100 truncate">{job.name}</p>
           <p className="text-xs text-slate-500">
-            {(job.items || []).length} item{(job.items || []).length === 1 ? "" : "s"}
+            {items.length} item{items.length === 1 ? "" : "s"}
             {outstanding > 0 ? ` · ${outstanding} outstanding` : " · all complete"}
           </p>
+          {items.length > 0 && (
+            <div className="flex items-center gap-2 mt-1.5">
+              <div className="flex-1 max-w-[160px] h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-emerald-500 rounded-full transition-all"
+                  style={{ width: `${completePct}%` }}
+                />
+              </div>
+              <span className="text-xs text-slate-500 tabular-nums">{completePct}%</span>
+            </div>
+          )}
         </div>
       </div>
       {isEditor && (
