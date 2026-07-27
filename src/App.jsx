@@ -2846,6 +2846,7 @@ function TodoListModal({
   onAddCustom,
   onToggleDone,
   onDelete,
+  onClearFinished,
   onClose,
 }) {
   const [newText, setNewText] = useState("");
@@ -2961,7 +2962,17 @@ function TodoListModal({
               )}
               {done.length > 0 && (
                 <div>
-                  <p className="text-xs font-medium text-slate-600 mb-2">Done</p>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs font-medium text-slate-600">Done</p>
+                    {isEditor && (
+                      <button
+                        onClick={() => onClearFinished(done.map((t) => t.id))}
+                        className="text-xs text-slate-500 hover:text-red-400"
+                      >
+                        Clear all finished tasks
+                      </button>
+                    )}
+                  </div>
                   <div className="space-y-2">
                     {done.map((t) => (
                       <div
@@ -5082,6 +5093,13 @@ function JobInventory({
     }));
   };
 
+  const clearFinishedTodos = (ids) => {
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      todos: (prevJob.todos || []).filter((t) => !ids.includes(t.id)),
+    }));
+  };
+
   const bulkDelete = () => {
     onUpdateJob((prevJob) => ({
       ...prevJob,
@@ -5931,6 +5949,7 @@ function JobInventory({
           onAddCustom={addCustomTodo}
           onToggleDone={toggleTodoDone}
           onDelete={deleteTodo}
+          onClearFinished={clearFinishedTodos}
           onClose={() => setTodoListOpen(false)}
         />
       )}
