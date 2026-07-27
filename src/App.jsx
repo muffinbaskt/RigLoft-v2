@@ -6495,8 +6495,8 @@ async function chooseBackupFolder() {
   }
 }
 
-async function downloadBackupFile(jobs, catalog, label) {
-  if (Date.now() - lastBackupDownloadAt < 10000) return false;
+async function downloadBackupFile(jobs, catalog, label, { force = false } = {}) {
+  if (!force && Date.now() - lastBackupDownloadAt < 10000) return false;
   const now = new Date();
   const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const filename = `riggy-${label.replace(/\s+/g, "-")}-${stamp}.json`;
@@ -7439,28 +7439,9 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     else setSaveError(null);
   };
 
-  const exportAllData = () => {
-    try {
-      const payload = {
-        exportedFrom: "Riggy",
-        exportedAt: new Date().toISOString(),
-        jobs,
-        catalog,
-      };
-      const blob = new Blob([JSON.stringify(payload, null, 2)], {
-        type: "application/json",
-      });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `warehub-backup-${new Date().toISOString().slice(0, 10)}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    } catch {
-      setSaveError("Couldn't create the backup file");
-    }
+  const exportAllData = async () => {
+    const ok = await downloadBackupFile(jobs, catalog, "manual-export", { force: true });
+    if (!ok) setSaveError("Couldn't create the backup file");
   };
 
   const importAllData = (file) => {
