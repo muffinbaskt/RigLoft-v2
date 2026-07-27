@@ -4302,6 +4302,30 @@ function JobPicker({
 }) {
   const [collapsed, setCollapsed] = useState({});
   const [searchQuery, setSearchQuery] = useState("");
+  const [backupFolderName, setBackupFolderName] = useState(null);
+  const [backupFolderChecked, setBackupFolderChecked] = useState(false);
+
+  useEffect(() => {
+    if (!FS_ACCESS_SUPPORTED) {
+      setBackupFolderChecked(true);
+      return;
+    }
+    loadBackupDirectoryHandle().then((handle) => {
+      setBackupFolderName(handle ? handle.name : null);
+      setBackupFolderChecked(true);
+    });
+  }, []);
+
+  const handleChooseBackupFolder = async () => {
+    const result = await chooseBackupFolder();
+    if (result.ok) setBackupFolderName(result.name);
+  };
+
+  const handleClearBackupFolder = async () => {
+    await clearBackupDirectoryHandle();
+    setBackupFolderName(null);
+  };
+
   const topLevel = jobs.filter((j) => !j.parentId);
   const childrenOf = (parentId) => jobs.filter((j) => j.parentId === parentId);
 
@@ -4619,6 +4643,28 @@ function JobPicker({
             )}
           </div>
           <p className="text-[10px] text-slate-700 mt-2">Build check: 2026-07-14-B</p>
+          {isEditor && backupFolderChecked && FS_ACCESS_SUPPORTED && (
+            <div className="mt-3 text-xs text-slate-600">
+              {backupFolderName ? (
+                <span>
+                  Backups saving to "{backupFolderName}" —{" "}
+                  <button
+                    onClick={handleClearBackupFolder}
+                    className="underline underline-offset-2 hover:text-slate-400"
+                  >
+                    stop using this folder
+                  </button>
+                </span>
+              ) : (
+                <button
+                  onClick={handleChooseBackupFolder}
+                  className="underline underline-offset-2 hover:text-slate-400"
+                >
+                  Choose a folder for automatic backups
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </main>
     </div>
@@ -6374,23 +6420,122 @@ function clearOfflineQueue() {
   }
 }
 
-function downloadBackupFile(jobs, catalog, label) {
-  try {
-    const now = new Date();
-    const payload = {
-      exportedFrom: `Riggy (${label})`,
-      exportedAt: now.toISOString(),
-      jobs,
-      catalog,
+// Shared across every backup trigger (hourly auto-backup, conflict-safety
+// backup, etc.) so two independent systems can't both fire a download in
+// the same moment — genuinely separate backups (minutes/hours apart) are
+// unaffected, this only catches true back-to-back duplicates.
+let lastBackupDownloadAt = 0;
+
+// Lets backups write straight into a folder you pick once, instead of the
+// browser's regular Downloads folder every time. Only works in Chrome-family
+// desktop browsers (including ChromeOS) — Android has no equivalent, so it
+// quietly falls back to a normal download there.
+const FS_ACCESS_SUPPORTED = typeof window !== "undefined" && "showDirectoryPicker" in window;
+const BACKUP_DIR_DB = "riggy-backup-prefs";
+const BACKUP_DIR_STORE = "handles";
+const BACKUP_DIR_KEY = "backupDirectory";
+
+function openBackupPrefsDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(BACKUP_DIR_DB, 1);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore(BACKUP_DIR_STORE);
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function saveBackupDirectoryHandle(handle) {
+  const db = await openBackupPrefsDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(BACKUP_DIR_STORE, "readwrite");
+    tx.objectStore(BACKUP_DIR_STORE).put(handle, BACKUP_DIR_KEY);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function loadBackupDirectoryHandle() {
+  try {
+    const db = await openBackupPrefsDB();
+    return await new Promise((resolve) => {
+      const tx = db.transaction(BACKUP_DIR_STORE, "readonly");
+      const req = tx.objectStore(BACKUP_DIR_STORE).get(BACKUP_DIR_KEY);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function clearBackupDirectoryHandle() {
+  try {
+    const db = await openBackupPrefsDB();
+    const tx = db.transaction(BACKUP_DIR_STORE, "readwrite");
+    tx.objectStore(BACKUP_DIR_STORE).delete(BACKUP_DIR_KEY);
+  } catch {
+    // nothing more to do
+  }
+}
+
+async function chooseBackupFolder() {
+  if (!FS_ACCESS_SUPPORTED) {
+    return { ok: false, error: "Not supported in this browser." };
+  }
+  try {
+    const handle = await window.showDirectoryPicker({ mode: "readwrite" });
+    await saveBackupDirectoryHandle(handle);
+    return { ok: true, name: handle.name };
+  } catch (err) {
+    // User canceled the picker — not a real error
+    if (err && err.name === "AbortError") return { ok: false, canceled: true };
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
+async function downloadBackupFile(jobs, catalog, label) {
+  if (Date.now() - lastBackupDownloadAt < 10000) return false;
+  const now = new Date();
+  const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `riggy-${label.replace(/\s+/g, "-")}-${stamp}.json`;
+  const payload = {
+    exportedFrom: `Riggy (${label})`,
+    exportedAt: now.toISOString(),
+    jobs,
+    catalog,
+  };
+  const jsonText = JSON.stringify(payload, null, 2);
+
+  // Try the folder you chose, if you've set one up and it's still accessible
+  if (FS_ACCESS_SUPPORTED) {
+    try {
+      const dirHandle = await loadBackupDirectoryHandle();
+      if (dirHandle) {
+        const permission = await dirHandle.queryPermission({ mode: "readwrite" });
+        if (permission === "granted") {
+          const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
+          const writable = await fileHandle.createWritable();
+          await writable.write(jsonText);
+          await writable.close();
+          lastBackupDownloadAt = Date.now();
+          return true;
+        }
+      }
+    } catch {
+      // Folder no longer accessible for some reason — fall back below
+      // rather than losing the backup entirely.
+    }
+  }
+
+  try {
+    lastBackupDownloadAt = Date.now();
+    const blob = new Blob([jsonText], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    // Include time (not just date) so multiple same-day backups don't
-    // collide or silently overwrite one another in the Downloads folder.
-    const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    link.download = `riggy-${label.replace(/\s+/g, "-")}-${stamp}.json`;
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -6412,7 +6557,7 @@ const AUTO_BACKUP_INTERVAL_MS = 60 * 60 * 1000; // once an hour
 
 let autoBackupInFlight = false; // in-memory guard against a same-tab burst
 
-function maybeAutoBackup(jobs, catalog) {
+async function maybeAutoBackup(jobs, catalog) {
   if (!jobs || jobs.length === 0) return; // nothing real to back up yet
   if (autoBackupInFlight) return;
   try {
@@ -6424,7 +6569,7 @@ function maybeAutoBackup(jobs, catalog) {
     // time) all read the same stale timestamp and each decide to back up.
     autoBackupInFlight = true;
     localStorage.setItem(AUTO_BACKUP_KEY, new Date().toISOString());
-    downloadBackupFile(jobs, catalog, "auto-backup");
+    await downloadBackupFile(jobs, catalog, "auto-backup");
   } catch {
     // best effort only — never worth interrupting anything over this
   } finally {
@@ -6572,7 +6717,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     // Something else changed while we were offline — figure out exactly
     // what, at the individual item level, rather than treating the whole
     // thing as one big conflict.
-    downloadOfflineBackup(queue);
+    await downloadOfflineBackup(queue);
 
     const theirJobs = JSON.parse(jobsResult.value || "[]");
     const theirCatalog = JSON.parse(catalogResult.value || "[]");
@@ -6633,6 +6778,24 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
       window.removeEventListener("online", goOnline);
       window.removeEventListener("offline", goOffline);
     };
+  }, []);
+
+  // A backgrounded tab's login can quietly expire while nothing is watching
+  // it — refresh it proactively the moment the tab is looked at again,
+  // rather than waiting for a save to fail first and surface a scary error.
+  useEffect(() => {
+    const onVisible = async () => {
+      if (document.visibilityState === "visible") {
+        try {
+          await supabase.auth.refreshSession();
+        } catch {
+          // If this fails, the normal save-conflict/error handling still
+          // catches it — this is just trying to avoid it happening at all.
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, []);
 
   // Also check periodically for long sessions that stay open past the
