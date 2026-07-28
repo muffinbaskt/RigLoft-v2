@@ -3,6 +3,14 @@ import { precacheAndRoute } from "workbox-precaching";
 // Standard PWA app-shell caching, same as before
 precacheAndRoute(self.__WB_MANIFEST);
 
+// Lets the app manually say "activate the update now" instead of waiting
+// for every tab to fully close first — paired with a button in the app.
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
+});
+
 // Shows a real device notification when a push arrives, even if the app
 // isn't open at the time.
 self.addEventListener("push", (event) => {
