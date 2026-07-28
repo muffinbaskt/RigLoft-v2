@@ -231,6 +231,7 @@ function emptyItem(defaultStorage) {
     status: "red",
     gang: GANG_OPTIONS[0],
     category: "",
+    catalogId: null, // manual catalog link override — takes priority over name-matching
     serials: [],
     needsTransfer: false,
     notes: "",
@@ -516,7 +517,7 @@ function ItemForm({
       )
     : null;
 
-  const [manualCatalogLinkId, setManualCatalogLinkId] = useState(null);
+  const [manualCatalogLinkId, setManualCatalogLinkId] = useState(initial.catalogId || null);
   const [catalogPickerOpen, setCatalogPickerOpen] = useState(false);
   const [catalogPickerSearch, setCatalogPickerSearch] = useState("");
   const manualCatalogLink = manualCatalogLinkId
@@ -969,6 +970,7 @@ function ItemForm({
                 containers: cleanContainers,
                 serials: finalSerials,
                 status: finalStatus,
+                catalogId: manualCatalogLinkId,
               });
             }}
             disabled={!canSave}
