@@ -571,7 +571,7 @@ function ItemForm({
 
   const currentTotalHave = totalHave(item.containers);
 
-  const canSave = item.name.trim().length > 0 && String(item.qtyNeeded).trim().length > 0;
+  const canSave = item.name.trim().length > 0;
 
   const duplicateItem = item.name.trim()
     ? existingItems.find((i) => {
