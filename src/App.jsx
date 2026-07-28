@@ -4898,26 +4898,40 @@ function JobInventory({
   const [categorySync, setCategorySync] = useState(null); // { preview, applied }
 
   const buildCategorySyncPreview = () => {
-    // Only considers items that don't already have a category set — never
-    // overwrites a category you deliberately chose by hand.
     const changes = [];
     items.forEach((i) => {
-      if (i.category) return;
-      const match = findCatalogMatch(i.name, catalog);
-      if (match && match.category) {
-        changes.push({ id: i.id, name: i.name, newCategory: match.category });
+      // Respects a manual catalog link first (from the item form's "Choose
+      // catalog item"), falling back to automatic name-matching otherwise —
+      // same priority the item edit form itself uses.
+      const match = i.catalogId
+        ? catalog.find((c) => c.id === i.catalogId)
+        : findCatalogMatch(i.name, catalog);
+      if (!match) return;
+
+      const fieldChanges = {};
+      if (match.gang && match.gang !== i.gang) fieldChanges.gang = match.gang;
+      if (match.storage && match.storage !== i.storage) fieldChanges.storage = match.storage;
+      // Category still only fills in if missing — never overwrites one you
+      // deliberately chose by hand, unlike gang/storage which should match
+      // the catalog template once something is actually linked to it.
+      if (!i.category && match.category) fieldChanges.category = match.category;
+
+      if (Object.keys(fieldChanges).length > 0) {
+        changes.push({ id: i.id, name: i.name, fieldChanges });
       }
     });
     return changes;
   };
 
   const applyCategorySyncPreview = (preview) => {
-    const byId = new Map(preview.map((c) => [c.id, c.newCategory]));
-    const newCategoryNames = [...new Set(preview.map((c) => c.newCategory))];
+    const byId = new Map(preview.map((c) => [c.id, c.fieldChanges]));
+    const newCategoryNames = [
+      ...new Set(preview.map((c) => c.fieldChanges.category).filter(Boolean)),
+    ];
     onUpdateJob((prevJob) => ({
       ...prevJob,
       items: prevJob.items.map((i) =>
-        byId.has(i.id) ? { ...i, category: byId.get(i.id) } : i
+        byId.has(i.id) ? { ...i, ...byId.get(i.id) } : i
       ),
       categoryOptions: [
         ...new Set([...(prevJob.categoryOptions || []), ...newCategoryNames]),
@@ -4926,7 +4940,7 @@ function JobInventory({
         {
           id: Date.now(),
           time: timeStamp(),
-          message: `Synced categories from catalog for ${preview.length} item${
+          message: `Synced gang/storage/category from catalog for ${preview.length} item${
             preview.length === 1 ? "" : "s"
           }`,
         },
@@ -5330,20 +5344,34 @@ function JobInventory({
               </h2>
               {!categorySync.applied && categorySync.preview.length === 0 && (
                 <p className="text-xs text-slate-500 mt-1">
-                  Every item either already has a category set, or has no catalog match with a
-                  category to pull from.
+                  Every item already matches its catalog entry, or has no catalog link to pull
+                  from.
                 </p>
               )}
             </div>
             {categorySync.preview.length > 0 && (
-              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-1.5">
+              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
                 {categorySync.preview.map((c) => (
                   <div
                     key={c.id}
-                    className="flex items-center justify-between gap-2 text-sm border border-slate-800 rounded-md px-3 py-2"
+                    className="text-sm border border-slate-800 rounded-md px-3 py-2"
                   >
-                    <span className="text-slate-200 truncate">{c.name}</span>
-                    <span className="text-teal-300 text-xs shrink-0">→ {c.newCategory}</span>
+                    <p className="text-slate-200 truncate mb-1">{c.name}</p>
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                      {c.fieldChanges.gang && (
+                        <span className="text-teal-300">Gang → {c.fieldChanges.gang}</span>
+                      )}
+                      {c.fieldChanges.storage && (
+                        <span className="text-teal-300">
+                          Storage → {c.fieldChanges.storage}
+                        </span>
+                      )}
+                      {c.fieldChanges.category && (
+                        <span className="text-teal-300">
+                          Category → {c.fieldChanges.category}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -5533,7 +5561,7 @@ function JobInventory({
                       className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
                     >
                       <Layers className="w-4 h-4 text-slate-400" />
-                      Sync categories from catalog
+                      Sync from catalog
                     </button>
                   )}
                 </div>
