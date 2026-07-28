@@ -5175,6 +5175,18 @@ function JobInventory({
     setBulkContainerPicker(false);
   };
 
+  const [bulkCatalogPicker, setBulkCatalogPicker] = useState(false);
+  const [bulkCatalogPickerSearch, setBulkCatalogPickerSearch] = useState("");
+
+  const bulkSetCatalogLink = (catalogItem) => {
+    bulkUpdate(
+      (i) => ({ ...i, catalogId: catalogItem.id }),
+      `Linked to catalog item "${catalogItem.name}"`
+    );
+    setBulkCatalogPicker(false);
+    setBulkCatalogPickerSearch("");
+  };
+
   const todos = job.todos || [];
 
   const addCustomTodo = (text) => {
@@ -5834,6 +5846,12 @@ function JobInventory({
                   Move to container
                 </button>
                 <button
+                  onClick={() => setBulkCatalogPicker(true)}
+                  className="text-xs bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-2.5 py-1.5 hover:bg-slate-700"
+                >
+                  Link to catalog
+                </button>
+                <button
                   onClick={bulkAddToTodo}
                   className="text-xs bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-2.5 py-1.5 hover:bg-slate-700"
                 >
@@ -6136,6 +6154,74 @@ function JobInventory({
             >
               Cancel
             </button>
+          </div>
+        </div>
+      )}
+
+      {bulkCatalogPicker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+          <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col">
+            <div className="px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold">
+                Link {selectedItemIds.length} item{selectedItemIds.length === 1 ? "" : "s"} to
+                catalog item
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Every item selected gets linked to whichever one you pick — this overrides any
+                automatic name-matching for these items.
+              </p>
+            </div>
+            <div className="px-5 pt-4 shrink-0">
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  autoFocus
+                  value={bulkCatalogPickerSearch}
+                  onChange={(e) => setBulkCatalogPickerSearch(e.target.value)}
+                  placeholder="Search catalog..."
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md pl-9 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                />
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {catalog.length === 0 ? (
+                <p className="text-sm text-slate-500 text-center py-10">
+                  Your catalog is empty — add items to it first from the Item Catalog screen.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {[...catalog]
+                    .filter((c) =>
+                      c.name.toLowerCase().includes(bulkCatalogPickerSearch.trim().toLowerCase())
+                    )
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => bulkSetCatalogLink(c)}
+                        className="w-full text-left border border-slate-800 rounded-md p-3 hover:border-slate-700"
+                      >
+                        <p className="text-sm text-slate-100">{c.name}</p>
+                        <p className="text-xs text-slate-500">
+                          {c.gang} · {c.storage}
+                          {c.category ? ` · ${c.category}` : ""}
+                        </p>
+                      </button>
+                    ))}
+                </div>
+              )}
+            </div>
+            <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+              <button
+                onClick={() => {
+                  setBulkCatalogPicker(false);
+                  setBulkCatalogPickerSearch("");
+                }}
+                className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
