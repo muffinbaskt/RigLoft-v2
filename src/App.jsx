@@ -6967,8 +6967,11 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     };
     navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
 
+    let registrationRef = null;
+
     navigator.serviceWorker.getRegistration().then((registration) => {
       if (!registration) return;
+      registrationRef = registration;
 
       // An update may already be sitting there waiting from before this
       // page load even happened.
@@ -6988,13 +6991,25 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         });
       });
 
-      // Ask the browser to check for a newer version right now too, in
-      // case one's been sitting on the server since before this session.
+      // Check right away, then keep checking — otherwise this only ever
+      // runs once at initial load, and a version deployed later would sit
+      // unnoticed until the next full page reload.
       registration.update().catch(() => {});
     });
 
+    const recheck = () => {
+      if (registrationRef) registrationRef.update().catch(() => {});
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") recheck();
+    };
+    const interval = setInterval(recheck, 30 * 60 * 1000); // every 30 minutes
+    document.addEventListener("visibilitychange", onVisible);
+
     return () => {
       navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange);
+      document.removeEventListener("visibilitychange", onVisible);
+      clearInterval(interval);
     };
   }, []);
 
