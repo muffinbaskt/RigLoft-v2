@@ -4704,7 +4704,7 @@ function JobPicker({
               </>
             )}
           </div>
-          <p className="text-[10px] text-slate-700 mt-2">Build check: 2026-07-14-B</p>
+          <p className="text-[10px] text-slate-700 mt-2">Build check: 2026-07-28-A (update banner test)</p>
           {isEditor && backupFolderChecked && FS_ACCESS_SUPPORTED && (
             <div className="mt-3 text-xs text-slate-600">
               {backupFolderName ? (
