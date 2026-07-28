@@ -600,6 +600,11 @@ function ItemForm({
                 Consider editing that one instead of adding a duplicate.
               </p>
             )}
+            {!duplicateItem && existingCatalogMatch && (
+              <p className="text-xs text-slate-600 mt-1.5">
+                Linked to catalog item "{existingCatalogMatch.name}"
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
