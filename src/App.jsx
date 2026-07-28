@@ -211,7 +211,7 @@ function diffItems(before, after) {
 
 function parseSerials(text) {
   return text
-    .split(",")
+    .split(/[,\s]+/)
     .map((s) => s.trim())
     .filter(Boolean);
 }
