@@ -4345,6 +4345,8 @@ function JobPicker({
   onSignOut,
   pendingSuggestionCount,
   onOpenSuggestions,
+  updateAvailable,
+  onApplyUpdate,
 }) {
   const [collapsed, setCollapsed] = useState({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -4471,6 +4473,20 @@ function JobPicker({
           </div>
         </div>
       </header>
+
+      {updateAvailable && (
+        <div className="bg-amber-500 text-slate-950 text-sm font-medium">
+          <div className="max-w-5xl mx-auto px-4 py-2 flex items-center justify-between gap-3">
+            <span>A new version of Riggy is ready</span>
+            <button
+              onClick={onApplyUpdate}
+              className="bg-slate-950 text-amber-400 text-xs font-semibold rounded-md px-3 py-1.5 hover:bg-slate-900"
+            >
+              Update now
+            </button>
+          </div>
+        </div>
+      )}
 
       <main className="max-w-5xl mx-auto px-4 py-5">
         {jobs.length > 0 && (
@@ -6643,6 +6659,8 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   const [importAllError, setImportAllError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadingSlow, setLoadingSlow] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const waitingWorkerRef = useRef(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [retryTick, setRetryTick] = useState(0);
@@ -6874,6 +6892,60 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [isEditor]);
+
+  // Detects when a new version of the app has finished downloading in the
+  // background and is sitting ready — instead of silently waiting for every
+  // tab to close before it takes over, this surfaces a button so you can
+  // apply it on demand.
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+
+    let reloadedOnce = false;
+    const onControllerChange = () => {
+      if (reloadedOnce) return;
+      reloadedOnce = true;
+      window.location.reload();
+    };
+    navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
+
+    navigator.serviceWorker.getRegistration().then((registration) => {
+      if (!registration) return;
+
+      // An update may already be sitting there waiting from before this
+      // page load even happened.
+      if (registration.waiting && navigator.serviceWorker.controller) {
+        waitingWorkerRef.current = registration.waiting;
+        setUpdateAvailable(true);
+      }
+
+      registration.addEventListener("updatefound", () => {
+        const newWorker = registration.installing;
+        if (!newWorker) return;
+        newWorker.addEventListener("statechange", () => {
+          if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+            waitingWorkerRef.current = newWorker;
+            setUpdateAvailable(true);
+          }
+        });
+      });
+
+      // Ask the browser to check for a newer version right now too, in
+      // case one's been sitting on the server since before this session.
+      registration.update().catch(() => {});
+    });
+
+    return () => {
+      navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange);
+    };
+  }, []);
+
+  const applyUpdate = () => {
+    if (waitingWorkerRef.current) {
+      waitingWorkerRef.current.postMessage({ type: "SKIP_WAITING" });
+    } else {
+      window.location.reload();
+    }
+  };
 
   // Fix for a known iOS/Safari quirk: elements with :hover styles can require
   // an extra "warm-up" tap on the very first touch of the page before clicks
@@ -7897,6 +7969,8 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
             refreshSuggestions();
             refreshResolvedSuggestions();
           }}
+          updateAvailable={updateAvailable}
+          onApplyUpdate={applyUpdate}
         />
       ) : (
         <JobInventory
