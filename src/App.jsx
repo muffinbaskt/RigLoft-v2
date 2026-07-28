@@ -4915,6 +4915,9 @@ function JobInventory({
       // deliberately chose by hand, unlike gang/storage which should match
       // the catalog template once something is actually linked to it.
       if (!i.category && match.category) fieldChanges.category = match.category;
+      if (!!match.needsTransfer !== !!i.needsTransfer) {
+        fieldChanges.needsTransfer = !!match.needsTransfer;
+      }
 
       if (Object.keys(fieldChanges).length > 0) {
         changes.push({ id: i.id, name: i.name, fieldChanges });
@@ -4940,7 +4943,7 @@ function JobInventory({
         {
           id: Date.now(),
           time: timeStamp(),
-          message: `Synced gang/storage/category from catalog for ${preview.length} item${
+          message: `Synced gang/storage/category/transfer from catalog for ${preview.length} item${
             preview.length === 1 ? "" : "s"
           }`,
         },
@@ -5369,6 +5372,11 @@ function JobInventory({
                       {c.fieldChanges.category && (
                         <span className="text-teal-300">
                           Category → {c.fieldChanges.category}
+                        </span>
+                      )}
+                      {c.fieldChanges.needsTransfer !== undefined && (
+                        <span className="text-teal-300">
+                          🚚 Transfer → {c.fieldChanges.needsTransfer ? "Yes" : "No"}
                         </span>
                       )}
                     </div>
