@@ -601,9 +601,25 @@ function ItemForm({
               </p>
             )}
             {!duplicateItem && existingCatalogMatch && (
-              <p className="text-xs text-slate-600 mt-1.5">
-                Linked to catalog item "{existingCatalogMatch.name}"
-              </p>
+              <div className="flex items-center gap-2 mt-1.5">
+                <p className="text-xs text-slate-600">
+                  Linked to catalog item "{existingCatalogMatch.name}"
+                </p>
+                <button
+                  onClick={() =>
+                    setItem((prev) => ({
+                      ...prev,
+                      gang: existingCatalogMatch.gang,
+                      storage: existingCatalogMatch.storage,
+                      category: existingCatalogMatch.category || "",
+                      needsTransfer: !!existingCatalogMatch.needsTransfer,
+                    }))
+                  }
+                  className="text-xs text-amber-400 hover:text-amber-300 underline underline-offset-2"
+                >
+                  Use these settings
+                </button>
+              </div>
             )}
           </div>
 
