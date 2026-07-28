@@ -4161,7 +4161,9 @@ function ItemCard({ item, selectMode, selected, isEditor, onToggleSelect, onEdit
                 }`}
                 style={{
                   width: `${
-                    item.qtyNeeded > 0 ? Math.min(100, (item.qtyHave / item.qtyNeeded) * 100) : 0
+                    item.qtyNeeded > 0
+                      ? Math.min(100, (item.qtyHave / item.qtyNeeded) * 100)
+                      : 100
                   }%`,
                 }}
               />
