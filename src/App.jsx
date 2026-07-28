@@ -4345,8 +4345,6 @@ function JobPicker({
   onSignOut,
   pendingSuggestionCount,
   onOpenSuggestions,
-  updateAvailable,
-  onApplyUpdate,
 }) {
   const [collapsed, setCollapsed] = useState({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -4473,20 +4471,6 @@ function JobPicker({
           </div>
         </div>
       </header>
-
-      {updateAvailable && (
-        <div className="bg-amber-500 text-slate-950 text-sm font-medium">
-          <div className="max-w-5xl mx-auto px-4 py-2 flex items-center justify-between gap-3">
-            <span>A new version of Riggy is ready</span>
-            <button
-              onClick={onApplyUpdate}
-              className="bg-slate-950 text-amber-400 text-xs font-semibold rounded-md px-3 py-1.5 hover:bg-slate-900"
-            >
-              Update now
-            </button>
-          </div>
-        </div>
-      )}
 
       <main className="max-w-5xl mx-auto px-4 py-5">
         {jobs.length > 0 && (
@@ -7770,6 +7754,20 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         )
       )}
 
+      {updateAvailable && (
+        <div className="fixed top-0 inset-x-0 z-[80] bg-amber-500 text-slate-950 text-sm font-medium shadow-lg">
+          <div className="max-w-5xl mx-auto px-4 py-2 flex items-center justify-between gap-3">
+            <span>A new version of Riggy is ready</span>
+            <button
+              onClick={applyUpdate}
+              className="bg-slate-950 text-amber-400 text-xs font-semibold rounded-md px-3 py-1.5 hover:bg-slate-900 shrink-0"
+            >
+              Update now
+            </button>
+          </div>
+        </div>
+      )}
+
       {syncing && (
         <div className="fixed bottom-3 right-3 z-[60] bg-amber-500 text-slate-950 text-xs font-semibold rounded-full px-3 py-2 flex items-center gap-2 shadow-lg">
           <div className="w-3 h-3 border-2 border-slate-950/30 border-t-slate-950 rounded-full animate-spin" />
@@ -8045,8 +8043,6 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
             refreshSuggestions();
             refreshResolvedSuggestions();
           }}
-          updateAvailable={updateAvailable}
-          onApplyUpdate={applyUpdate}
         />
       ) : (
         <JobInventory
