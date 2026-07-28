@@ -516,6 +516,15 @@ function ItemForm({
       )
     : null;
 
+  const [manualCatalogLinkId, setManualCatalogLinkId] = useState(null);
+  const [catalogPickerOpen, setCatalogPickerOpen] = useState(false);
+  const [catalogPickerSearch, setCatalogPickerSearch] = useState("");
+  const manualCatalogLink = manualCatalogLinkId
+    ? catalog.find((c) => c.id === manualCatalogLinkId)
+    : null;
+  // A manual choice always wins over whatever the automatic name-match found
+  const effectiveCatalogMatch = manualCatalogLink || existingCatalogMatch;
+
   const handleSerialsChange = (text) => {
     setSerialsText(text);
     const count = parseSerials(text).length;
@@ -573,6 +582,7 @@ function ItemForm({
     : null;
 
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
       <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
@@ -600,25 +610,48 @@ function ItemForm({
                 Consider editing that one instead of adding a duplicate.
               </p>
             )}
-            {!duplicateItem && existingCatalogMatch && (
-              <div className="flex items-center gap-2 mt-1.5">
+            {!duplicateItem && (
+              <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                 <p className="text-xs text-slate-600">
-                  Linked to catalog item "{existingCatalogMatch.name}"
+                  {effectiveCatalogMatch ? (
+                    <>
+                      Linked to catalog item "{effectiveCatalogMatch.name}"
+                      {manualCatalogLink && " (manually chosen)"}
+                    </>
+                  ) : (
+                    "No catalog match"
+                  )}
                 </p>
+                {effectiveCatalogMatch && (
+                  <button
+                    onClick={() =>
+                      setItem((prev) => ({
+                        ...prev,
+                        gang: effectiveCatalogMatch.gang,
+                        storage: effectiveCatalogMatch.storage,
+                        category: effectiveCatalogMatch.category || "",
+                        needsTransfer: !!effectiveCatalogMatch.needsTransfer,
+                      }))
+                    }
+                    className="text-xs text-amber-400 hover:text-amber-300 underline underline-offset-2"
+                  >
+                    Use these settings
+                  </button>
+                )}
                 <button
-                  onClick={() =>
-                    setItem((prev) => ({
-                      ...prev,
-                      gang: existingCatalogMatch.gang,
-                      storage: existingCatalogMatch.storage,
-                      category: existingCatalogMatch.category || "",
-                      needsTransfer: !!existingCatalogMatch.needsTransfer,
-                    }))
-                  }
-                  className="text-xs text-amber-400 hover:text-amber-300 underline underline-offset-2"
+                  onClick={() => setCatalogPickerOpen(true)}
+                  className="text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2"
                 >
-                  Use these settings
+                  Choose catalog item
                 </button>
+                {manualCatalogLink && (
+                  <button
+                    onClick={() => setManualCatalogLinkId(null)}
+                    className="text-xs text-slate-600 hover:text-slate-400 underline underline-offset-2"
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -892,8 +925,8 @@ function ItemForm({
                 className="w-3.5 h-3.5 rounded accent-amber-500 mt-0.5 shrink-0"
               />
               <span>
-                {existingCatalogMatch
-                  ? `Update "${existingCatalogMatch.name}" in the catalog with this gang/storage`
+                {effectiveCatalogMatch
+                  ? `Update "${effectiveCatalogMatch.name}" in the catalog with this gang/storage`
                   : "Also add this item to the catalog (auto-fills gang/storage on future imports)"}
               </span>
             </label>
@@ -921,7 +954,7 @@ function ItemForm({
 
               if (addToCatalog && onSaveCatalogItem) {
                 onSaveCatalogItem({
-                  id: existingCatalogMatch ? existingCatalogMatch.id : Date.now(),
+                  id: effectiveCatalogMatch ? effectiveCatalogMatch.id : Date.now(),
                   name: item.name.trim(),
                   gang: item.gang,
                   storage: item.storage,
@@ -946,6 +979,67 @@ function ItemForm({
         </div>
       </div>
     </div>
+
+    {catalogPickerOpen && (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+        <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+            <h3 className="text-slate-100 font-semibold text-base">Choose catalog item</h3>
+            <button
+              onClick={() => setCatalogPickerOpen(false)}
+              className="text-slate-400 hover:text-slate-200"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="px-5 pt-4 shrink-0">
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                autoFocus
+                value={catalogPickerSearch}
+                onChange={(e) => setCatalogPickerSearch(e.target.value)}
+                placeholder="Search catalog..."
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md pl-9 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            {catalog.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-10">
+                Your catalog is empty — add items to it first from the Item Catalog screen.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {[...catalog]
+                  .filter((c) =>
+                    c.name.toLowerCase().includes(catalogPickerSearch.trim().toLowerCase())
+                  )
+                  .sort((a, b) => a.name.localeCompare(b.name))
+                  .map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => {
+                        setManualCatalogLinkId(c.id);
+                        setCatalogPickerOpen(false);
+                        setCatalogPickerSearch("");
+                      }}
+                      className="w-full text-left border border-slate-800 rounded-md p-3 hover:border-slate-700"
+                    >
+                      <p className="text-sm text-slate-100">{c.name}</p>
+                      <p className="text-xs text-slate-500">
+                        {c.gang} · {c.storage}
+                        {c.category ? ` · ${c.category}` : ""}
+                      </p>
+                    </button>
+                  ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
