@@ -4813,44 +4813,44 @@ function JobInventory({
     }));
   };
 
-  const [categorySyncMessage, setCategorySyncMessage] = useState(null);
+  const [categorySync, setCategorySync] = useState(null); // { preview, applied }
 
-  const syncCategoriesFromCatalog = () => {
-    // Only fills in items that don't already have a category set — never
+  const buildCategorySyncPreview = () => {
+    // Only considers items that don't already have a category set — never
     // overwrites a category you deliberately chose by hand.
-    const updated = items.map((i) => {
-      if (i.category) return i;
+    const changes = [];
+    items.forEach((i) => {
+      if (i.category) return;
       const match = findCatalogMatch(i.name, catalog);
-      return match && match.category ? { ...i, category: match.category } : i;
+      if (match && match.category) {
+        changes.push({ id: i.id, name: i.name, newCategory: match.category });
+      }
     });
-    const changedCount = updated.filter((u, idx) => u.category !== items[idx].category).length;
-    const newCategoryNames = [...new Set(updated.map((u) => u.category).filter(Boolean))];
+    return changes;
+  };
 
-    if (changedCount > 0) {
-      onUpdateJob((prevJob) => ({
-        ...prevJob,
-        items: updated,
-        categoryOptions: [
-          ...new Set([...(prevJob.categoryOptions || []), ...newCategoryNames]),
-        ],
-        activityLog: [
-          {
-            id: Date.now(),
-            time: timeStamp(),
-            message: `Synced categories from catalog for ${changedCount} item${
-              changedCount === 1 ? "" : "s"
-            }`,
-          },
-          ...prevJob.activityLog,
-        ].slice(0, 50),
-      }));
-    }
-    setCategorySyncMessage(
-      changedCount > 0
-        ? `Updated ${changedCount} item${changedCount === 1 ? "" : "s"} from the catalog`
-        : "No items needed updating — everything already matches or has no catalog category"
-    );
-    setTimeout(() => setCategorySyncMessage(null), 3500);
+  const applyCategorySyncPreview = (preview) => {
+    const byId = new Map(preview.map((c) => [c.id, c.newCategory]));
+    const newCategoryNames = [...new Set(preview.map((c) => c.newCategory))];
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      items: prevJob.items.map((i) =>
+        byId.has(i.id) ? { ...i, category: byId.get(i.id) } : i
+      ),
+      categoryOptions: [
+        ...new Set([...(prevJob.categoryOptions || []), ...newCategoryNames]),
+      ],
+      activityLog: [
+        {
+          id: Date.now(),
+          time: timeStamp(),
+          message: `Synced categories from catalog for ${preview.length} item${
+            preview.length === 1 ? "" : "s"
+          }`,
+        },
+        ...prevJob.activityLog,
+      ].slice(0, 50),
+    }));
   };
 
   const renameContainer = (oldName, newName) => {
@@ -5233,9 +5233,68 @@ function JobInventory({
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      {categorySyncMessage && (
-        <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[60] bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-full px-4 py-2 shadow-lg max-w-xs text-center">
-          {categorySyncMessage}
+      {categorySync && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+          <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col">
+            <div className="px-5 py-4 border-b border-slate-800 shrink-0">
+              <h2 className="text-slate-100 font-semibold text-base">
+                {categorySync.applied
+                  ? "Categories updated"
+                  : categorySync.preview.length === 0
+                  ? "Nothing to sync"
+                  : `Sync ${categorySync.preview.length} item${
+                      categorySync.preview.length === 1 ? "" : "s"
+                    } from catalog?`}
+              </h2>
+              {!categorySync.applied && categorySync.preview.length === 0 && (
+                <p className="text-xs text-slate-500 mt-1">
+                  Every item either already has a category set, or has no catalog match with a
+                  category to pull from.
+                </p>
+              )}
+            </div>
+            {categorySync.preview.length > 0 && (
+              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-1.5">
+                {categorySync.preview.map((c) => (
+                  <div
+                    key={c.id}
+                    className="flex items-center justify-between gap-2 text-sm border border-slate-800 rounded-md px-3 py-2"
+                  >
+                    <span className="text-slate-200 truncate">{c.name}</span>
+                    <span className="text-teal-300 text-xs shrink-0">→ {c.newCategory}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-3 px-5 py-4 border-t border-slate-800 shrink-0">
+              {categorySync.applied || categorySync.preview.length === 0 ? (
+                <button
+                  onClick={() => setCategorySync(null)}
+                  className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+                >
+                  Done
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setCategorySync(null)}
+                    className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      applyCategorySyncPreview(categorySync.preview);
+                      setCategorySync({ preview: categorySync.preview, applied: true });
+                    }}
+                    className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+                  >
+                    Apply
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       )}
       {/* Header */}
@@ -5386,7 +5445,7 @@ function JobInventory({
                   {isEditor && (
                     <button
                       onClick={() => {
-                        syncCategoriesFromCatalog();
+                        setCategorySync({ preview: buildCategorySyncPreview(), applied: false });
                         setMenuOpen(false);
                       }}
                       className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
