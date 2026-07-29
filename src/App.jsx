@@ -3398,11 +3398,15 @@ function buildPickListHtml(jobName, groups, sortedGroupKeys, groupOption) {
           const containersText = (item.containers || [])
             .map((c) => `${c.name}: ${c.qty}`)
             .join(", ");
+          const unit = item.qtyUnit ? " " + escapeHtml(item.qtyUnit) : "";
+          const stillNeeded = Math.max(0, (item.qtyNeeded || 0) - (item.qtyHave || 0));
           return `
             <tr>
               <td><div class="checkbox"></div></td>
               <td>${escapeHtml(item.name)}</td>
-              <td>${escapeHtml(item.qtyNeeded)}${item.qtyUnit ? " " + escapeHtml(item.qtyUnit) : ""}</td>
+              <td>${escapeHtml(item.qtyNeeded)}${unit}</td>
+              <td>${escapeHtml(item.qtyHave)}${unit}</td>
+              <td>${escapeHtml(stillNeeded)}${unit}</td>
               <td>${escapeHtml(
                 item.storage === "Other" && item.storageDetail ? item.storageDetail : item.storage
               )}</td>
@@ -3415,7 +3419,15 @@ function buildPickListHtml(jobName, groups, sortedGroupKeys, groupOption) {
           ${groupHeader}
           <table>
             <thead>
-              <tr><th class="cb-col"></th><th>Item</th><th class="qty-col">Qty</th><th class="side-col">Storage</th><th class="side-col">Container</th></tr>
+              <tr>
+                <th class="cb-col"></th>
+                <th>Item</th>
+                <th class="qty-col">Qty Requested</th>
+                <th class="qty-col">Qty Have</th>
+                <th class="qty-col">Qty Needed</th>
+                <th class="side-col">Storage</th>
+                <th class="side-col">Container</th>
+              </tr>
             </thead>
             <tbody>${rows}</tbody>
           </table>
@@ -3441,7 +3453,7 @@ function buildPickListHtml(jobName, groups, sortedGroupKeys, groupOption) {
   thead tr { border-bottom: 1.5px solid #000; }
   tbody tr { border-top: 1px solid #ccc; }
   .cb-col { width: 36px; }
-  .qty-col { width: 70px; }
+  .qty-col { width: 58px; }
   .side-col { width: 110px; }
   .checkbox { width: 16px; height: 16px; border: 1.5px solid #000; }
   @media print {
