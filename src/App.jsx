@@ -266,6 +266,29 @@ function playSaveChime() {
   }
 }
 
+// A very short, quiet "tick" — meant for things you do over and over in a
+// row (checking off items, toggling a box), where a full chime would get
+// annoying fast.
+function playSoftTap() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = 1200;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.08, now + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.05);
+  } catch {
+    // Audio not available/blocked — fine to just skip it
+  }
+}
+
 function totalHave(containers) {
   return (containers || []).reduce((sum, c) => sum + (Number(c.qty) || 0), 0);
 }
@@ -2657,6 +2680,7 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
   };
 
   const toggleFulfilled = (id) => {
+    playSoftTap();
     onUpdateJob((prevJob) => ({
       ...prevJob,
       requisitions: (prevJob.requisitions || []).map((r) =>
@@ -5183,6 +5207,7 @@ function JobInventory({
   };
 
   const toggleItemSelect = (id) => {
+    playSoftTap();
     setSelectedIds((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
@@ -5287,6 +5312,7 @@ function JobInventory({
   };
 
   const toggleTodoDone = (id) => {
+    playSoftTap();
     onUpdateJob((prevJob) => ({
       ...prevJob,
       todos: (prevJob.todos || []).map((t) =>
