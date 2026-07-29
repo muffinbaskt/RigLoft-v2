@@ -238,6 +238,34 @@ function emptyItem(defaultStorage) {
   };
 }
 
+// A small, cheerful two-note chime played on save — synthesized directly
+// rather than loading a sound file, so there's nothing extra to bundle.
+function playSaveChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const now = ctx.currentTime;
+
+    const playNote = (freq, startTime, duration) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, startTime);
+      gain.gain.linearRampToValueAtTime(0.16, startTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(startTime);
+      osc.stop(startTime + duration);
+    };
+
+    playNote(880, now, 0.12); // A5
+    playNote(1318.51, now + 0.09, 0.22); // E6 — a bright little upward "ding-ding"
+  } catch {
+    // Audio not available/blocked in this browser — fine to just skip it
+  }
+}
+
 function totalHave(containers) {
   return (containers || []).reduce((sum, c) => sum + (Number(c.qty) || 0), 0);
 }
@@ -962,6 +990,8 @@ function ItemForm({
                   needsTransfer: !!item.needsTransfer,
                 });
               }
+
+              playSaveChime();
 
               onSave({
                 ...item,
