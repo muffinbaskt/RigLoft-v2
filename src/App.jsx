@@ -3461,10 +3461,13 @@ function buildPickListHtml(jobName, groups, sortedGroupKeys, groupOption) {
 
 function PickListModal({ jobName, items, onClose }) {
   const [groupOption, setGroupOption] = useState("gang");
+  const [outstandingOnly, setOutstandingOnly] = useState(false);
+
+  const filteredItems = outstandingOnly ? items.filter((i) => i.status !== "green") : items;
 
   const groups =
     groupOption === "container"
-      ? items.reduce((acc, item) => {
+      ? filteredItems.reduce((acc, item) => {
           if (!item.containers || item.containers.length === 0) {
             const key = "Not yet placed in a container";
             (acc[key] = acc[key] || []).push(item);
@@ -3475,7 +3478,7 @@ function PickListModal({ jobName, items, onClose }) {
           }
           return acc;
         }, {})
-      : items.reduce((acc, item) => {
+      : filteredItems.reduce((acc, item) => {
           const key =
             groupOption === "gang"
               ? item.gang
@@ -3518,7 +3521,8 @@ function PickListModal({ jobName, items, onClose }) {
               Print pick list
             </h2>
             <p className="text-xs text-slate-500">
-              {jobName} · {items.length} item{items.length === 1 ? "" : "s"}
+              {jobName} · {filteredItems.length} item{filteredItems.length === 1 ? "" : "s"}
+              {outstandingOnly ? " (partial or none only)" : ""}
             </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
@@ -3526,24 +3530,37 @@ function PickListModal({ jobName, items, onClose }) {
           </button>
         </div>
 
-        <div className="px-5 pt-4">
-          <label className="block text-xs font-medium text-slate-400 mb-1.5">Group by</label>
-          <select
-            value={groupOption}
-            onChange={(e) => setGroupOption(e.target.value)}
-            className="w-full appearance-none bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-          >
-            <option value="gang">Gang</option>
-            <option value="storage">Storage location</option>
-            <option value="container">Container</option>
-            <option value="none">Don't group</option>
-          </select>
+        <div className="px-5 pt-4 space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Group by</label>
+            <select
+              value={groupOption}
+              onChange={(e) => setGroupOption(e.target.value)}
+              className="w-full appearance-none bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            >
+              <option value="gang">Gang</option>
+              <option value="storage">Storage location</option>
+              <option value="container">Container</option>
+              <option value="none">Don't group</option>
+            </select>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={outstandingOnly}
+              onChange={(e) => setOutstandingOnly(e.target.checked)}
+              className="w-4 h-4 rounded accent-amber-500"
+            />
+            Only include partial or not-started items (skip anything complete)
+          </label>
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4">
-          {items.length === 0 ? (
+          {filteredItems.length === 0 ? (
             <p className="text-sm text-slate-500 text-center py-10">
-              This job doesn't have any items yet.
+              {outstandingOnly
+                ? "Nothing partial or outstanding — everything in this job is complete."
+                : "This job doesn't have any items yet."}
             </p>
           ) : (
             <ol className="text-xs text-slate-500 space-y-1.5 list-decimal list-inside">
@@ -3556,7 +3573,7 @@ function PickListModal({ jobName, items, onClose }) {
           )}
         </div>
 
-        {items.length > 0 && (
+        {filteredItems.length > 0 && (
           <div className="px-5 py-4 border-t border-slate-800 shrink-0">
             <button
               onClick={handleDownload}
