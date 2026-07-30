@@ -889,8 +889,7 @@ function ItemForm({
                 Consider editing that one instead of adding a duplicate.
               </p>
             )}
-            {!duplicateItem && (
-              <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                 <p className="text-xs text-slate-600">
                   {effectiveCatalogMatch ? (
                     <>
@@ -932,7 +931,6 @@ function ItemForm({
                   </button>
                 )}
               </div>
-            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
