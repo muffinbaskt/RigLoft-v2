@@ -372,6 +372,15 @@ function findCatalogMatch(name, catalog) {
   return tokenCandidates.length > 0 ? tokenCandidates[0].c : null;
 }
 
+// Same priority the item edit form itself uses: a manual catalog link
+// always wins over automatic name-matching.
+function getEffectiveCatalogMatch(item, catalog) {
+  if (item.catalogId) {
+    return catalog.find((c) => c.id === item.catalogId) || null;
+  }
+  return findCatalogMatch(item.name, catalog);
+}
+
 function parseImportText(text, catalog) {
   return text
     .split("\n")
@@ -560,6 +569,9 @@ function ItemForm({
   );
   const [serialsText, setSerialsText] = useState((initial.serials || []).join(", "));
   const [addToCatalog, setAddToCatalog] = useState(false);
+  const [qtContainerText, setQtContainerText] = useState(
+    (initial.containers && initial.containers[0] && initial.containers[0].name) || ""
+  );
   const set = (field) => (val) => setItem((prev) => ({ ...prev, [field]: val }));
 
   const existingCatalogMatch = item.name.trim()
@@ -634,6 +646,102 @@ function ItemForm({
         return normName === normOther;
       })
     : null;
+
+  if (isQuickTransfer) {
+    const saveQuickItem = () => {
+      if (!canSave) return;
+      const finalQtyNeeded = Number(item.qtyNeeded) || 0;
+      const finalSerials = parseSerials(serialsText);
+      const containerName = qtContainerText.trim();
+      playSaveChime();
+      onSave({
+        ...item,
+        qtyNeeded: finalQtyNeeded,
+        qtyHave: finalQtyNeeded,
+        containers: containerName ? [{ name: containerName, qty: finalQtyNeeded }] : [],
+        serials: finalSerials,
+        status: "green",
+      });
+    };
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+        <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-slate-100 font-semibold text-base">
+              {initial.id ? "Edit item" : "Add item"}
+            </h2>
+            <button onClick={onCancel} className="text-slate-400 hover:text-slate-200">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">Item</label>
+              <input
+                autoFocus
+                value={item.name}
+                onChange={(e) => set("name")(e.target.value)}
+                placeholder="e.g. Comealong, 3ton"
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+              {duplicateItem && (
+                <p className="text-xs text-amber-400 mt-1.5">
+                  ⚠ Already in this list: "{duplicateItem.name}"
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">QTY</label>
+              <input
+                type="number"
+                min="0"
+                value={item.qtyNeeded}
+                onChange={(e) => set("qtyNeeded")(e.target.value)}
+                placeholder="0"
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">SME</label>
+              <input
+                value={serialsText}
+                onChange={(e) => setSerialsText(e.target.value)}
+                placeholder="12345, 12346, 12347"
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                Container <span className="text-slate-600">(optional)</span>
+              </label>
+              <input
+                value={qtContainerText}
+                onChange={(e) => setQtContainerText(e.target.value)}
+                placeholder="Leave blank if it's just going in the truck"
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+          </div>
+          <div className="flex gap-3 mt-5">
+            <button
+              onClick={onCancel}
+              className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={saveQuickItem}
+              disabled={!canSave}
+              className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+            >
+              Save item
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -4602,6 +4710,8 @@ function JobPicker({
   onSignOut,
   pendingSuggestionCount,
   onOpenSuggestions,
+  onCheckForUpdate,
+  updateCheckMessage,
 }) {
   const [collapsed, setCollapsed] = useState({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -4643,12 +4753,15 @@ function JobPicker({
   const matchingItemResults = searching
     ? jobs.flatMap((j) =>
         j.items
-          .filter(
-            (i) =>
+          .filter((i) => {
+            const catalogMatch = getEffectiveCatalogMatch(i, catalog);
+            return (
               i.name.toLowerCase().includes(query) ||
               (i.category || "").toLowerCase().includes(query) ||
-              (i.serials || []).some((s) => s.toLowerCase().includes(query))
-          )
+              (i.serials || []).some((s) => s.toLowerCase().includes(query)) ||
+              (catalogMatch && catalogMatch.name.toLowerCase().includes(query))
+            );
+          })
           .map((i) => ({
             item: i,
             job: j,
@@ -4661,12 +4774,21 @@ function JobPicker({
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
+      {updateCheckMessage && (
+        <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[90] bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-full px-4 py-2 shadow-lg">
+          {updateCheckMessage}
+        </div>
+      )}
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
         <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-md bg-amber-500 flex items-center justify-center">
+            <button
+              onClick={onCheckForUpdate}
+              title="Check for updates"
+              className="w-8 h-8 rounded-md bg-amber-500 flex items-center justify-center active:scale-90 transition-transform"
+            >
               <Package className="w-4.5 h-4.5 text-slate-950" strokeWidth={2.5} />
-            </div>
+            </button>
             <div>
               <h1 className="font-bold text-slate-100 leading-tight flex items-center gap-2">
                 Riggy
@@ -5272,12 +5394,14 @@ function JobInventory({
   const matchesSearch = (item) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.trim().toLowerCase();
+    const catalogMatch = getEffectiveCatalogMatch(item, catalog);
     return (
       item.name.toLowerCase().includes(q) ||
       (item.category || "").toLowerCase().includes(q) ||
       (item.containers || []).some((c) => c.name.toLowerCase().includes(q)) ||
       (item.notes || "").toLowerCase().includes(q) ||
-      (item.serials || []).some((sn) => sn.toLowerCase().includes(q))
+      (item.serials || []).some((sn) => sn.toLowerCase().includes(q)) ||
+      (catalogMatch && catalogMatch.name.toLowerCase().includes(q))
     );
   };
 
@@ -7405,6 +7529,9 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   // background and is sitting ready — instead of silently waiting for every
   // tab to close before it takes over, this surfaces a button so you can
   // apply it on demand.
+  const swRegistrationRef = useRef(null);
+  const [updateCheckMessage, setUpdateCheckMessage] = useState(null);
+
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
 
@@ -7416,11 +7543,9 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     };
     navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
 
-    let registrationRef = null;
-
     navigator.serviceWorker.getRegistration().then((registration) => {
       if (!registration) return;
-      registrationRef = registration;
+      swRegistrationRef.current = registration;
 
       // An update may already be sitting there waiting from before this
       // page load even happened.
@@ -7447,7 +7572,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     });
 
     const recheck = () => {
-      if (registrationRef) registrationRef.update().catch(() => {});
+      if (swRegistrationRef.current) swRegistrationRef.current.update().catch(() => {});
     };
     const onVisible = () => {
       if (document.visibilityState === "visible") recheck();
@@ -7468,6 +7593,22 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     } else {
       window.location.reload();
     }
+  };
+
+  const checkForUpdateNow = async () => {
+    if (!swRegistrationRef.current) {
+      setUpdateCheckMessage("Not available in this browser");
+    } else {
+      setUpdateCheckMessage("Checking...");
+      await swRegistrationRef.current.update().catch(() => {});
+      // Give the "updatefound" listener a moment to fire before reporting
+      setTimeout(() => {
+        setUpdateCheckMessage(
+          waitingWorkerRef.current ? "Update found!" : "You're on the latest version"
+        );
+      }, 600);
+    }
+    setTimeout(() => setUpdateCheckMessage(null), 3000);
   };
 
   // Fix for a known iOS/Safari quirk: elements with :hover styles can require
@@ -8541,6 +8682,8 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
             refreshSuggestions();
             refreshResolvedSuggestions();
           }}
+          onCheckForUpdate={checkForUpdateNow}
+          updateCheckMessage={updateCheckMessage}
         />
       ) : (
         <JobInventory
