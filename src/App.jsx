@@ -221,6 +221,7 @@ function parseSerials(text) {
 function emptyItem(defaultStorage) {
   return {
     id: null,
+    _formKey: `new-${Date.now()}-${Math.random()}`,
     name: "",
     qtyNeeded: "",
     qtyUnit: "",
@@ -611,13 +612,7 @@ function ItemForm({
   );
   const set = (field) => (val) => setItem((prev) => ({ ...prev, [field]: val }));
 
-  const existingCatalogMatch = item.name.trim()
-    ? catalog.find(
-        (c) =>
-          normalizeText(c.name).replace(/\s+/g, "") ===
-          normalizeText(item.name).replace(/\s+/g, "")
-      )
-    : null;
+  const existingCatalogMatch = item.name.trim() ? findCatalogMatch(item.name, catalog) : null;
 
   const [manualCatalogLinkId, setManualCatalogLinkId] = useState(initial.catalogId || null);
   const [catalogPickerOpen, setCatalogPickerOpen] = useState(false);
@@ -691,8 +686,9 @@ function ItemForm({
       const finalSerials = parseSerials(serialsText);
       const containerName = qtContainerText.trim();
       playSaveChime();
+      const { _formKey, ...itemToSave } = item;
       onSave({
-        ...item,
+        ...itemToSave,
         qtyNeeded: finalQtyNeeded,
         qtyHave: finalQtyNeeded,
         containers: containerName ? [{ name: containerName, qty: finalQtyNeeded }] : [],
@@ -1266,8 +1262,9 @@ function ItemForm({
 
               playSaveChime();
 
+              const { _formKey, ...itemToSave } = item;
               onSave({
-                ...item,
+                ...itemToSave,
                 qtyNeeded: finalQtyNeeded,
                 qtyHave: finalQtyHave,
                 containers: cleanContainers,
@@ -6962,6 +6959,7 @@ function JobInventory({
 
       {formState && (
         <ItemForm
+          key={formState.id || formState._formKey || "new"}
           initial={formState}
           containerOptions={containerOptions}
           onAddContainer={addContainer}
