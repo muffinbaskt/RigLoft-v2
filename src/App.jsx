@@ -5139,7 +5139,7 @@ function JobPicker({
                   </span>
                 )}
               </h1>
-              <p className="text-xs text-slate-500 leading-tight">Select a job ⚡</p>
+              <p className="text-xs text-slate-500 leading-tight">Select a job 🔔</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
