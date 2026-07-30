@@ -4936,6 +4936,12 @@ function JobInventory({
   const [bulkContainerPicker, setBulkContainerPicker] = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
+  const [quickTransfersOpen, setQuickTransfersOpen] = useState(false);
+  const [qtAdding, setQtAdding] = useState(false);
+  const [qtItemName, setQtItemName] = useState("");
+  const [qtQty, setQtQty] = useState("");
+  const [qtRecipient, setQtRecipient] = useState("");
+  const [qtDeleteTarget, setQtDeleteTarget] = useState(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [containersOpen, setContainersOpen] = useState(false);
@@ -5333,6 +5339,37 @@ function JobInventory({
       ...prevJob,
       todos: (prevJob.todos || []).filter((t) => !ids.includes(t.id)),
     }));
+  };
+
+  const addQuickTransfer = () => {
+    const name = qtItemName.trim();
+    if (!name) return;
+    playSaveChime();
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      quickTransfers: [
+        {
+          id: Date.now(),
+          itemName: name,
+          qty: qtQty.trim() || "1",
+          recipient: qtRecipient.trim(),
+          time: timeStamp(),
+        },
+        ...(prevJob.quickTransfers || []),
+      ],
+    }));
+    setQtItemName("");
+    setQtQty("");
+    setQtRecipient("");
+    setQtAdding(false);
+  };
+
+  const deleteQuickTransfer = (id) => {
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      quickTransfers: (prevJob.quickTransfers || []).filter((t) => t.id !== id),
+    }));
+    setQtDeleteTarget(null);
   };
 
   const bulkDelete = () => {
@@ -6050,6 +6087,112 @@ function JobInventory({
           </div>
         )}
 
+        {/* Quick transfers */}
+        <div className="mt-6 border border-slate-800 rounded-lg overflow-hidden">
+          <button
+            onClick={() => setQuickTransfersOpen((v) => !v)}
+            className="w-full flex items-center justify-between px-4 py-3 bg-slate-900 hover:bg-slate-800/60"
+          >
+            <span className="flex items-center gap-2 text-sm font-medium text-slate-300">
+              <Truck className="w-4 h-4 text-slate-500" />
+              Quick transfers
+              <span className="text-xs text-slate-600">
+                ({(job.quickTransfers || []).length})
+              </span>
+            </span>
+            <ChevronDown
+              className={`w-4 h-4 text-slate-500 transition-transform ${
+                quickTransfersOpen ? "rotate-180" : ""
+              }`}
+            />
+          </button>
+          {quickTransfersOpen && (
+            <div>
+              {isEditor && (
+                <div className="px-4 py-3 border-b border-slate-800 bg-slate-900/50">
+                  {qtAdding ? (
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-3 gap-2">
+                        <input
+                          autoFocus
+                          value={qtItemName}
+                          onChange={(e) => setQtItemName(e.target.value)}
+                          placeholder="Item"
+                          className="col-span-2 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                        />
+                        <input
+                          value={qtQty}
+                          onChange={(e) => setQtQty(e.target.value)}
+                          placeholder="Qty"
+                          className="bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                        />
+                      </div>
+                      <input
+                        value={qtRecipient}
+                        onChange={(e) => setQtRecipient(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && addQuickTransfer()}
+                        placeholder="Given to (name, or just \"field\")"
+                        className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setQtAdding(false)}
+                          className="flex-1 text-xs rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={addQuickTransfer}
+                          className="flex-1 text-xs rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+                        >
+                          Log transfer
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setQtAdding(true)}
+                      className="w-full flex items-center justify-center gap-1.5 text-sm text-amber-400 hover:text-amber-300 py-1"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Log a quick transfer
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="max-h-72 overflow-y-auto divide-y divide-slate-800/80">
+                {(job.quickTransfers || []).length === 0 ? (
+                  <p className="text-sm text-slate-500 text-center py-6">
+                    Nothing logged yet — use this for small handoffs to people who stop by the
+                    shop, without adding them as full job items.
+                  </p>
+                ) : (
+                  (job.quickTransfers || []).map((t) => (
+                    <div key={t.id} className="px-4 py-2.5 flex items-center gap-3">
+                      <span className="text-xs text-slate-600 shrink-0 w-28">{t.time}</span>
+                      <span className="text-sm text-slate-300 flex-1 min-w-0">
+                        <span className="text-slate-100 font-medium">{t.qty}x</span>{" "}
+                        {t.itemName}
+                        {t.recipient && (
+                          <span className="text-slate-500"> → {t.recipient}</span>
+                        )}
+                      </span>
+                      {isEditor && (
+                        <button
+                          onClick={() => setQtDeleteTarget(t)}
+                          className="text-slate-600 hover:text-red-400 shrink-0"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Activity log */}
         <div className="mt-6 border border-slate-800 rounded-lg overflow-hidden">
           <button
@@ -6102,6 +6245,15 @@ function JobInventory({
             setDeleteTarget(null);
           }}
           onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+
+      {qtDeleteTarget && (
+        <ConfirmDelete
+          title="Remove this transfer record?"
+          message={`"${qtDeleteTarget.qty}x ${qtDeleteTarget.itemName}" will be removed from the log.`}
+          onConfirm={() => deleteQuickTransfer(qtDeleteTarget.id)}
+          onCancel={() => setQtDeleteTarget(null)}
         />
       )}
 
