@@ -7994,11 +7994,18 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   };
 
   const checkForUpdateNow = async () => {
-    if (!swRegistrationRef.current) {
+    if (!("serviceWorker" in navigator)) {
       setUpdateCheckMessage("Not available in this browser");
+      setTimeout(() => setUpdateCheckMessage(null), 3000);
+      return;
+    }
+    setUpdateCheckMessage("Checking...");
+    const registration = await navigator.serviceWorker.getRegistration();
+    if (registration) swRegistrationRef.current = registration;
+    if (!registration) {
+      setUpdateCheckMessage("Still setting up — try again in a moment");
     } else {
-      setUpdateCheckMessage("Checking...");
-      await swRegistrationRef.current.update().catch(() => {});
+      await registration.update().catch(() => {});
       // Give the "updatefound" listener a moment to fire before reporting
       setTimeout(() => {
         setUpdateCheckMessage(
