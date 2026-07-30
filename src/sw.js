@@ -1,5 +1,10 @@
 import { precacheAndRoute } from "workbox-precaching";
 
+// Guarantees this file's actual bytes are different on every single build,
+// no matter what else changed — so the browser's own update check can
+// never mistake an old version for the current one.
+self.__BUILD_STAMP__ = "__BUILD_TIME__";
+
 // Standard PWA app-shell caching, same as before
 precacheAndRoute(self.__WB_MANIFEST);
 
