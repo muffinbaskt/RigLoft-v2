@@ -5079,8 +5079,16 @@ function JobPicker({
 
   const matchingItemResultsByJob = useMemo(() => {
     if (!searching) return [];
-    const byJob = new Map();
+    const byGroupKey = new Map();
     jobs.forEach((j) => {
+      // Quick transfer entries roll up under their shared parent folder for
+      // display purposes — otherwise every single timestamped transfer
+      // would show as its own separate group instead of collapsing
+      // together the same way they do on the job picker screen.
+      const groupJob =
+        j.isQuickTransfer && j.parentId
+          ? jobs.find((p) => p.id === j.parentId) || j
+          : j;
       (j.items || []).forEach((i) => {
         const catalogMatch = catalogMatchByItemKey.get(`${j.id}-${i.id}`);
         const matches =
@@ -5090,11 +5098,14 @@ function JobPicker({
           (catalogMatch && catalogMatch.name.toLowerCase().includes(query));
         if (!matches) return;
         const matchedSerial = (i.serials || []).find((s) => s.toLowerCase().includes(query));
-        if (!byJob.has(j.id)) byJob.set(j.id, { job: j, results: [] });
-        byJob.get(j.id).results.push({ item: i, matchedSerial });
+        if (!byGroupKey.has(groupJob.id)) byGroupKey.set(groupJob.id, { job: groupJob, results: [] });
+        // navJobId is where this specific item actually lives — needed since
+        // that may be a child entry even though the group is shown under
+        // its parent's name.
+        byGroupKey.get(groupJob.id).results.push({ item: i, matchedSerial, navJobId: j.id });
       });
     });
-    return [...byJob.values()].sort((a, b) => a.job.name.localeCompare(b.job.name));
+    return [...byGroupKey.values()].sort((a, b) => a.job.name.localeCompare(b.job.name));
   }, [searching, query, jobs, catalogMatchByItemKey]);
 
   const totalMatchingItems = matchingItemResultsByJob.reduce(
@@ -5252,6 +5263,11 @@ function JobPicker({
                     <div className="space-y-3">
                       {matchingItemResultsByJob.map(({ job, results }) => {
                         const isCollapsed = itemResultsCollapsed[job.id];
+                        const dotClass = job.isQuickTransfer
+                          ? "bg-sky-500"
+                          : job.parentId
+                          ? "bg-purple-500"
+                          : "bg-slate-600";
                         return (
                           <div key={job.id}>
                             <button
@@ -5268,19 +5284,30 @@ function JobPicker({
                                   isCollapsed ? "-rotate-90" : ""
                                 }`}
                               />
+                              <span className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`} />
                               <span className="text-sm font-medium text-slate-200 truncate">
                                 {job.name}
                               </span>
+                              {job.isQuickTransfer && (
+                                <span className="text-[10px] font-medium tracking-wide uppercase bg-sky-500/10 border border-sky-500/40 text-sky-300 rounded-full px-1.5 py-0.5 shrink-0">
+                                  Quick
+                                </span>
+                              )}
+                              {!job.isQuickTransfer && job.parentId && (
+                                <span className="text-[10px] font-medium tracking-wide uppercase bg-purple-500/10 border border-purple-500/40 text-purple-300 rounded-full px-1.5 py-0.5 shrink-0">
+                                  Sub-job
+                                </span>
+                              )}
                               <span className="text-xs text-slate-600 shrink-0">
                                 {results.length} item{results.length === 1 ? "" : "s"}
                               </span>
                             </button>
                             {!isCollapsed && (
                               <div className="space-y-2">
-                                {results.map(({ item, matchedSerial }) => (
+                                {results.map(({ item, matchedSerial, navJobId }) => (
                                   <button
                                     key={item.id}
-                                    onClick={() => onSelect(job.id)}
+                                    onClick={() => onSelect(navJobId)}
                                     className="w-full text-left bg-slate-900 border border-slate-800 rounded-md p-3 hover:border-slate-700"
                                   >
                                     <p className="text-sm text-slate-100 truncate">{item.name}</p>
@@ -8543,12 +8570,11 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
       (j) => j.isQuickTransfer && !j.parentId && j.name.toLowerCase() === trimmed.toLowerCase()
     );
 
-    const entryName = new Date().toLocaleString([], {
-      month: "short",
+    const entryName = `${new Date().toLocaleDateString([], {
+      month: "numeric",
       day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
+      year: "numeric",
+    })} - ${trimmed}`;
 
     if (parent) {
       const entry = newJob(entryName, parent.id, null, true);
