@@ -20,7 +20,10 @@ export default defineConfig({
       injectManifest: {
         globPatterns: ["**/*.{js,css,html,png,svg,ico}"],
       },
-      registerType: "autoUpdate",
+      // "prompt" (not "autoUpdate") — autoUpdate was letting Vite's
+      // auto-injected registration script silently apply updates on its
+      // own, racing against our custom manual-check button and banner.
+      registerType: "prompt",
       includeAssets: ["icon-192.png", "icon-512.png", "icon-512-maskable.png"],
       manifest: {
         name: "Riggy",
