@@ -3521,6 +3521,18 @@ function TodoListModal({
   const [newText, setNewText] = useState("");
   const [sentIds, setSentIds] = useState({});
 
+  // For tasks created from "Add to To Do," the quantity was only ever a
+  // snapshot at the moment it was added — this looks up the actual current
+  // item so the task reflects reality instead of staying frozen forever.
+  const getTodoDisplayText = (t) => {
+    if (!t.itemId) return t.text;
+    const item = (job.items || []).find((i) => i.id === t.itemId);
+    if (!item) return t.text; // item was deleted — fall back to the snapshot
+    return `${item.name} — ${item.qtyHave} out of ${item.qtyNeeded}${
+      item.qtyUnit ? ` ${item.qtyUnit}` : ""
+    }`;
+  };
+
   const [taskSuggestionSent, setTaskSuggestionSent] = useState(false);
 
   const submitCustom = async () => {
@@ -3610,7 +3622,7 @@ function TodoListModal({
                         className="w-4 h-4 rounded accent-emerald-500 mt-0.5 shrink-0 cursor-pointer disabled:cursor-default disabled:opacity-50"
                       />
                       <p className="text-sm text-slate-100 flex-1 min-w-0">
-                        {t.text}
+                        {getTodoDisplayText(t)}
                         {!isEditor && sentIds[t.id] && (
                           <span className="block text-xs text-amber-400 mt-0.5">
                             Sent for approval
@@ -3656,7 +3668,7 @@ function TodoListModal({
                           className="w-4 h-4 rounded accent-emerald-500 mt-0.5 shrink-0 cursor-pointer disabled:cursor-default"
                         />
                         <p className="text-sm text-slate-400 line-through flex-1 min-w-0">
-                          {t.text}
+                          {getTodoDisplayText(t)}
                         </p>
                         {isEditor && (
                           <button
@@ -6409,8 +6421,8 @@ function JobInventory({
             </button>
             {menuOpen && (
               <>
-                <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-                <div className="absolute right-0 top-full mt-2 w-48 bg-slate-800 border border-slate-700 rounded-md shadow-lg z-20 overflow-hidden">
+                <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(false)} />
+                <div className="absolute right-0 top-full mt-2 w-48 bg-slate-800 border border-slate-700 rounded-md shadow-lg z-40 overflow-hidden">
                   {isEditor && (
                     <button
                       onClick={() => {
