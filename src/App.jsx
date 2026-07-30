@@ -6131,7 +6131,7 @@ function JobInventory({
                         value={qtRecipient}
                         onChange={(e) => setQtRecipient(e.target.value)}
                         onKeyDown={(e) => e.key === "Enter" && addQuickTransfer()}
-                        placeholder="Given to (name, or just \"field\")"
+                        placeholder={'Given to (name, or just "field")'}
                         className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
                       />
                       <div className="flex gap-2">
