@@ -20,6 +20,7 @@ import {
   ArrowUpDown,
   MoreVertical,
   Upload,
+  FileText,
   BookOpen,
   Archive,
   CheckSquare,
@@ -2904,6 +2905,145 @@ const REQUISITION_TEMPLATES = {
   "Safety Post": ["#7 (Hook Pole)", "#9 (Rectangle)", "#10 (V)"],
 };
 
+function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
+  const docs = job.referenceDocuments || [];
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const handleFileChosen = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // allow choosing the same file again later
+    if (!file) return;
+    setUploadError(null);
+    setUploading(true);
+    const result = await uploadReferenceDocument(job.id, file);
+    setUploading(false);
+    if (!result.ok) {
+      setUploadError(result.error || "Upload failed");
+      return;
+    }
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      referenceDocuments: [
+        ...(prevJob.referenceDocuments || []),
+        {
+          id: Date.now(),
+          name: result.name,
+          url: result.url,
+          path: result.path,
+          uploadedAt: timeStamp(),
+        },
+      ],
+      activityLog: [
+        {
+          id: Date.now(),
+          time: timeStamp(),
+          message: `Uploaded reference document "${result.name}"`,
+        },
+        ...prevJob.activityLog,
+      ].slice(0, 50),
+    }));
+  };
+
+  const confirmDelete = async () => {
+    const doc = deleteTarget;
+    setDeleteTarget(null);
+    await deleteReferenceDocument(doc.path);
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      referenceDocuments: (prevJob.referenceDocuments || []).filter((d) => d.id !== doc.id),
+    }));
+  };
+
+  return (
+    <>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+        <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+            <div>
+              <h2 className="text-slate-100 font-semibold text-base">Reference documents</h2>
+              <p className="text-xs text-slate-500">Original sheets, orders, or drawings for this job</p>
+            </div>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            {docs.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-10">
+                Nothing uploaded yet — attach the original PDF this job's items came from, so
+                it's easy to reference later.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {docs.map((doc) => (
+                  <div
+                    key={doc.id}
+                    className="flex items-center justify-between gap-2 border border-slate-800 rounded-md p-3"
+                  >
+                    <a
+                      href={doc.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 min-w-0 flex-1 hover:text-amber-400"
+                    >
+                      <FileText className="w-4 h-4 text-slate-500 shrink-0" />
+                      <span className="text-sm text-slate-100 truncate">{doc.name}</span>
+                    </a>
+                    {isEditor && (
+                      <button
+                        onClick={() => setDeleteTarget(doc)}
+                        className="text-slate-600 hover:text-red-400 shrink-0"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {uploadError && (
+              <p className="text-xs text-red-400 mt-3">Couldn't upload: {uploadError}</p>
+            )}
+          </div>
+
+          {isEditor && (
+            <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/pdf,image/*"
+                onChange={handleFileChosen}
+                className="hidden"
+              />
+              <button
+                onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                disabled={uploading}
+                className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-50"
+              >
+                <Upload className="w-4 h-4" />
+                {uploading ? "Uploading..." : "Upload PDF"}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {deleteTarget && (
+        <ConfirmDelete
+          title="Remove this document?"
+          message={`"${deleteTarget.name}" will be removed. This can't be undone.`}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+    </>
+  );
+}
+
 function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
   const requisitions = job.requisitions || [];
   const [addingCategory, setAddingCategory] = useState(false);
@@ -5608,6 +5748,7 @@ function JobInventory({
   const [bulkContainerPicker, setBulkContainerPicker] = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
+  const [referenceDocsOpen, setReferenceDocsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [containersOpen, setContainersOpen] = useState(false);
@@ -6336,6 +6477,21 @@ function JobInventory({
                     <BookOpen className="w-4 h-4 text-slate-400" />
                     Item catalog
                   </button>
+                  <button
+                    onClick={() => {
+                      setReferenceDocsOpen(true);
+                      setMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                  >
+                    <FileText className="w-4 h-4 text-slate-400" />
+                    Reference documents
+                    {(job.referenceDocuments || []).length > 0 && (
+                      <span className="text-xs text-slate-500 ml-auto">
+                        ({job.referenceDocuments.length})
+                      </span>
+                    )}
+                  </button>
                   {isEditor && (
                     <button
                       onClick={() => {
@@ -7024,6 +7180,15 @@ function JobInventory({
         />
       )}
 
+      {referenceDocsOpen && (
+        <ReferenceDocsModal
+          job={job}
+          isEditor={isEditor}
+          onUpdateJob={onUpdateJob}
+          onClose={() => setReferenceDocsOpen(false)}
+        />
+      )}
+
       {suggestEditTarget && (
         <SuggestEditModal
           job={job}
@@ -7178,6 +7343,28 @@ async function fetchResolvedSuggestions() {
       .order("resolved_at", { ascending: false });
     if (error) return { ok: false, error: error.message };
     return { ok: true, suggestions: data || [] };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
+async function uploadReferenceDocument(jobId, file) {
+  try {
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const path = `${jobId}/${Date.now()}-${safeName}`;
+    const { error } = await supabase.storage.from("job-documents").upload(path, file);
+    if (error) return { ok: false, error: error.message };
+    const { data } = supabase.storage.from("job-documents").getPublicUrl(path);
+    return { ok: true, url: data.publicUrl, path, name: file.name };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
+async function deleteReferenceDocument(path) {
+  try {
+    const { error } = await supabase.storage.from("job-documents").remove([path]);
+    return { ok: !error, error: error ? error.message : null };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };
   }
