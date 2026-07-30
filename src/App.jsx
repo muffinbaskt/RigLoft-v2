@@ -704,8 +704,8 @@ function ItemForm({
 
     return (
       <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" onClick={onCancel}>
-        <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg p-5" onClick={(e) => e.stopPropagation()}>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+        <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg p-5">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-slate-100 font-semibold text-base">
               {initial.id ? "Edit item" : "Add item"}
@@ -866,8 +866,8 @@ function ItemForm({
 
   return (
     <>
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40" onClick={onCancel}>
-      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
           <h2 className="text-slate-100 font-semibold text-base">
             {initial.id ? "Edit item" : "Add item"}
@@ -1701,8 +1701,8 @@ function CatalogItemForm({ initial, existingCategories = [], existingVendors = [
   const canSave = item.name.trim().length > 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40" onClick={onCancel}>
-      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
           <h2 className="text-slate-100 font-semibold text-base">
             {initial.id ? "Edit catalog item" : "Add catalog item"}
@@ -1966,8 +1966,8 @@ function CatalogBulkAddModal({ onImport, onCancel }) {
     : 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40" onClick={onCancel}>
-      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
           <div>
             <h2 className="text-slate-100 font-semibold text-base">Bulk add catalog items</h2>
@@ -2519,8 +2519,8 @@ function ContainerDetailModal({
 
   if (picking) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40" onClick={() => setPicking(false)}>
-        <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col" onClick={(e) => e.stopPropagation()}>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+        <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col">
           <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
             <div>
               <h2 className="text-slate-100 font-semibold text-base">Pull items</h2>
@@ -4286,8 +4286,8 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
   const matchedCount = preview ? preview.filter((p) => p.matched).length : 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40" onClick={onClose}>
-      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
           <div>
             <h2 className="text-slate-100 font-semibold text-base">Import items</h2>
@@ -4521,8 +4521,8 @@ function SuggestEditModal({ job, item, onSubmit, onClose }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40" onClick={onClose}>
-      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
           <div>
             <h2 className="text-slate-100 font-semibold text-base">Suggest a change</h2>
@@ -4678,8 +4678,8 @@ function SuggestNewItemModal({ job, onClose }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40" onClick={onClose}>
-      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
           <h2 className="text-slate-100 font-semibold text-base">Suggest a new item</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
@@ -4951,8 +4951,8 @@ function QuickTransferNameModal({ onSubmit, onCancel }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" onClick={onCancel}>
-      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
         <h3 className="text-slate-100 font-semibold mb-1.5">Quick transfer</h3>
         <p className="text-xs text-slate-500 mb-3">
           Type a job name, a person's name, or wherever it's headed — "Comealong, 5" style
@@ -5004,8 +5004,8 @@ function JobNameModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" onClick={onCancel}>
-      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
         <h3 className="text-slate-100 font-semibold mb-1">{title}</h3>
         {parentName && (
           <p className="text-xs text-slate-500 mb-2">Under "{parentName}"</p>
@@ -9536,8 +9536,8 @@ export default function AuthGate() {
         onRequestLogin={() => setShowLogin(true)}
       />
       {showLogin && !session && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-4" onClick={() => setShowLogin(false)}>
-          <div className="relative w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-4">
+          <div className="relative w-full max-w-sm">
             <button
               onClick={() => setShowLogin(false)}
               className="absolute -top-10 right-0 text-slate-400 hover:text-slate-200"
