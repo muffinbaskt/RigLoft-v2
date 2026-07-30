@@ -5895,6 +5895,7 @@ function JobInventory({
   };
 
   const bulkUpdate = (updater, label) => {
+    playSaveChime();
     onUpdateJob((prevJob) => ({
       ...prevJob,
       items: prevJob.items.map((i) => (selectedItemIds.includes(i.id) ? updater(i) : i)),
@@ -5960,6 +5961,7 @@ function JobInventory({
   };
 
   const bulkAddToTodo = () => {
+    playSaveChime();
     const newTodos = selectedItemIds.map((id, idx) => {
       const item = items.find((i) => i.id === id);
       const text = `${item.name} — ${item.qtyHave} out of ${item.qtyNeeded}${
@@ -6010,6 +6012,7 @@ function JobInventory({
   };
 
   const bulkDelete = () => {
+    playSaveChime();
     onUpdateJob((prevJob) => ({
       ...prevJob,
       items: prevJob.items.filter((i) => !selectedItemIds.includes(i.id)),
