@@ -155,13 +155,14 @@ function seedJob() {
   };
 }
 
-function newJob(name, parentId = null, color = null) {
+function newJob(name, parentId = null, color = null, isQuickTransfer = false) {
   return {
     id: Date.now(),
     name,
     createdAt: timeStamp(),
     parentId,
     color,
+    isQuickTransfer,
     items: [],
     containerOptions: [],
     categoryOptions: [],
@@ -4376,6 +4377,49 @@ function ConfirmDelete({ title, message, confirmLabel = "Delete", onConfirm, onC
   );
 }
 
+function QuickTransferNameModal({ onSubmit, onCancel }) {
+  const [name, setName] = useState("");
+
+  const submit = () => {
+    if (name.trim()) onSubmit(name.trim());
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+        <h3 className="text-slate-100 font-semibold mb-1.5">Quick transfer</h3>
+        <p className="text-xs text-slate-500 mb-3">
+          Type a job name, a person's name, or wherever it's headed — "Comealong, 5" style
+          entries under it will group together every time you use this same name again.
+        </p>
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          placeholder="e.g. John, or Job 2442"
+          className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+        />
+        <div className="flex gap-3">
+          <button
+            onClick={onCancel}
+            className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={!name.trim()}
+            className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+          >
+            Continue
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function JobNameModal({
   initialName = "",
   initialColor = null,
@@ -4462,10 +4506,21 @@ function JobCard({ job, indent, outstanding, isEditor, onSelect, onRename, onDel
     >
       <div className="flex items-center gap-3 min-w-0 flex-1">
         <div className="w-9 h-9 rounded-md bg-slate-800 flex items-center justify-center shrink-0">
-          <Briefcase className="w-4 h-4 text-slate-400" />
+          {job.isQuickTransfer ? (
+            <Truck className="w-4 h-4 text-slate-400" />
+          ) : (
+            <Briefcase className="w-4 h-4 text-slate-400" />
+          )}
         </div>
         <div className="min-w-0 flex-1">
-          <p className="font-semibold text-slate-100 truncate">{job.name}</p>
+          <p className="font-semibold text-slate-100 truncate flex items-center gap-1.5">
+            {job.name}
+            {job.isQuickTransfer && (
+              <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-400 rounded-full px-1.5 py-0.5 shrink-0">
+                Quick
+              </span>
+            )}
+          </p>
           <p className="text-xs text-slate-500">
             {items.length} item{items.length === 1 ? "" : "s"}
             {outstanding > 0 ? ` · ${outstanding} outstanding` : " · all complete"}
@@ -4516,6 +4571,7 @@ function JobPicker({
   onRequestLogin,
   onSelect,
   onCreateClick,
+  onCreateQuickTransferClick,
   onCreateSubJobClick,
   onDeleteRequest,
   onRenameRequest,
@@ -4553,7 +4609,8 @@ function JobPicker({
     setBackupFolderName(null);
   };
 
-  const topLevel = jobs.filter((j) => !j.parentId);
+  const topLevel = jobs.filter((j) => !j.parentId && !j.isQuickTransfer);
+  const quickTransferJobs = jobs.filter((j) => j.isQuickTransfer);
   const childrenOf = (parentId) => jobs.filter((j) => j.parentId === parentId);
 
   const query = searchQuery.trim().toLowerCase();
@@ -4638,6 +4695,15 @@ function JobPicker({
                 className="text-xs text-slate-400 hover:text-slate-200 underline underline-offset-2 px-1"
               >
                 Log in to edit
+              </button>
+            )}
+            {isEditor && (
+              <button
+                onClick={onCreateQuickTransferClick}
+                className="flex items-center gap-1.5 bg-slate-800 border border-slate-700 text-slate-200 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-slate-700"
+              >
+                <Truck className="w-4 h-4" />
+                <span className="hidden sm:inline">Quick Transfer</span>
               </button>
             )}
             {isEditor && (
@@ -4834,6 +4900,32 @@ function JobPicker({
           </div>
         )}
 
+        {!searching && quickTransferJobs.length > 0 && (
+          <div className="mt-8">
+            <p className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-1.5">
+              <Truck className="w-3.5 h-3.5" />
+              Quick Transfers
+            </p>
+            <div className="space-y-2.5">
+              {quickTransferJobs.map((job) => {
+                const outstanding = (job.items || []).filter((i) => i.status !== "green").length;
+                return (
+                  <JobCard
+                    key={job.id}
+                    job={job}
+                    indent={false}
+                    outstanding={outstanding}
+                    isEditor={isEditor}
+                    onSelect={() => onSelect(job.id)}
+                    onRename={onRenameRequest}
+                    onDelete={onDeleteRequest}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="text-center mt-8">
           {isEditor && (
             <button
@@ -4936,12 +5028,6 @@ function JobInventory({
   const [bulkContainerPicker, setBulkContainerPicker] = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
-  const [quickTransfersOpen, setQuickTransfersOpen] = useState(false);
-  const [qtAdding, setQtAdding] = useState(false);
-  const [qtItemName, setQtItemName] = useState("");
-  const [qtQty, setQtQty] = useState("");
-  const [qtRecipient, setQtRecipient] = useState("");
-  const [qtDeleteTarget, setQtDeleteTarget] = useState(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [containersOpen, setContainersOpen] = useState(false);
@@ -5339,37 +5425,6 @@ function JobInventory({
       ...prevJob,
       todos: (prevJob.todos || []).filter((t) => !ids.includes(t.id)),
     }));
-  };
-
-  const addQuickTransfer = () => {
-    const name = qtItemName.trim();
-    if (!name) return;
-    playSaveChime();
-    onUpdateJob((prevJob) => ({
-      ...prevJob,
-      quickTransfers: [
-        {
-          id: Date.now(),
-          itemName: name,
-          qty: qtQty.trim() || "1",
-          recipient: qtRecipient.trim(),
-          time: timeStamp(),
-        },
-        ...(prevJob.quickTransfers || []),
-      ],
-    }));
-    setQtItemName("");
-    setQtQty("");
-    setQtRecipient("");
-    setQtAdding(false);
-  };
-
-  const deleteQuickTransfer = (id) => {
-    onUpdateJob((prevJob) => ({
-      ...prevJob,
-      quickTransfers: (prevJob.quickTransfers || []).filter((t) => t.id !== id),
-    }));
-    setQtDeleteTarget(null);
   };
 
   const bulkDelete = () => {
@@ -6087,112 +6142,6 @@ function JobInventory({
           </div>
         )}
 
-        {/* Quick transfers */}
-        <div className="mt-6 border border-slate-800 rounded-lg overflow-hidden">
-          <button
-            onClick={() => setQuickTransfersOpen((v) => !v)}
-            className="w-full flex items-center justify-between px-4 py-3 bg-slate-900 hover:bg-slate-800/60"
-          >
-            <span className="flex items-center gap-2 text-sm font-medium text-slate-300">
-              <Truck className="w-4 h-4 text-slate-500" />
-              Quick transfers
-              <span className="text-xs text-slate-600">
-                ({(job.quickTransfers || []).length})
-              </span>
-            </span>
-            <ChevronDown
-              className={`w-4 h-4 text-slate-500 transition-transform ${
-                quickTransfersOpen ? "rotate-180" : ""
-              }`}
-            />
-          </button>
-          {quickTransfersOpen && (
-            <div>
-              {isEditor && (
-                <div className="px-4 py-3 border-b border-slate-800 bg-slate-900/50">
-                  {qtAdding ? (
-                    <div className="space-y-2">
-                      <div className="grid grid-cols-3 gap-2">
-                        <input
-                          autoFocus
-                          value={qtItemName}
-                          onChange={(e) => setQtItemName(e.target.value)}
-                          placeholder="Item"
-                          className="col-span-2 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-                        />
-                        <input
-                          value={qtQty}
-                          onChange={(e) => setQtQty(e.target.value)}
-                          placeholder="Qty"
-                          className="bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-                        />
-                      </div>
-                      <input
-                        value={qtRecipient}
-                        onChange={(e) => setQtRecipient(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && addQuickTransfer()}
-                        placeholder={'Given to (name, or just "field")'}
-                        className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-                      />
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => setQtAdding(false)}
-                          className="flex-1 text-xs rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          onClick={addQuickTransfer}
-                          className="flex-1 text-xs rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
-                        >
-                          Log transfer
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setQtAdding(true)}
-                      className="w-full flex items-center justify-center gap-1.5 text-sm text-amber-400 hover:text-amber-300 py-1"
-                    >
-                      <Plus className="w-4 h-4" />
-                      Log a quick transfer
-                    </button>
-                  )}
-                </div>
-              )}
-              <div className="max-h-72 overflow-y-auto divide-y divide-slate-800/80">
-                {(job.quickTransfers || []).length === 0 ? (
-                  <p className="text-sm text-slate-500 text-center py-6">
-                    Nothing logged yet — use this for small handoffs to people who stop by the
-                    shop, without adding them as full job items.
-                  </p>
-                ) : (
-                  (job.quickTransfers || []).map((t) => (
-                    <div key={t.id} className="px-4 py-2.5 flex items-center gap-3">
-                      <span className="text-xs text-slate-600 shrink-0 w-28">{t.time}</span>
-                      <span className="text-sm text-slate-300 flex-1 min-w-0">
-                        <span className="text-slate-100 font-medium">{t.qty}x</span>{" "}
-                        {t.itemName}
-                        {t.recipient && (
-                          <span className="text-slate-500"> → {t.recipient}</span>
-                        )}
-                      </span>
-                      {isEditor && (
-                        <button
-                          onClick={() => setQtDeleteTarget(t)}
-                          className="text-slate-600 hover:text-red-400 shrink-0"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
         {/* Activity log */}
         <div className="mt-6 border border-slate-800 rounded-lg overflow-hidden">
           <button
@@ -6245,15 +6194,6 @@ function JobInventory({
             setDeleteTarget(null);
           }}
           onCancel={() => setDeleteTarget(null)}
-        />
-      )}
-
-      {qtDeleteTarget && (
-        <ConfirmDelete
-          title="Remove this transfer record?"
-          message={`"${qtDeleteTarget.qty}x ${qtDeleteTarget.itemName}" will be removed from the log.`}
-          onConfirm={() => deleteQuickTransfer(qtDeleteTarget.id)}
-          onCancel={() => setQtDeleteTarget(null)}
         />
       )}
 
@@ -8012,6 +7952,29 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     setShowPicker(false);
   };
 
+  const [showQuickTransferModal, setShowQuickTransferModal] = useState(false);
+
+  const createOrOpenQuickTransfer = (name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    // Reuse an existing quick transfer with the same name (case-insensitive)
+    // rather than creating a duplicate — this is what makes repeat handoffs
+    // to the same person/site stack up together over time.
+    const existing = jobs.find(
+      (j) => j.isQuickTransfer && j.name.toLowerCase() === trimmed.toLowerCase()
+    );
+    if (existing) {
+      setActiveJobId(existing.id);
+      setShowPicker(false);
+    } else {
+      const job = newJob(trimmed, null, null, true);
+      setJobs((prev) => [...prev, job]);
+      setActiveJobId(job.id);
+      setShowPicker(false);
+    }
+    setShowQuickTransferModal(false);
+  };
+
   const deleteJob = (job) => {
     setJobs((prev) => prev.filter((j) => j.id !== job.id && j.parentId !== job.id));
     if (activeJobId === job.id || jobs.find((j) => j.id === activeJobId)?.parentId === job.id) {
@@ -8486,6 +8449,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
             setShowPicker(false);
           }}
           onCreateClick={() => setShowNewJobModal(true)}
+          onCreateQuickTransferClick={() => setShowQuickTransferModal(true)}
           onCreateSubJobClick={(job) => setSubJobParent(job)}
           onDeleteRequest={(job) => setJobDeleteTarget(job)}
           onRenameRequest={(job) => setJobRenameTarget(job)}
@@ -8549,6 +8513,13 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           confirmLabel="Create job"
           onConfirm={(name, color) => createJob(name, color)}
           onCancel={() => setShowNewJobModal(false)}
+        />
+      )}
+
+      {showQuickTransferModal && (
+        <QuickTransferNameModal
+          onSubmit={createOrOpenQuickTransfer}
+          onCancel={() => setShowQuickTransferModal(false)}
         />
       )}
 
