@@ -6575,7 +6575,7 @@ function JobInventory({
       </header>
 
       {menuOpen && (
-        <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(false)} />
+        <div className="fixed inset-0 z-[5]" onClick={() => setMenuOpen(false)} />
       )}
 
       <main className="max-w-5xl mx-auto px-4 py-5">
