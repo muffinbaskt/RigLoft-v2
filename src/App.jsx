@@ -2170,8 +2170,8 @@ function CatalogModal({
 
   return (
     <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40" onClick={onClose}>
-        <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col" onClick={(e) => e.stopPropagation()}>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+        <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col">
           <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
             <div>
               <h2 className="text-slate-100 font-semibold text-base">Item catalog</h2>
@@ -6420,9 +6420,7 @@ function JobInventory({
               <MoreVertical className="w-4 h-4" />
             </button>
             {menuOpen && (
-              <>
-                <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(false)} />
-                <div className="absolute right-0 top-full mt-2 w-48 bg-slate-800 border border-slate-700 rounded-md shadow-lg z-40 overflow-hidden">
+              <div className="absolute right-0 top-full mt-2 w-48 bg-slate-800 border border-slate-700 rounded-md shadow-lg z-40 overflow-hidden">
                   {isEditor && (
                     <button
                       onClick={() => {
@@ -6553,7 +6551,6 @@ function JobInventory({
                     </button>
                   )}
                 </div>
-              </>
             )}
             {isEditor ? (
               <button
@@ -6576,6 +6573,10 @@ function JobInventory({
 
         </div>
       </header>
+
+      {menuOpen && (
+        <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(false)} />
+      )}
 
       <main className="max-w-5xl mx-auto px-4 py-5">
         {/* Search */}
