@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "./supabaseClient";
 import {
   Package,
@@ -5015,6 +5015,17 @@ function JobPicker({
 }) {
   const [collapsed, setCollapsed] = useState({});
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
+  const [itemResultsCollapsed, setItemResultsCollapsed] = useState({});
+
+  // The actual search runs against this debounced value instead of the raw
+  // input, so a fast typist doesn't trigger a full re-scan of every item in
+  // every job on every single keystroke — only once things pause briefly.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearchQuery(searchQuery), 200);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
   const [backupFolderName, setBackupFolderName] = useState(null);
   const [backupFolderChecked, setBackupFolderChecked] = useState(false);
 
@@ -5043,34 +5054,53 @@ function JobPicker({
   const quickTransferJobs = jobs.filter((j) => j.isQuickTransfer && !j.parentId);
   const childrenOf = (parentId) => jobs.filter((j) => j.parentId === parentId);
 
-  const query = searchQuery.trim().toLowerCase();
+  // The catalog link for a given item never depends on what's being typed
+  // into the search box — only on the item itself and the catalog. Working
+  // it out once here (and only again when jobs/catalog actually change)
+  // means the search itself, below, is just a cheap lookup per keystroke
+  // instead of re-running the catalog matching logic on every item, on
+  // every job, every single time a letter is typed.
+  const catalogMatchByItemKey = useMemo(() => {
+    const map = new Map();
+    jobs.forEach((j) => {
+      (j.items || []).forEach((i) => {
+        map.set(`${j.id}-${i.id}`, getEffectiveCatalogMatch(i, catalog));
+      });
+    });
+    return map;
+  }, [jobs, catalog]);
+
+  const query = debouncedSearchQuery.trim().toLowerCase();
   const searching = query.length > 0;
 
   const matchingJobs = searching
     ? jobs.filter((j) => j.name.toLowerCase().includes(query))
     : [];
 
-  const matchingItemResults = searching
-    ? jobs.flatMap((j) =>
-        j.items
-          .filter((i) => {
-            const catalogMatch = getEffectiveCatalogMatch(i, catalog);
-            return (
-              i.name.toLowerCase().includes(query) ||
-              (i.category || "").toLowerCase().includes(query) ||
-              (i.serials || []).some((s) => s.toLowerCase().includes(query)) ||
-              (catalogMatch && catalogMatch.name.toLowerCase().includes(query))
-            );
-          })
-          .map((i) => ({
-            item: i,
-            job: j,
-            matchedSerial: (i.serials || []).find((s) =>
-              s.toLowerCase().includes(query)
-            ),
-          }))
-      )
-    : [];
+  const matchingItemResultsByJob = useMemo(() => {
+    if (!searching) return [];
+    const byJob = new Map();
+    jobs.forEach((j) => {
+      (j.items || []).forEach((i) => {
+        const catalogMatch = catalogMatchByItemKey.get(`${j.id}-${i.id}`);
+        const matches =
+          i.name.toLowerCase().includes(query) ||
+          (i.category || "").toLowerCase().includes(query) ||
+          (i.serials || []).some((s) => s.toLowerCase().includes(query)) ||
+          (catalogMatch && catalogMatch.name.toLowerCase().includes(query));
+        if (!matches) return;
+        const matchedSerial = (i.serials || []).find((s) => s.toLowerCase().includes(query));
+        if (!byJob.has(j.id)) byJob.set(j.id, { job: j, results: [] });
+        byJob.get(j.id).results.push({ item: i, matchedSerial });
+      });
+    });
+    return [...byJob.values()].sort((a, b) => a.job.name.localeCompare(b.job.name));
+  }, [searching, query, jobs, catalogMatchByItemKey]);
+
+  const totalMatchingItems = matchingItemResultsByJob.reduce(
+    (sum, g) => sum + g.results.length,
+    0
+  );
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -5184,7 +5214,7 @@ function JobPicker({
 
         {searching ? (
           <div className="space-y-4">
-            {matchingJobs.length === 0 && matchingItemResults.length === 0 ? (
+            {matchingJobs.length === 0 && totalMatchingItems === 0 ? (
               <p className="text-sm text-slate-500 text-center py-10">
                 No jobs or items match "{searchQuery}".
               </p>
@@ -5214,35 +5244,70 @@ function JobPicker({
                     </div>
                   </div>
                 )}
-                {matchingItemResults.length > 0 && (
+                {totalMatchingItems > 0 && (
                   <div>
                     <p className="text-xs font-medium text-slate-500 mb-2">
-                      Items ({matchingItemResults.length})
+                      Items ({totalMatchingItems})
                     </p>
-                    <div className="space-y-2">
-                      {matchingItemResults.map(({ item, job, matchedSerial }) => (
-                        <button
-                          key={`${job.id}-${item.id}`}
-                          onClick={() => onSelect(job.id)}
-                          className="w-full text-left bg-slate-900 border border-slate-800 rounded-md p-3 hover:border-slate-700"
-                        >
-                          <p className="text-sm text-slate-100 truncate">{item.name}</p>
-                          <p className="text-xs text-slate-500">
-                            In "{job.name}" · Have {item.qtyHave} of {item.qtyNeeded}
-                            {item.qtyUnit ? ` ${item.qtyUnit}` : ""} · {item.gang}
-                          </p>
-                          {(item.containers || []).length > 0 && (
-                            <p className="text-xs text-slate-500">
-                              📦 {item.containers.map((c) => `${c.name}: ${c.qty}`).join(", ")}
-                            </p>
-                          )}
-                          {matchedSerial && (
-                            <p className="text-xs text-fuchsia-300 font-mono mt-0.5">
-                              Matched SME #: {matchedSerial}
-                            </p>
-                          )}
-                        </button>
-                      ))}
+                    <div className="space-y-3">
+                      {matchingItemResultsByJob.map(({ job, results }) => {
+                        const isCollapsed = itemResultsCollapsed[job.id];
+                        return (
+                          <div key={job.id}>
+                            <button
+                              onClick={() =>
+                                setItemResultsCollapsed((prev) => ({
+                                  ...prev,
+                                  [job.id]: !prev[job.id],
+                                }))
+                              }
+                              className="w-full flex items-center gap-2 mb-2 text-left"
+                            >
+                              <ChevronDown
+                                className={`w-3.5 h-3.5 text-slate-500 shrink-0 transition-transform ${
+                                  isCollapsed ? "-rotate-90" : ""
+                                }`}
+                              />
+                              <span className="text-sm font-medium text-slate-200 truncate">
+                                {job.name}
+                              </span>
+                              <span className="text-xs text-slate-600 shrink-0">
+                                {results.length} item{results.length === 1 ? "" : "s"}
+                              </span>
+                            </button>
+                            {!isCollapsed && (
+                              <div className="space-y-2">
+                                {results.map(({ item, matchedSerial }) => (
+                                  <button
+                                    key={item.id}
+                                    onClick={() => onSelect(job.id)}
+                                    className="w-full text-left bg-slate-900 border border-slate-800 rounded-md p-3 hover:border-slate-700"
+                                  >
+                                    <p className="text-sm text-slate-100 truncate">{item.name}</p>
+                                    <p className="text-xs text-slate-500">
+                                      Have {item.qtyHave} of {item.qtyNeeded}
+                                      {item.qtyUnit ? ` ${item.qtyUnit}` : ""} · {item.gang}
+                                    </p>
+                                    {(item.containers || []).length > 0 && (
+                                      <p className="text-xs text-slate-500">
+                                        📦{" "}
+                                        {item.containers
+                                          .map((c) => `${c.name}: ${c.qty}`)
+                                          .join(", ")}
+                                      </p>
+                                    )}
+                                    {matchedSerial && (
+                                      <p className="text-xs text-fuchsia-300 font-mono mt-0.5">
+                                        Matched SME #: {matchedSerial}
+                                      </p>
+                                    )}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
