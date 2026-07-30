@@ -4904,7 +4904,7 @@ function JobCard({
   return (
     <button
       onClick={onSelect}
-      className={`w-full text-left bg-slate-900 border border-slate-800 border-l-4 ${borderClass} rounded-lg p-4 hover:border-slate-700 transition-colors flex items-center justify-between gap-3 ${
+      className={`w-full text-left bg-slate-900 border-t border-r border-b border-slate-800 border-l-4 ${borderClass} rounded-lg p-4 hover:border-slate-700 transition-colors flex items-center justify-between gap-3 ${
         indent ? "ml-6" : ""
       }`}
       style={indent ? { width: "calc(100% - 1.5rem)" } : undefined}
