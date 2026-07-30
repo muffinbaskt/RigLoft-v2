@@ -661,10 +661,12 @@ function ItemForm({
         containers: containerName ? [{ name: containerName, qty: finalQtyNeeded }] : [],
         serials: finalSerials,
         status: "green",
+        catalogId: manualCatalogLinkId,
       });
     };
 
     return (
+      <>
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
         <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg p-5">
           <div className="flex items-center justify-between mb-4">
@@ -690,6 +692,27 @@ function ItemForm({
                   ⚠ Already in this list: "{duplicateItem.name}"
                 </p>
               )}
+              <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                <p className="text-xs text-slate-600">
+                  {manualCatalogLink
+                    ? `Linked to catalog item "${manualCatalogLink.name}"`
+                    : "No catalog link"}
+                </p>
+                <button
+                  onClick={() => setCatalogPickerOpen(true)}
+                  className="text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2"
+                >
+                  Choose catalog item
+                </button>
+                {manualCatalogLink && (
+                  <button
+                    onClick={() => setManualCatalogLinkId(null)}
+                    className="text-xs text-slate-600 hover:text-slate-400 underline underline-offset-2"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1.5">QTY</label>
@@ -740,6 +763,67 @@ function ItemForm({
           </div>
         </div>
       </div>
+
+      {catalogPickerOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+          <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold text-base">Choose catalog item</h3>
+              <button
+                onClick={() => setCatalogPickerOpen(false)}
+                className="text-slate-400 hover:text-slate-200"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-5 pt-4 shrink-0">
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  autoFocus
+                  value={catalogPickerSearch}
+                  onChange={(e) => setCatalogPickerSearch(e.target.value)}
+                  placeholder="Search catalog..."
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md pl-9 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                />
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {catalog.length === 0 ? (
+                <p className="text-sm text-slate-500 text-center py-10">
+                  Your catalog is empty — add items to it first from the Item Catalog screen.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {[...catalog]
+                    .filter((c) =>
+                      c.name.toLowerCase().includes(catalogPickerSearch.trim().toLowerCase())
+                    )
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => {
+                          setManualCatalogLinkId(c.id);
+                          setCatalogPickerOpen(false);
+                          setCatalogPickerSearch("");
+                        }}
+                        className="w-full text-left border border-slate-800 rounded-md p-3 hover:border-slate-700"
+                      >
+                        <p className="text-sm text-slate-100">{c.name}</p>
+                        <p className="text-xs text-slate-500">
+                          {c.gang} · {c.storage}
+                          {c.category ? ` · ${c.category}` : ""}
+                        </p>
+                      </button>
+                    ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      </>
     );
   }
 
@@ -1569,11 +1653,12 @@ function emptyCatalogItem() {
     gang: GANG_OPTIONS[0],
     storage: STORAGE_OPTIONS[0],
     category: "",
+    vendor: "",
     needsTransfer: false,
   };
 }
 
-function CatalogItemForm({ initial, existingCategories = [], onSave, onCancel }) {
+function CatalogItemForm({ initial, existingCategories = [], existingVendors = [], onSave, onCancel }) {
   const [item, setItem] = useState({ needsTransfer: false, category: "", ...initial });
   const set = (field) => (val) => setItem((prev) => ({ ...prev, [field]: val }));
   const canSave = item.name.trim().length > 0;
@@ -1625,6 +1710,27 @@ function CatalogItemForm({ initial, existingCategories = [], onSave, onCancel })
                 <option key={c} value={c} />
               ))}
             </datalist>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              Usual vendor <span className="text-slate-600">(optional)</span>
+            </label>
+            <input
+              list="catalog-vendor-options"
+              value={item.vendor || ""}
+              onChange={(e) => set("vendor")(e.target.value)}
+              placeholder="e.g. Fastenal, McMaster-Carr"
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60"
+            />
+            <datalist id="catalog-vendor-options">
+              {existingVendors.map((v) => (
+                <option key={v} value={v} />
+              ))}
+            </datalist>
+            <p className="text-xs text-slate-600 mt-1">
+              Never shown on job pages — only used to group outstanding items by vendor on the
+              pick list, for ordering purposes.
+            </p>
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">
@@ -1931,7 +2037,16 @@ function CatalogBulkAddModal({ onImport, onCancel }) {
   );
 }
 
-function CatalogModal({ catalog, isEditor, onSave, onBulkSave, onDelete, onBulkSetCategory, onClose }) {
+function CatalogModal({
+  catalog,
+  isEditor,
+  onSave,
+  onBulkSave,
+  onDelete,
+  onBulkSetCategory,
+  onBulkSetVendor,
+  onClose,
+}) {
   const [editing, setEditing] = useState(null);
   const [bulkAdding, setBulkAdding] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -1941,9 +2056,15 @@ function CatalogModal({ catalog, isEditor, onSave, onBulkSave, onDelete, onBulkS
   const [selectedIds, setSelectedIds] = useState({});
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
   const [newCategoryText, setNewCategoryText] = useState("");
+  const [vendorPickerOpen, setVendorPickerOpen] = useState(false);
+  const [newVendorText, setNewVendorText] = useState("");
 
   const existingCategories = [
     ...new Set(catalog.map((c) => c.category).filter(Boolean)),
+  ].sort((a, b) => a.localeCompare(b));
+
+  const existingVendors = [
+    ...new Set(catalog.map((c) => c.vendor).filter(Boolean)),
   ].sort((a, b) => a.localeCompare(b));
 
   const filteredCatalog = catalog
@@ -1972,11 +2093,19 @@ function CatalogModal({ catalog, isEditor, onSave, onBulkSave, onDelete, onBulkS
     clearSelection();
   };
 
+  const applyVendor = (vendor) => {
+    onBulkSetVendor(selectedCatalogIds, vendor);
+    setVendorPickerOpen(false);
+    setNewVendorText("");
+    clearSelection();
+  };
+
   if (editing) {
     return (
       <CatalogItemForm
         initial={editing}
         existingCategories={existingCategories}
+        existingVendors={existingVendors}
         onSave={(item) => {
           onSave(item);
           setEditing(null);
@@ -2072,12 +2201,20 @@ function CatalogModal({ catalog, isEditor, onSave, onBulkSave, onDelete, onBulkS
               </button>
               <div className="flex-1" />
               {selectedCatalogIds.length > 0 && (
-                <button
-                  onClick={() => setCategoryPickerOpen(true)}
-                  className="text-xs bg-amber-500 text-slate-950 font-semibold rounded-md px-2.5 py-1.5 hover:bg-amber-400"
-                >
-                  Set category
-                </button>
+                <>
+                  <button
+                    onClick={() => setCategoryPickerOpen(true)}
+                    className="text-xs bg-amber-500 text-slate-950 font-semibold rounded-md px-2.5 py-1.5 hover:bg-amber-400"
+                  >
+                    Set category
+                  </button>
+                  <button
+                    onClick={() => setVendorPickerOpen(true)}
+                    className="text-xs bg-amber-500 text-slate-950 font-semibold rounded-md px-2.5 py-1.5 hover:bg-amber-400"
+                  >
+                    Set vendor
+                  </button>
+                </>
               )}
             </div>
           )}
@@ -2121,6 +2258,7 @@ function CatalogModal({ catalog, isEditor, onSave, onBulkSave, onDelete, onBulkS
                         <p className="text-xs text-slate-500">
                           {c.gang} · {c.storage}
                           {c.category ? ` · ${c.category}` : ""}
+                          {c.vendor ? ` · 🏷️ ${c.vendor}` : ""}
                           {c.needsTransfer ? " · 🚚 transfer" : ""}
                         </p>
                       </div>
@@ -2213,6 +2351,61 @@ function CatalogModal({ catalog, isEditor, onSave, onBulkSave, onDelete, onBulkS
             </button>
             <button
               onClick={() => setCategoryPickerOpen(false)}
+              className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {vendorPickerOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-3">
+              Set vendor for {selectedCatalogIds.length} item
+              {selectedCatalogIds.length === 1 ? "" : "s"}
+            </h3>
+            {existingVendors.length > 0 && (
+              <div className="space-y-1.5 mb-4 max-h-48 overflow-y-auto">
+                {existingVendors.map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => applyVendor(v)}
+                    className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-700 text-slate-200 hover:bg-slate-800"
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-2 mb-4">
+              <input
+                autoFocus
+                value={newVendorText}
+                onChange={(e) => setNewVendorText(e.target.value)}
+                onKeyDown={(e) =>
+                  e.key === "Enter" && newVendorText.trim() && applyVendor(newVendorText.trim())
+                }
+                placeholder="Or type a new vendor..."
+                className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+              <button
+                onClick={() => newVendorText.trim() && applyVendor(newVendorText.trim())}
+                disabled={!newVendorText.trim()}
+                className="text-sm bg-amber-500 text-slate-950 font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400 disabled:opacity-40"
+              >
+                Apply
+              </button>
+            </div>
+            <button
+              onClick={() => applyVendor("")}
+              className="w-full text-xs text-slate-500 hover:text-slate-300 mb-2"
+            >
+              Clear vendor from selected items
+            </button>
+            <button
+              onClick={() => setVendorPickerOpen(false)}
               className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
             >
               Cancel
@@ -3624,11 +3817,16 @@ function buildPickListHtml(jobName, groups, sortedGroupKeys, groupOption) {
 </html>`;
 }
 
-function PickListModal({ jobName, items, onClose }) {
+function PickListModal({ jobName, items, catalog = [], onClose }) {
   const [groupOption, setGroupOption] = useState("gang");
   const [outstandingOnly, setOutstandingOnly] = useState(false);
 
   const filteredItems = outstandingOnly ? items.filter((i) => i.status !== "green") : items;
+
+  const vendorFor = (item) => {
+    const match = getEffectiveCatalogMatch(item, catalog);
+    return match && match.vendor ? match.vendor : "No vendor set";
+  };
 
   const groups =
     groupOption === "container"
@@ -3641,6 +3839,12 @@ function PickListModal({ jobName, items, onClose }) {
               (acc[c.name] = acc[c.name] || []).push({ ...item, qtyNeeded: c.qty });
             });
           }
+          return acc;
+        }, {})
+      : groupOption === "vendor"
+      ? filteredItems.reduce((acc, item) => {
+          const key = vendorFor(item);
+          (acc[key] = acc[key] || []).push(item);
           return acc;
         }, {})
       : filteredItems.reduce((acc, item) => {
@@ -3667,6 +3871,56 @@ function PickListModal({ jobName, items, onClose }) {
       link.href = url;
       const safeName = jobName.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
       link.download = `${safeName || "job"}-pick-list.html`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch {
+      // download unavailable in this environment
+    }
+  };
+
+  const handleDownloadCsv = () => {
+    try {
+      const columns = [
+        "Item",
+        "Qty Requested",
+        "Qty Have",
+        "Qty Needed",
+        "Unit",
+        "Gang",
+        "Storage",
+        "Container",
+        "Vendor",
+      ];
+      const rows = sortedGroupKeys.flatMap((groupKey) =>
+        groups[groupKey].map((item) => {
+          const stillNeeded = Math.max(0, (item.qtyNeeded || 0) - (item.qtyHave || 0));
+          const containersText = (item.containers || [])
+            .map((c) => `${c.name}: ${c.qty}`)
+            .join("; ");
+          const storageText =
+            item.storage === "Other" && item.storageDetail ? item.storageDetail : item.storage;
+          return [
+            item.name,
+            item.qtyNeeded,
+            item.qtyHave,
+            stillNeeded,
+            item.qtyUnit || "",
+            item.gang,
+            storageText,
+            containersText,
+            vendorFor(item) === "No vendor set" ? "" : vendorFor(item),
+          ];
+        })
+      );
+      const csv = [columns, ...rows].map((r) => r.map(csvEscape).join(",")).join("\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const safeName = jobName.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+      link.download = `${safeName || "job"}-pick-list.csv`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -3706,6 +3960,7 @@ function PickListModal({ jobName, items, onClose }) {
               <option value="gang">Gang</option>
               <option value="storage">Storage location</option>
               <option value="container">Container</option>
+              <option value="vendor">Vendor (for ordering)</option>
               <option value="none">Don't group</option>
             </select>
           </div>
@@ -3739,13 +3994,20 @@ function PickListModal({ jobName, items, onClose }) {
         </div>
 
         {filteredItems.length > 0 && (
-          <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+          <div className="px-5 py-4 border-t border-slate-800 shrink-0 space-y-2">
             <button
               onClick={handleDownload}
               className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
             >
               <Download className="w-4 h-4" />
-              Download pick list
+              Download pick list (for printing)
+            </button>
+            <button
+              onClick={handleDownloadCsv}
+              className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 border border-slate-700 text-slate-200 hover:bg-slate-800"
+            >
+              <Download className="w-4 h-4" />
+              Download as CSV (for Excel)
             </button>
           </div>
         )}
@@ -6607,7 +6869,12 @@ function JobInventory({
       )}
 
       {pickListOpen && (
-        <PickListModal jobName={job.name} items={items} onClose={() => setPickListOpen(false)} />
+        <PickListModal
+          jobName={job.name}
+          items={items}
+          catalog={catalog}
+          onClose={() => setPickListOpen(false)}
+        />
       )}
 
       {todoListOpen && (
@@ -8245,6 +8512,12 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     );
   };
 
+  const bulkSetCatalogVendor = (ids, vendor) => {
+    setCatalog((prev) =>
+      prev.map((c) => (ids.includes(c.id) ? { ...c, vendor } : c))
+    );
+  };
+
   const resetAllData = async () => {
     const fresh = [seedJob()];
     setJobs(fresh);
@@ -8707,6 +8980,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           onBulkSave={bulkSaveCatalogItems}
           onDelete={deleteCatalogItem}
           onBulkSetCategory={bulkSetCatalogCategory}
+          onBulkSetVendor={bulkSetCatalogVendor}
           onClose={() => setCatalogModalOpen(false)}
         />
       )}
