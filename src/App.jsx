@@ -242,9 +242,24 @@ function emptyItem(defaultStorage) {
 
 // A small, cheerful two-note chime played on save — synthesized directly
 // rather than loading a sound file, so there's nothing extra to bundle.
+// Every sound effect reuses this one shared context instead of creating a
+// brand new one per call — repeatedly creating audio contexts (e.g. once
+// per checkbox tap during bulk select) is genuinely expensive and was
+// causing real slowdowns, since browsers don't clean those up for free.
+let sharedAudioCtx = null;
+function getAudioCtx() {
+  if (!sharedAudioCtx) {
+    sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (sharedAudioCtx.state === "suspended") {
+    sharedAudioCtx.resume().catch(() => {});
+  }
+  return sharedAudioCtx;
+}
+
 function playSaveChime() {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = getAudioCtx();
     const now = ctx.currentTime;
 
     const playNote = (freq, startTime, duration) => {
@@ -273,7 +288,7 @@ function playSaveChime() {
 // annoying fast.
 function playSoftTap() {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = getAudioCtx();
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -380,6 +395,27 @@ function getEffectiveCatalogMatch(item, catalog) {
     return catalog.find((c) => c.id === item.catalogId) || null;
   }
   return findCatalogMatch(item.name, catalog);
+}
+
+// Caches each item's catalog match keyed by the item object itself, not by
+// id — since untouched items keep the exact same object reference across
+// re-renders (React's normal immutable-update pattern), this means editing
+// or saving anywhere in the app no longer forces every single item across
+// every job to redo catalog matching, only the ones that actually changed.
+// Resets automatically whenever the catalog itself changes, since a cached
+// match could otherwise point at stale catalog data.
+let catalogMatchCache = new WeakMap();
+let catalogMatchCacheCatalogRef = null;
+
+function getCachedCatalogMatch(item, catalog) {
+  if (catalog !== catalogMatchCacheCatalogRef) {
+    catalogMatchCache = new WeakMap();
+    catalogMatchCacheCatalogRef = catalog;
+  }
+  if (catalogMatchCache.has(item)) return catalogMatchCache.get(item);
+  const match = getEffectiveCatalogMatch(item, catalog);
+  catalogMatchCache.set(item, match);
+  return match;
 }
 
 function parseImportText(text, catalog) {
@@ -5204,7 +5240,7 @@ function JobPicker({
     const map = new Map();
     jobs.forEach((j) => {
       (j.items || []).forEach((i) => {
-        map.set(`${j.id}-${i.id}`, getEffectiveCatalogMatch(i, catalog));
+        map.set(`${j.id}-${i.id}`, getCachedCatalogMatch(i, catalog));
       });
     });
     return map;
@@ -5928,7 +5964,7 @@ function JobInventory({
   const matchesSearch = (item) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.trim().toLowerCase();
-    const catalogMatch = getEffectiveCatalogMatch(item, catalog);
+    const catalogMatch = getCachedCatalogMatch(item, catalog);
     return (
       item.name.toLowerCase().includes(q) ||
       (item.category || "").toLowerCase().includes(q) ||
