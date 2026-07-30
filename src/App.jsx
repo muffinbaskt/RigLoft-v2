@@ -545,6 +545,7 @@ function ItemForm({
   existingItems = [],
   catalog = [],
   onSaveCatalogItem,
+  isQuickTransfer = false,
 }) {
   const [item, setItem] = useState(
     migrateItemContainers({
@@ -733,13 +734,17 @@ function ItemForm({
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">Qty have</label>
-              <div className="w-full bg-slate-800/50 border border-slate-700 text-slate-300 text-sm rounded-md px-3 py-2">
-                {currentTotalHave}
-                <span className="text-slate-600 text-xs ml-1">(from containers below)</span>
+            {!isQuickTransfer && (
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                  Qty have
+                </label>
+                <div className="w-full bg-slate-800/50 border border-slate-700 text-slate-300 text-sm rounded-md px-3 py-2">
+                  {currentTotalHave}
+                  <span className="text-slate-600 text-xs ml-1">(from containers below)</span>
+                </div>
               </div>
-            </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1.5">Gang</label>
               <Select value={item.gang} onChange={set("gang")} options={GANG_OPTIONS} />
@@ -830,6 +835,7 @@ function ItemForm({
             )}
           </div>
 
+          {!isQuickTransfer && (
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="block text-xs font-medium text-slate-400">
@@ -891,6 +897,7 @@ function ItemForm({
               updates automatically as the total.
             </p>
           </div>
+          )}
 
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">
@@ -899,7 +906,7 @@ function ItemForm({
             <div className="flex items-center gap-2 bg-slate-800/50 border border-slate-700 rounded-md px-3 py-2">
               <StatusDot
                 status={
-                  currentTotalHave >= Number(item.qtyNeeded || 0)
+                  isQuickTransfer || currentTotalHave >= Number(item.qtyNeeded || 0)
                     ? "green"
                     : currentTotalHave > 0
                     ? "yellow"
@@ -908,14 +915,16 @@ function ItemForm({
                 size="sm"
               />
               <span className="text-sm text-slate-300">
-                {currentTotalHave >= Number(item.qtyNeeded || 0)
+                {isQuickTransfer || currentTotalHave >= Number(item.qtyNeeded || 0)
                   ? "Complete"
                   : currentTotalHave > 0
                   ? "Partial"
                   : "None"}
               </span>
               <span className="text-xs text-slate-600 ml-auto">
-                Set automatically from qty have vs. qty needed
+                {isQuickTransfer
+                  ? "Quick transfers are always logged as complete"
+                  : "Set automatically from qty have vs. qty needed"}
               </span>
             </div>
           </div>
@@ -998,12 +1007,23 @@ function ItemForm({
               if (!canSave) return;
               const finalQtyNeeded = Number(item.qtyNeeded);
               const finalSerials = parseSerials(serialsText);
-              const cleanContainers = item.containers
-                .filter((c) => c.name)
-                .map((c) => ({ name: c.name, qty: Number(c.qty) || 0 }));
-              const finalQtyHave = totalHave(cleanContainers);
-              const finalStatus =
-                finalQtyHave >= finalQtyNeeded ? "green" : finalQtyHave > 0 ? "yellow" : "red";
+              const cleanContainers = isQuickTransfer
+                ? []
+                : item.containers
+                    .filter((c) => c.name)
+                    .map((c) => ({ name: c.name, qty: Number(c.qty) || 0 }));
+              // A quick transfer is already handed over the moment it's
+              // logged — there's nothing to "still receive," so it's
+              // treated as fully complete rather than tracked against
+              // containers like a normal job item.
+              const finalQtyHave = isQuickTransfer ? finalQtyNeeded : totalHave(cleanContainers);
+              const finalStatus = isQuickTransfer
+                ? "green"
+                : finalQtyHave >= finalQtyNeeded
+                ? "green"
+                : finalQtyHave > 0
+                ? "yellow"
+                : "red";
 
               if (addToCatalog && onSaveCatalogItem) {
                 onSaveCatalogItem({
@@ -4610,7 +4630,7 @@ function JobPicker({
   };
 
   const topLevel = jobs.filter((j) => !j.parentId && !j.isQuickTransfer);
-  const quickTransferJobs = jobs.filter((j) => j.isQuickTransfer);
+  const quickTransferJobs = jobs.filter((j) => j.isQuickTransfer && !j.parentId);
   const childrenOf = (parentId) => jobs.filter((j) => j.parentId === parentId);
 
   const query = searchQuery.trim().toLowerCase();
@@ -4909,17 +4929,62 @@ function JobPicker({
             <div className="space-y-2.5">
               {quickTransferJobs.map((job) => {
                 const outstanding = (job.items || []).filter((i) => i.status !== "green").length;
+                const children = childrenOf(job.id);
+                const isCollapsed = collapsed[job.id];
                 return (
-                  <JobCard
-                    key={job.id}
-                    job={job}
-                    indent={false}
-                    outstanding={outstanding}
-                    isEditor={isEditor}
-                    onSelect={() => onSelect(job.id)}
-                    onRename={onRenameRequest}
-                    onDelete={onDeleteRequest}
-                  />
+                  <div key={job.id}>
+                    <div className="flex items-center gap-1">
+                      {children.length > 0 ? (
+                        <button
+                          onClick={() =>
+                            setCollapsed((prev) => ({ ...prev, [job.id]: !prev[job.id] }))
+                          }
+                          className="text-slate-500 hover:text-slate-300 p-1.5 shrink-0"
+                        >
+                          <ChevronDown
+                            className={`w-4 h-4 transition-transform ${
+                              isCollapsed ? "-rotate-90" : ""
+                            }`}
+                          />
+                        </button>
+                      ) : (
+                        <span className="w-7 shrink-0" />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <JobCard
+                          job={job}
+                          indent={false}
+                          outstanding={outstanding}
+                          isEditor={isEditor}
+                          onSelect={() => onSelect(job.id)}
+                          onRename={onRenameRequest}
+                          onDelete={onDeleteRequest}
+                        />
+                      </div>
+                    </div>
+
+                    {!isCollapsed && children.length > 0 && (
+                      <div className="mt-2.5 space-y-2.5">
+                        {children.map((child) => {
+                          const childOutstanding = (child.items || []).filter(
+                            (i) => i.status !== "green"
+                          ).length;
+                          return (
+                            <JobCard
+                              key={child.id}
+                              job={child}
+                              indent
+                              outstanding={childOutstanding}
+                              isEditor={isEditor}
+                              onSelect={() => onSelect(child.id)}
+                              onRename={onRenameRequest}
+                              onDelete={onDeleteRequest}
+                            />
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -6182,6 +6247,7 @@ function JobInventory({
           existingItems={items}
           catalog={catalog}
           onSaveCatalogItem={onSaveCatalogItem}
+          isQuickTransfer={!!job.isQuickTransfer}
         />
       )}
 
@@ -7957,21 +8023,32 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   const createOrOpenQuickTransfer = (name) => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    // Reuse an existing quick transfer with the same name (case-insensitive)
-    // rather than creating a duplicate — this is what makes repeat handoffs
-    // to the same person/site stack up together over time.
-    const existing = jobs.find(
-      (j) => j.isQuickTransfer && j.name.toLowerCase() === trimmed.toLowerCase()
+
+    // Each use creates its own separate, timestamped entry — never reused
+    // — but entries with the same name collapse together under one shared
+    // folder on the job picker screen, found or created here.
+    const parent = jobs.find(
+      (j) => j.isQuickTransfer && !j.parentId && j.name.toLowerCase() === trimmed.toLowerCase()
     );
-    if (existing) {
-      setActiveJobId(existing.id);
-      setShowPicker(false);
+
+    const entryName = new Date().toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+
+    if (parent) {
+      const entry = newJob(entryName, parent.id, null, true);
+      setJobs((prev) => [...prev, entry]);
+      setActiveJobId(entry.id);
     } else {
-      const job = newJob(trimmed, null, null, true);
-      setJobs((prev) => [...prev, job]);
-      setActiveJobId(job.id);
-      setShowPicker(false);
+      const folder = newJob(trimmed, null, null, true);
+      const entry = newJob(entryName, folder.id, null, true);
+      setJobs((prev) => [...prev, folder, entry]);
+      setActiveJobId(entry.id);
     }
+    setShowPicker(false);
     setShowQuickTransferModal(false);
   };
 
