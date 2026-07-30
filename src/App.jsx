@@ -4881,8 +4881,23 @@ function JobNameModal({
   );
 }
 
-function JobCard({ job, indent, outstanding, isEditor, onSelect, onRename, onDelete }) {
-  const borderClass = job.color ? JOB_COLOR_BORDER[job.color] : "border-l-slate-800";
+function JobCard({
+  job,
+  indent,
+  outstanding,
+  entryCount,
+  isEditor,
+  onSelect,
+  onRename,
+  onDelete,
+}) {
+  const borderClass = job.isQuickTransfer
+    ? "border-l-sky-500"
+    : job.parentId
+    ? "border-l-purple-500"
+    : job.color
+    ? JOB_COLOR_BORDER[job.color]
+    : "border-l-slate-800";
   const items = job.items || [];
   const completeCount = items.filter((i) => i.status === "green").length;
   const completePct = items.length > 0 ? Math.round((completeCount / items.length) * 100) : 0;
@@ -4895,25 +4910,48 @@ function JobCard({ job, indent, outstanding, isEditor, onSelect, onRename, onDel
       style={indent ? { width: "calc(100% - 1.5rem)" } : undefined}
     >
       <div className="flex items-center gap-3 min-w-0 flex-1">
-        <div className="w-9 h-9 rounded-md bg-slate-800 flex items-center justify-center shrink-0">
+        <div
+          className={`w-9 h-9 rounded-md flex items-center justify-center shrink-0 ${
+            job.isQuickTransfer
+              ? "bg-sky-500/10"
+              : job.parentId
+              ? "bg-purple-500/10"
+              : "bg-slate-800"
+          }`}
+        >
           {job.isQuickTransfer ? (
-            <Truck className="w-4 h-4 text-slate-400" />
+            <Truck className="w-4 h-4 text-sky-400" />
           ) : (
-            <Briefcase className="w-4 h-4 text-slate-400" />
+            <Briefcase
+              className={`w-4 h-4 ${job.parentId ? "text-purple-400" : "text-slate-400"}`}
+            />
           )}
         </div>
         <div className="min-w-0 flex-1">
           <p className="font-semibold text-slate-100 truncate flex items-center gap-1.5">
             {job.name}
             {job.isQuickTransfer && (
-              <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-400 rounded-full px-1.5 py-0.5 shrink-0">
+              <span className="text-[10px] font-medium tracking-wide uppercase bg-sky-500/10 border border-sky-500/40 text-sky-300 rounded-full px-1.5 py-0.5 shrink-0">
                 Quick
+              </span>
+            )}
+            {!job.isQuickTransfer && job.parentId && (
+              <span className="text-[10px] font-medium tracking-wide uppercase bg-purple-500/10 border border-purple-500/40 text-purple-300 rounded-full px-1.5 py-0.5 shrink-0">
+                Sub-job
               </span>
             )}
           </p>
           <p className="text-xs text-slate-500">
-            {items.length} item{items.length === 1 ? "" : "s"}
-            {outstanding > 0 ? ` · ${outstanding} outstanding` : " · all complete"}
+            {entryCount !== undefined ? (
+              <>
+                {entryCount} entr{entryCount === 1 ? "y" : "ies"}
+              </>
+            ) : (
+              <>
+                {items.length} item{items.length === 1 ? "" : "s"}
+                {outstanding > 0 ? ` · ${outstanding} outstanding` : " · all complete"}
+              </>
+            )}
           </p>
           {items.length > 0 && (
             <div className="flex items-center gap-2 mt-1.5">
@@ -5339,6 +5377,7 @@ function JobPicker({
                           job={job}
                           indent={false}
                           outstanding={outstanding}
+                          entryCount={children.length > 0 ? children.length : undefined}
                           isEditor={isEditor}
                           onSelect={() => onSelect(job.id)}
                           onRename={onRenameRequest}
