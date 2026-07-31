@@ -6112,7 +6112,12 @@ function JobInventory({
   const bulkSetContainer = (container) => {
     bulkUpdate(
       (i) => {
-        const containers = [{ name: container, qty: i.qtyNeeded }];
+        // Uses whichever is larger — normally that's qtyNeeded (the item
+        // hasn't fully arrived yet), but if you actually have MORE on hand
+        // than what was needed, this preserves the real surplus instead of
+        // silently truncating it down to the needed amount.
+        const qty = Math.max(i.qtyHave, i.qtyNeeded);
+        const containers = [{ name: container, qty }];
         return { ...i, containers, qtyHave: totalHave(containers), status: "green" };
       },
       `Moved to container "${container}" (full quantity)`
