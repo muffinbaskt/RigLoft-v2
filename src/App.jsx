@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import QRCode from "qrcode";
 import { supabase } from "./supabaseClient";
 import {
   Package,
@@ -29,6 +30,7 @@ import {
   LogOut,
   ListChecks,
   Inbox,
+  QrCode,
   Bell,
 } from "lucide-react";
 
@@ -126,7 +128,7 @@ function seedJob() {
         qtyNeeded: 12,
         qtyHave: 5,
         ordered: true,
-        received: false,
+        received: "no",
         storage: "Outside",
         containers: [{ name: "Gangbox 12345", qty: 5 }],
         status: "yellow",
@@ -141,7 +143,7 @@ function seedJob() {
         qtyNeeded: 40,
         qtyHave: 0,
         ordered: false,
-        received: false,
+        received: "no",
         storage: "Covered",
         containers: [],
         status: "red",
@@ -182,8 +184,8 @@ function diffItems(before, after) {
   if (Number(before.qtyHave) !== Number(after.qtyHave))
     changes.push(`qty have → ${after.qtyHave}`);
   if (before.ordered !== after.ordered) changes.push(`ordered → ${after.ordered ? "yes" : "no"}`);
-  if (before.received !== after.received)
-    changes.push(`received → ${after.received ? "yes" : "no"}`);
+  if (normalizeReceived(before.received) !== normalizeReceived(after.received))
+    changes.push(`received → ${normalizeReceived(after.received)}`);
   if (before.storage !== after.storage) changes.push(`storage → ${after.storage}`);
   if ((before.storageDetail || "") !== (after.storageDetail || ""))
     changes.push(`storage detail → ${after.storageDetail || "(cleared)"}`);
@@ -227,7 +229,7 @@ function emptyItem(defaultStorage) {
     qtyUnit: "",
     qtyHave: 0,
     ordered: false,
-    received: false,
+    received: "no",
     storage: defaultStorage,
     storageDetail: "",
     containers: [], // [{ name, qty }] — qtyHave is always the sum of these
@@ -329,6 +331,15 @@ function singularize(word) {
   // shackles -> shackle, chokers -> choker, tips -> tip
   if (word.endsWith("s") && !word.endsWith("ss")) return word.slice(0, -1);
   return word;
+}
+
+// "received" used to be a plain true/false — this normalizes old data so
+// existing items keep working correctly now that there's a third,
+// "partial" state in between.
+function normalizeReceived(r) {
+  if (r === true || r === "yes") return "yes";
+  if (r === "partial") return "partial";
+  return "no";
 }
 
 function normalizeText(str) {
@@ -1026,15 +1037,16 @@ function ItemForm({
               <label className="block text-xs font-medium text-slate-400 mb-1.5">Received?</label>
               <div className="flex gap-2">
                 {[
-                  { v: true, label: "Yes" },
-                  { v: false, label: "No" },
+                  { v: "yes", label: "Yes", active: "bg-emerald-500/15 border-emerald-500/50 text-emerald-300" },
+                  { v: "partial", label: "Partial", active: "bg-yellow-500/15 border-yellow-500/50 text-yellow-300" },
+                  { v: "no", label: "No", active: "bg-slate-700 border-slate-600 text-slate-200" },
                 ].map((opt) => (
                   <button
                     key={opt.label}
                     onClick={() => set("received")(opt.v)}
                     className={`flex-1 text-sm rounded-md py-2 border transition-colors ${
-                      item.received === opt.v
-                        ? "bg-emerald-500/15 border-emerald-500/50 text-emerald-300"
+                      normalizeReceived(item.received) === opt.v
+                        ? opt.active
                         : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
                     }`}
                   >
@@ -1556,7 +1568,7 @@ function ExportModal({ jobName, items, onClose }) {
     i.qtyUnit || "each",
     i.qtyHave,
     i.ordered ? "Yes" : "No",
-    i.received ? "Yes" : "No",
+    normalizeReceived(i.received),
     i.storage === "Other" && i.storageDetail ? `Other (${i.storageDetail})` : i.storage,
     (i.containers || []).map((c) => `${c.name}: ${c.qty}`).join("; "),
     i.gang,
@@ -2668,6 +2680,159 @@ function ContainerDetailModal({
   );
 }
 
+function FieldRequestsModal({ onClose }) {
+  const [tab, setTab] = useState("pending");
+  const [requests, setRequests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const canvasRef = useRef(null);
+
+  // Points to the genuinely separate field-request app (its own deployment,
+  // with none of this app's code in it) — update this once that project
+  // is live at its real Vercel URL.
+  const fieldUrl = "https://riggy-field-request.vercel.app";
+
+  const refresh = async () => {
+    setLoading(true);
+    const result = await fetchFieldRequests();
+    setRequests(result.requests);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (canvasRef.current) {
+      QRCode.toCanvas(canvasRef.current, fieldUrl, { width: 200, margin: 1 }, () => {});
+    }
+  }, [fieldUrl]);
+
+  const markDone = async (id) => {
+    await updateFieldRequestStatus(id, "done");
+    refresh();
+  };
+  const reopen = async (id) => {
+    await updateFieldRequestStatus(id, "pending");
+    refresh();
+  };
+  const handleDelete = async (id) => {
+    await deleteFieldRequest(id);
+    setDeleteTarget(null);
+    refresh();
+  };
+
+  const pending = requests.filter((r) => r.status !== "done");
+  const done = requests.filter((r) => r.status === "done");
+  const list = tab === "pending" ? pending : done;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <h2 className="text-slate-100 font-semibold text-base">Field requests</h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 border-b border-slate-800 shrink-0 flex flex-col items-center">
+          <canvas ref={canvasRef} className="rounded-md bg-white p-2" />
+          <p className="text-xs text-slate-500 mt-2 text-center">
+            Print or share this — anyone who scans it can send a request without seeing any of
+            your job data.
+          </p>
+          <button
+            onClick={() => navigator.clipboard && navigator.clipboard.writeText(fieldUrl)}
+            className="text-xs text-amber-400 hover:text-amber-300 underline underline-offset-2 mt-1.5"
+          >
+            Copy link instead
+          </button>
+        </div>
+
+        <div className="flex border-b border-slate-800 shrink-0">
+          <button
+            onClick={() => setTab("pending")}
+            className={`flex-1 text-sm py-2.5 ${
+              tab === "pending"
+                ? "text-amber-400 border-b-2 border-amber-400"
+                : "text-slate-500 hover:text-slate-300"
+            }`}
+          >
+            Pending ({pending.length})
+          </button>
+          <button
+            onClick={() => setTab("done")}
+            className={`flex-1 text-sm py-2.5 ${
+              tab === "done"
+                ? "text-amber-400 border-b-2 border-amber-400"
+                : "text-slate-500 hover:text-slate-300"
+            }`}
+          >
+            Done ({done.length})
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {loading ? (
+            <p className="text-sm text-slate-500 text-center py-10">Loading...</p>
+          ) : list.length === 0 ? (
+            <p className="text-sm text-slate-500 text-center py-10">
+              {tab === "pending" ? "Nothing pending right now." : "Nothing marked done yet."}
+            </p>
+          ) : (
+            <div className="space-y-2.5">
+              {list.map((r) => (
+                <div key={r.id} className="border border-slate-800 rounded-md p-3">
+                  <p className="text-sm text-slate-100 whitespace-pre-wrap">{r.text}</p>
+                  <p className="text-xs text-slate-500 mt-1.5">
+                    {r.reported_by ? `${r.reported_by} · ` : ""}
+                    {new Date(r.created_at).toLocaleString()}
+                  </p>
+                  <div className="flex gap-2 mt-2.5">
+                    {tab === "pending" ? (
+                      <button
+                        onClick={() => markDone(r.id)}
+                        className="flex-1 text-xs rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+                      >
+                        Mark done
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => reopen(r.id)}
+                        className="flex-1 text-xs rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+                      >
+                        Reopen
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setDeleteTarget(r)}
+                      className="text-slate-600 hover:text-red-400 p-2"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {deleteTarget && (
+        <ConfirmDelete
+          title="Delete this request?"
+          message="This will be permanently removed."
+          onConfirm={() => handleDelete(deleteTarget.id)}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 function SuggestionsInboxModal({
   suggestions,
   resolvedSuggestions,
@@ -2748,7 +2913,11 @@ function SuggestionsInboxModal({
               : ""}
             {" · "}
             {s.payload.ordered ? "Ordered" : "Not ordered"} ·{" "}
-            {s.payload.received ? "Received" : "Not received"}
+            {normalizeReceived(s.payload.received) === "yes"
+              ? "Received"
+              : normalizeReceived(s.payload.received) === "partial"
+              ? "Partially received"
+              : "Not received"}
           </p>
         </>
       )}
@@ -4481,7 +4650,7 @@ function SuggestEditModal({ job, item, onSubmit, onClose }) {
   const [containerName, setContainerName] = useState(currentContainer?.name || "");
   const [containerQty, setContainerQty] = useState(currentContainer?.qty || item.qtyHave);
   const [ordered, setOrdered] = useState(item.ordered);
-  const [received, setReceived] = useState(item.received);
+  const [received, setReceived] = useState(normalizeReceived(item.received));
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
@@ -4566,15 +4735,15 @@ function SuggestEditModal({ job, item, onSubmit, onClose }) {
                 />
                 Ordered
               </label>
-              <label className="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer select-none pb-2">
-                <input
-                  type="checkbox"
-                  checked={received}
-                  onChange={(e) => setReceived(e.target.checked)}
-                  className="w-3.5 h-3.5 rounded accent-amber-500"
+              <div className="pb-2">
+                <label className="block text-xs text-slate-400 mb-1">Received</label>
+                <Select
+                  value={received}
+                  onChange={setReceived}
+                  options={["no", "partial", "yes"]}
+                  labels={{ no: "No", partial: "Partial", yes: "Yes" }}
                 />
-                Received
-              </label>
+              </div>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -4883,13 +5052,19 @@ function ItemCard({ item, selectMode, selected, isEditor, onToggleSelect, onEdit
         </span>
         <span
           className={`text-xs rounded-full px-2.5 py-1 border flex items-center gap-1 ${
-            item.received
+            normalizeReceived(item.received) === "yes"
               ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+              : normalizeReceived(item.received) === "partial"
+              ? "border-yellow-500/30 bg-yellow-500/10 text-yellow-300"
               : "border-slate-700 text-slate-500"
           }`}
         >
-          {item.received && <CheckCircle2 className="w-3 h-3" />}
-          {item.received ? "Received" : "Not received"}
+          {normalizeReceived(item.received) === "yes" && <CheckCircle2 className="w-3 h-3" />}
+          {normalizeReceived(item.received) === "yes"
+            ? "Received"
+            : normalizeReceived(item.received) === "partial"
+            ? "Partially received"
+            : "Not received"}
         </span>
         {item.serials && item.serials.length > 0 && (
           <button
@@ -5193,6 +5368,7 @@ function JobPicker({
   onSignOut,
   pendingSuggestionCount,
   onOpenSuggestions,
+  onOpenFieldRequests,
   onCheckForUpdate,
   updateCheckMessage,
 }) {
@@ -5338,6 +5514,15 @@ function JobPicker({
                     {pendingSuggestionCount > 9 ? "9+" : pendingSuggestionCount}
                   </span>
                 )}
+              </button>
+            )}
+            {isEditor && (
+              <button
+                onClick={onOpenFieldRequests}
+                title="Field requests"
+                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+              >
+                <QrCode className="w-4 h-4" />
               </button>
             )}
             <button
@@ -5963,8 +6148,10 @@ function JobInventory({
   const matchesProcFilter = (item) => {
     if (procFilter === "All") return true;
     if (procFilter === "not_ordered") return !item.ordered;
-    if (procFilter === "ordered_awaiting") return item.ordered && !item.received;
-    if (procFilter === "received") return item.received;
+    if (procFilter === "ordered_awaiting")
+      return item.ordered && normalizeReceived(item.received) === "no";
+    if (procFilter === "partially_received") return normalizeReceived(item.received) === "partial";
+    if (procFilter === "received") return normalizeReceived(item.received) === "yes";
     return true;
   };
 
@@ -6279,7 +6466,7 @@ function JobInventory({
   const counts = {
     total: items.length,
     ordered: items.filter((i) => i.ordered).length,
-    received: items.filter((i) => i.received).length,
+    received: items.filter((i) => normalizeReceived(i.received) === "yes").length,
     complete: items.filter((i) => i.status === "green").length,
     outstanding: items.filter((i) => i.status !== "green").length,
   };
@@ -6702,6 +6889,7 @@ function JobInventory({
               <option value="All">Ordered/received: all</option>
               <option value="not_ordered">Not ordered</option>
               <option value="ordered_awaiting">Ordered, awaiting</option>
+              <option value="partially_received">Partially received</option>
               <option value="received">Received</option>
             </select>
           </div>
@@ -7360,6 +7548,48 @@ async function submitSuggestion({ jobId, itemId, type, payload, note }) {
       payload,
       note: note || null,
     });
+    return { ok: !error, error: error ? error.message : null };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
+async function submitFieldRequest(text, reportedBy) {
+  try {
+    const { error } = await supabase.from("field_requests").insert({
+      text,
+      reported_by: reportedBy || null,
+    });
+    return { ok: !error, error: error ? error.message : null };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
+async function fetchFieldRequests() {
+  try {
+    const { data, error } = await supabase
+      .from("field_requests")
+      .select("*")
+      .order("created_at", { ascending: false });
+    return { ok: !error, requests: data || [], error: error ? error.message : null };
+  } catch (err) {
+    return { ok: false, requests: [], error: err && err.message ? err.message : String(err) };
+  }
+}
+
+async function updateFieldRequestStatus(id, status) {
+  try {
+    const { error } = await supabase.from("field_requests").update({ status }).eq("id", id);
+    return { ok: !error, error: error ? error.message : null };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
+async function deleteFieldRequest(id) {
+  try {
+    const { error } = await supabase.from("field_requests").delete().eq("id", id);
     return { ok: !error, error: error ? error.message : null };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };
@@ -8534,6 +8764,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
 
   const [pendingSuggestionCount, setPendingSuggestionCount] = useState(0);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [fieldRequestsOpen, setFieldRequestsOpen] = useState(false);
   const [suggestionsList, setSuggestionsList] = useState([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
 
@@ -9332,6 +9563,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
             refreshSuggestions();
             refreshResolvedSuggestions();
           }}
+          onOpenFieldRequests={() => setFieldRequestsOpen(true)}
           onCheckForUpdate={checkForUpdateNow}
           updateCheckMessage={updateCheckMessage}
         />
@@ -9376,6 +9608,10 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           onReapprove={reapproveSuggestion}
           onClose={() => setSuggestionsOpen(false)}
         />
+      )}
+
+      {fieldRequestsOpen && (
+        <FieldRequestsModal onClose={() => setFieldRequestsOpen(false)} />
       )}
 
       {showNewJobModal && (
