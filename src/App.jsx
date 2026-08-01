@@ -44,7 +44,7 @@ const STORAGE_OPTIONS = [
   "Unassigned",
 ];
 const DEFAULT_CONTAINER_OPTIONS = ["Gangbox 12345", "Printshack 67891", "Pallet", "Conex 20-01"];
-const GANG_OPTIONS = ["Raising", "Bolt-up", "Plumb up", "Welding", "Safety", "Misc", "Unassigned"];
+const GANG_OPTIONS = ["Raising", "Bolt Up", "Plumb up", "Welding", "Safety", "Misc", "Unassigned"];
 const STATUS_OPTIONS = [
   { value: "green", label: "Complete" },
   { value: "yellow", label: "Partial" },
@@ -59,7 +59,7 @@ const STATUS_DOT = {
 
 const GANG_COLOR = {
   Raising: "bg-orange-500/15 text-orange-300 border-orange-500/30",
-  "Bolt-up": "bg-sky-500/15 text-sky-300 border-sky-500/30",
+  "Bolt Up": "bg-sky-500/15 text-sky-300 border-sky-500/30",
   "Plumb up": "bg-violet-500/15 text-violet-300 border-violet-500/30",
   Welding: "bg-red-500/15 text-red-300 border-red-500/30",
   Safety: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
@@ -117,7 +117,7 @@ function seedJob() {
         storage: "Red conex",
         containers: [{ name: "Conex 20-01", qty: 400 }],
         status: "green",
-        gang: "Bolt-up",
+        gang: "Bolt Up",
         serials: [],
         needsTransfer: false,
         notes: "",
@@ -1992,7 +1992,7 @@ function CatalogBulkAddModal({ onImport, onCancel }) {
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 placeholder={
-                  "Come along 3-ton | Raising | Red conex\n3/4in A325 bolts | Bolt-up | Conex row | yes\n7018 welding rod | Welders | Covered"
+                  "Come along 3-ton | Raising | Red conex\n3/4in A325 bolts | Bolt Up | Conex row | yes\n7018 welding rod | Welders | Covered"
                 }
                 rows={10}
                 className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60 font-mono resize-none"
@@ -8572,10 +8572,15 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
       // corrupted stored data, not a read failure — safe to fall back to empty
     }
 
+    const normalizeGangName = (g) => {
+      if (g === "Welders") return "Welding";
+      if (g === "Bolt-up") return "Bolt Up";
+      return g;
+    };
     const migrateGang = (job) => ({
       ...job,
       items: (job.items || []).map((i) =>
-        migrateItemContainers(i.gang === "Welders" ? { ...i, gang: "Welding" } : i)
+        migrateItemContainers({ ...i, gang: normalizeGangName(i.gang) })
       ),
     });
     const finalJobs =
@@ -8585,9 +8590,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
       ? loadedActiveId
       : finalJobs[0].id;
     setActiveJobId(validActiveId);
-    const finalCatalog = loadedCatalog.map((c) =>
-      c.gang === "Welders" ? { ...c, gang: "Welding" } : c
-    );
+    const finalCatalog = loadedCatalog.map((c) => ({ ...c, gang: normalizeGangName(c.gang) }));
     setCatalog(finalCatalog);
     jobsUpdatedAtRef.current = jobsResult.updatedAt || null;
     catalogUpdatedAtRef.current = catalogResult.updatedAt || null;
