@@ -2688,9 +2688,8 @@ function FieldRequestsModal({ onClose }) {
   const canvasRef = useRef(null);
 
   // Points to the genuinely separate field-request app (its own deployment,
-  // with none of this app's code in it) — update this once that project
-  // is live at its real Vercel URL.
-  const fieldUrl = "https://riggy-field-request.vercel.app";
+  // with none of this app's code in it).
+  const fieldUrl = "https://field-suggestions.vercel.app";
 
   const refresh = async () => {
     setLoading(true);
