@@ -2785,11 +2785,20 @@ function FieldRequestsModal({ onClose }) {
             <div className="space-y-2.5">
               {list.map((r) => (
                 <div key={r.id} className="border border-slate-800 rounded-md p-3">
+                  {r.job_or_location && (
+                    <p className="text-xs font-semibold text-amber-400 mb-1">
+                      {r.job_or_location}
+                      {r.gang ? ` · ${r.gang}` : ""}
+                    </p>
+                  )}
                   <p className="text-sm text-slate-100 whitespace-pre-wrap">{r.text}</p>
                   <p className="text-xs text-slate-500 mt-1.5">
                     {r.reported_by ? `${r.reported_by} · ` : ""}
                     {new Date(r.created_at).toLocaleString()}
                   </p>
+                  {r.contact_email && (
+                    <p className="text-xs text-slate-500">📧 {r.contact_email}</p>
+                  )}
                   <div className="flex gap-2 mt-2.5">
                     {tab === "pending" ? (
                       <button
@@ -5368,6 +5377,7 @@ function JobPicker({
   pendingSuggestionCount,
   onOpenSuggestions,
   onOpenFieldRequests,
+  pendingFieldRequestCount,
   onCheckForUpdate,
   updateCheckMessage,
 }) {
@@ -5505,7 +5515,11 @@ function JobPicker({
               <button
                 onClick={onOpenSuggestions}
                 title="Suggestions"
-                className="relative flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+                className={`relative flex items-center justify-center rounded-md p-2 border ${
+                  pendingSuggestionCount > 0
+                    ? "bg-yellow-500/15 border-yellow-500/50 text-yellow-300 hover:bg-yellow-500/25"
+                    : "bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700"
+                }`}
               >
                 <Inbox className="w-4 h-4" />
                 {pendingSuggestionCount > 0 && (
@@ -5519,9 +5533,18 @@ function JobPicker({
               <button
                 onClick={onOpenFieldRequests}
                 title="Field requests"
-                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+                className={`relative flex items-center justify-center rounded-md p-2 border ${
+                  pendingFieldRequestCount > 0
+                    ? "bg-yellow-500/15 border-yellow-500/50 text-yellow-300 hover:bg-yellow-500/25"
+                    : "bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700"
+                }`}
               >
                 <QrCode className="w-4 h-4" />
+                {pendingFieldRequestCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-slate-950 text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                    {pendingFieldRequestCount > 9 ? "9+" : pendingFieldRequestCount}
+                  </span>
+                )}
               </button>
             )}
             <button
@@ -8766,6 +8789,15 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   const [fieldRequestsOpen, setFieldRequestsOpen] = useState(false);
   const [suggestionsList, setSuggestionsList] = useState([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [pendingFieldRequestCount, setPendingFieldRequestCount] = useState(0);
+
+  const refreshFieldRequestCount = async () => {
+    if (!isEditor) return;
+    const result = await fetchFieldRequests();
+    if (result.ok) {
+      setPendingFieldRequestCount(result.requests.filter((r) => r.status !== "done").length);
+    }
+  };
 
   const refreshSuggestions = async () => {
     if (!isEditor) return;
@@ -8790,7 +8822,10 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   };
 
   useEffect(() => {
-    if (isEditor) refreshSuggestions();
+    if (isEditor) {
+      refreshSuggestions();
+      refreshFieldRequestCount();
+    }
   }, [isEditor]);
 
   const approveSuggestion = async (s) => {
@@ -9562,7 +9597,11 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
             refreshSuggestions();
             refreshResolvedSuggestions();
           }}
-          onOpenFieldRequests={() => setFieldRequestsOpen(true)}
+          onOpenFieldRequests={() => {
+            setFieldRequestsOpen(true);
+            refreshFieldRequestCount();
+          }}
+          pendingFieldRequestCount={pendingFieldRequestCount}
           onCheckForUpdate={checkForUpdateNow}
           updateCheckMessage={updateCheckMessage}
         />
@@ -9610,7 +9649,12 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
       )}
 
       {fieldRequestsOpen && (
-        <FieldRequestsModal onClose={() => setFieldRequestsOpen(false)} />
+        <FieldRequestsModal
+          onClose={() => {
+            setFieldRequestsOpen(false);
+            refreshFieldRequestCount();
+          }}
+        />
       )}
 
       {showNewJobModal && (
