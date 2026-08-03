@@ -1,4 +1,4 @@
-vimport { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import QRCode from "qrcode";
 import { supabase } from "./supabaseClient";
 import {
