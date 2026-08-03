@@ -3743,8 +3743,12 @@ function TodoListModal({
     });
   };
 
-  const pending = todos.filter((t) => !t.done);
-  const done = todos.filter((t) => t.done);
+  const pending = todos
+    .filter((t) => !t.done)
+    .sort((a, b) => getTodoDisplayText(a).localeCompare(getTodoDisplayText(b)));
+  const done = todos
+    .filter((t) => t.done)
+    .sort((a, b) => getTodoDisplayText(a).localeCompare(getTodoDisplayText(b)));
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40" onClick={onClose}>
