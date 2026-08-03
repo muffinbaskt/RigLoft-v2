@@ -1039,7 +1039,7 @@ function ItemForm({
                 {[
                   { v: "yes", label: "Yes", active: "bg-emerald-500/15 border-emerald-500/50 text-emerald-300" },
                   { v: "partial", label: "Partial", active: "bg-yellow-500/15 border-yellow-500/50 text-yellow-300" },
-                  { v: "no", label: "No", active: "bg-slate-700 border-slate-600 text-slate-200" },
+                  { v: "no", label: "No", active: "bg-red-500/15 border-red-500/50 text-red-300" },
                 ].map((opt) => (
                   <button
                     key={opt.label}
