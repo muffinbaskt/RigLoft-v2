@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+vimport { useState, useEffect, useRef, useMemo } from "react";
 import QRCode from "qrcode";
 import { supabase } from "./supabaseClient";
 import {
@@ -640,11 +640,17 @@ function ItemForm({
     setItem((prev) => {
       const currentHave = totalHave(prev.containers);
       if (count <= currentHave) return prev;
+      if (prev.containers.length === 0) {
+        // No container yet — rather than silently doing nothing, or
+        // guessing an existing container that might be entirely wrong,
+        // create a clearly-labeled placeholder so it's obvious this still
+        // needs a real container assigned.
+        const placeholderName = "SME Item Placeholder";
+        onAddContainer(placeholderName);
+        return { ...prev, containers: [{ name: placeholderName, qty: count }] };
+      }
       // Bump the first container's qty (or create one) so the have-count
-      // still makes sense; if there are no containers yet, there's nowhere
-      // sensible to put the extra count, so just leave it for the user to
-      // sort out via the container rows below.
-      if (prev.containers.length === 0) return prev;
+      // still makes sense.
       const updated = [...prev.containers];
       updated[0] = { ...updated[0], qty: updated[0].qty + (count - currentHave) };
       return { ...prev, containers: updated };
