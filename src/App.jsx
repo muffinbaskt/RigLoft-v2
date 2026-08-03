@@ -2476,6 +2476,7 @@ function CatalogModal({
 function ContainerDetailModal({
   containerName,
   items,
+  catalog = [],
   isEditor,
   onClose,
   onPull,
@@ -2496,7 +2497,15 @@ function ContainerDetailModal({
   const inContainer = inContainerFor(containerName);
   const notInContainer = items
     .filter((i) => !(i.containers || []).some((c) => c.name === containerName))
-    .filter((i) => i.name.toLowerCase().includes(pickSearch.trim().toLowerCase()));
+    .filter((i) => {
+      const q = pickSearch.trim().toLowerCase();
+      if (!q) return true;
+      const catalogMatch = getCachedCatalogMatch(i, catalog);
+      return (
+        i.name.toLowerCase().includes(q) ||
+        (catalogMatch && catalogMatch.name.toLowerCase().includes(q))
+      );
+    });
 
   const toggleSelect = (id) => {
     setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -3891,6 +3900,7 @@ function TodoListModal({
 function ContainersModal({
   containerOptions,
   items,
+  catalog = [],
   isEditor,
   onClose,
   onAdd,
@@ -3930,6 +3940,7 @@ function ContainersModal({
       <ContainerDetailModal
         containerName={openContainer}
         items={items}
+        catalog={catalog}
         isEditor={isEditor}
         onClose={onClose}
         onBack={() => setOpenContainer(null)}
@@ -7240,6 +7251,7 @@ function JobInventory({
         <ContainersModal
           containerOptions={containerOptions}
           items={items}
+          catalog={catalog}
           isEditor={isEditor}
           onClose={() => setContainersOpen(false)}
           onAdd={addContainer}
