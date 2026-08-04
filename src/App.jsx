@@ -3909,6 +3909,7 @@ function ContainersModal({
   items,
   catalog = [],
   isEditor,
+  initialContainer = null,
   onClose,
   onAdd,
   onRename,
@@ -3920,7 +3921,7 @@ function ContainersModal({
   const [renaming, setRenaming] = useState(null);
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
-  const [openContainer, setOpenContainer] = useState(null);
+  const [openContainer, setOpenContainer] = useState(initialContainer);
 
   const countFor = (name) =>
     items.filter((i) => (i.containers || []).some((c) => c.name === name)).length;
@@ -4964,7 +4965,7 @@ function SuggestNewItemModal({ job, onClose }) {
   );
 }
 
-function ItemCard({ item, selectMode, selected, isEditor, onToggleSelect, onEdit, onDelete, onViewSerials, onSuggestEdit }) {
+function ItemCard({ item, selectMode, selected, isEditor, onToggleSelect, onEdit, onDelete, onViewSerials, onSuggestEdit, onOpenContainer }) {
   const handleCardClick = () => {
     if (selectMode) {
       onToggleSelect(item.id);
@@ -5063,12 +5064,16 @@ function ItemCard({ item, selectMode, selected, isEditor, onToggleSelect, onEdit
           {item.storage === "Other" && item.storageDetail ? item.storageDetail : item.storage}
         </span>
         {(item.containers || []).map((c, idx) => (
-          <span
+          <button
             key={idx}
-            className="text-xs rounded-full px-2.5 py-1 border border-indigo-500/30 bg-indigo-500/10 text-indigo-300"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenContainer(c.name);
+            }}
+            className="text-xs rounded-full px-2.5 py-1 border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 hover:border-indigo-500/50"
           >
             📦 {c.name}: {c.qty}
-          </span>
+          </button>
         ))}
         <span
           className={`text-xs rounded-full px-2.5 py-1 border flex items-center gap-1 ${
@@ -6034,6 +6039,12 @@ function JobInventory({
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [containersOpen, setContainersOpen] = useState(false);
+  const [containerToOpen, setContainerToOpen] = useState(null);
+
+  const openContainerFromItem = (containerName) => {
+    setContainerToOpen(containerName);
+    setContainersOpen(true);
+  };
   const [pickListOpen, setPickListOpen] = useState(false);
   const [todoListOpen, setTodoListOpen] = useState(false);
   const [suggestEditTarget, setSuggestEditTarget] = useState(null);
@@ -7193,6 +7204,7 @@ function JobInventory({
                             onDelete={setDeleteTarget}
                             onViewSerials={setSerialsView}
                             onSuggestEdit={setSuggestEditTarget}
+                            onOpenContainer={openContainerFromItem}
                           />
                         ))}
                       </div>
@@ -7215,6 +7227,7 @@ function JobInventory({
                 onDelete={setDeleteTarget}
                 onViewSerials={setSerialsView}
                 onSuggestEdit={setSuggestEditTarget}
+                onOpenContainer={openContainerFromItem}
               />
             ))}
           </div>
@@ -7316,7 +7329,11 @@ function JobInventory({
           items={items}
           catalog={catalog}
           isEditor={isEditor}
-          onClose={() => setContainersOpen(false)}
+          initialContainer={containerToOpen}
+          onClose={() => {
+            setContainersOpen(false);
+            setContainerToOpen(null);
+          }}
           onAdd={addContainer}
           onRename={renameContainer}
           onDelete={deleteContainer}
