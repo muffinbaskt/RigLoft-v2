@@ -5339,7 +5339,15 @@ function JobCard({
                 {items.length} item{items.length === 1 ? "" : "s"}
                 {" ("}
                 {items.reduce((sum, i) => sum + (Number(i.qtyNeeded) || 0), 0)} units)
-                {outstanding > 0 ? ` · ${outstanding} outstanding` : " · all complete"}
+                {outstanding > 0
+                  ? ` · ${outstanding} outstanding (${items
+                      .filter((i) => i.status !== "green")
+                      .reduce(
+                        (sum, i) =>
+                          sum + Math.max(0, (Number(i.qtyNeeded) || 0) - (Number(i.qtyHave) || 0)),
+                        0
+                      )} units)`
+                  : " · all complete"}
               </>
             )}
           </p>
