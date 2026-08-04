@@ -1420,7 +1420,28 @@ function SerialsModal({ itemName, serials, onClose }) {
 function TransferListModal({ jobName, items, requisitions = [], onClose }) {
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
-  const transferItems = items.filter((i) => i.needsTransfer);
+
+  // These always sort to the top, in this exact order — matched against
+  // the item name as a plain substring, case-insensitive. Anything not
+  // matching one of these falls after, sorted alphabetically as usual.
+  const PRIORITY_KEYWORDS = ["conex", "bolt-skip", "bottleracks", "gangbox", "printshack"];
+  const priorityRank = (name) => {
+    const lower = (name || "").toLowerCase();
+    const idx = PRIORITY_KEYWORDS.findIndex((kw) => lower.includes(kw));
+    return idx === -1 ? PRIORITY_KEYWORDS.length : idx;
+  };
+  const sortWithPriority = (list, getName) =>
+    [...list].sort((a, b) => {
+      const rankA = priorityRank(getName(a));
+      const rankB = priorityRank(getName(b));
+      if (rankA !== rankB) return rankA - rankB;
+      return getName(a).localeCompare(getName(b));
+    });
+
+  const transferItems = sortWithPriority(
+    items.filter((i) => i.needsTransfer),
+    (i) => i.name
+  );
 
   const lineFor = (item) =>
     item.serials && item.serials.length > 0
@@ -1429,11 +1450,19 @@ function TransferListModal({ jobName, items, requisitions = [], onClose }) {
 
   const reqLineFor = (r) => `${r.spec} x${r.qty}${r.location ? ` — ${r.location}` : ""}`;
 
+  const reqCategoriesText = [...new Set(requisitions.map((r) => r.category))]
+    .map(
+      (cat) =>
+        `${cat}:\n${requisitions
+          .filter((r) => r.category === cat)
+          .map(reqLineFor)
+          .join("\n")}`
+    )
+    .join("\n\n");
+
   const asText = [
     transferItems.map(lineFor).join("\n"),
-    requisitions.length > 0
-      ? `\nRequisitions:\n${requisitions.map(reqLineFor).join("\n")}`
-      : "",
+    requisitions.length > 0 ? `\nRequisitions:\n${reqCategoriesText}` : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -1503,15 +1532,26 @@ function TransferListModal({ jobName, items, requisitions = [], onClose }) {
                     <ClipboardList className="w-3.5 h-3.5" />
                     Requisitions
                   </p>
-                  <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden">
-                    {requisitions.map((r) => (
-                      <div key={r.id} className="px-3 py-2 bg-slate-800/40">
-                        <p className="text-sm text-slate-100">
-                          {r.spec} <span className="text-slate-500">x{r.qty}</span>
-                        </p>
-                        {r.location && (
-                          <p className="text-xs text-slate-500 mt-0.5">📍 {r.location}</p>
-                        )}
+                  <div className="space-y-3">
+                    {[...new Set(requisitions.map((r) => r.category))].map((cat) => (
+                      <div key={cat}>
+                        <p className="text-xs font-semibold text-slate-400 mb-1.5">{cat}</p>
+                        <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden">
+                          {requisitions
+                            .filter((r) => r.category === cat)
+                            .map((r) => (
+                              <div key={r.id} className="px-3 py-2 bg-slate-800/40">
+                                <p className="text-sm text-slate-100">
+                                  {r.spec} <span className="text-slate-500">x{r.qty}</span>
+                                </p>
+                                {r.location && (
+                                  <p className="text-xs text-slate-500 mt-0.5">
+                                    📍 {r.location}
+                                  </p>
+                                )}
+                              </div>
+                            ))}
+                        </div>
                       </div>
                     ))}
                   </div>
