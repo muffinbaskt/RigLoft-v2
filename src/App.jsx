@@ -30,6 +30,7 @@ import {
   LogOut,
   ListChecks,
   Inbox,
+  ClipboardList,
   QrCode,
   Bell,
 } from "lucide-react";
@@ -1416,7 +1417,7 @@ function SerialsModal({ itemName, serials, onClose }) {
   );
 }
 
-function TransferListModal({ jobName, items, onClose }) {
+function TransferListModal({ jobName, items, requisitions = [], onClose }) {
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const transferItems = items.filter((i) => i.needsTransfer);
@@ -1426,7 +1427,16 @@ function TransferListModal({ jobName, items, onClose }) {
       ? `${item.name}: ${item.serials.join(", ")}`
       : `${item.name} x${item.qtyHave}`;
 
-  const asText = transferItems.map(lineFor).join("\n");
+  const reqLineFor = (r) => `${r.spec} x${r.qty}${r.location ? ` — ${r.location}` : ""}`;
+
+  const asText = [
+    transferItems.map(lineFor).join("\n"),
+    requisitions.length > 0
+      ? `\nRequisitions:\n${requisitions.map(reqLineFor).join("\n")}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const copyList = async () => {
     const ok = await copyToClipboard(`Transfer list — ${jobName}\n\n${asText}`);
@@ -1449,6 +1459,9 @@ function TransferListModal({ jobName, items, onClose }) {
             </h2>
             <p className="text-xs text-slate-500 truncate">
               {jobName} · {transferItems.length} item{transferItems.length === 1 ? "" : "s"}
+              {requisitions.length > 0
+                ? ` · ${requisitions.length} REQ${requisitions.length === 1 ? "" : "s"}`
+                : ""}
             </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-200 shrink-0">
@@ -1457,33 +1470,58 @@ function TransferListModal({ jobName, items, onClose }) {
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4">
-          {transferItems.length === 0 ? (
+          {transferItems.length === 0 && requisitions.length === 0 ? (
             <p className="text-sm text-slate-500 text-center py-10">
-              No items are marked to transfer yet. Mark items with "Needs transfer" in the item
-              form.
+              No items are marked to transfer yet, and there's nothing on the REQ page either.
+              Mark items with "Needs transfer" in the item form, or add requisitions from the
+              REQ page.
             </p>
           ) : (
-            <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden">
-              {transferItems.map((item) => (
-                <div key={item.id} className="px-3 py-2 bg-slate-800/40">
-                  <p className="text-sm text-slate-100">
-                    {item.name}{" "}
-                    {!(item.serials && item.serials.length > 0) && (
-                      <span className="text-slate-500">x{item.qtyHave}</span>
-                    )}
-                  </p>
-                  {item.serials && item.serials.length > 0 && (
-                    <p className="text-xs text-fuchsia-300 font-mono break-words mt-0.5">
-                      {item.serials.join(", ")}
-                    </p>
-                  )}
+            <>
+              {transferItems.length > 0 && (
+                <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden mb-4">
+                  {transferItems.map((item) => (
+                    <div key={item.id} className="px-3 py-2 bg-slate-800/40">
+                      <p className="text-sm text-slate-100">
+                        {item.name}{" "}
+                        {!(item.serials && item.serials.length > 0) && (
+                          <span className="text-slate-500">x{item.qtyHave}</span>
+                        )}
+                      </p>
+                      {item.serials && item.serials.length > 0 && (
+                        <p className="text-xs text-fuchsia-300 font-mono break-words mt-0.5">
+                          {item.serials.join(", ")}
+                        </p>
+                      )}
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+              {requisitions.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-1.5">
+                    <ClipboardList className="w-3.5 h-3.5" />
+                    Requisitions
+                  </p>
+                  <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden">
+                    {requisitions.map((r) => (
+                      <div key={r.id} className="px-3 py-2 bg-slate-800/40">
+                        <p className="text-sm text-slate-100">
+                          {r.spec} <span className="text-slate-500">x{r.qty}</span>
+                        </p>
+                        {r.location && (
+                          <p className="text-xs text-slate-500 mt-0.5">📍 {r.location}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
 
-        {transferItems.length > 0 && (
+        {(transferItems.length > 0 || requisitions.length > 0) && (
           <div className="px-5 py-4 border-t border-slate-800">
             <button
               onClick={copyList}
@@ -3489,38 +3527,50 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
                           </span>
                         </button>
                       ) : editingEntry && editingEntry.id === r.id ? (
-                        <div key={r.id} className="flex items-center gap-1.5">
-                          <input
-                            autoFocus
-                            value={editingEntry.spec}
-                            onChange={(e) =>
-                              setEditingEntry({ ...editingEntry, spec: e.target.value })
-                            }
-                            className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-                          />
-                          <input
-                            type="number"
-                            value={editingEntry.qty}
-                            onChange={(e) =>
-                              setEditingEntry({
-                                ...editingEntry,
-                                qty: Number(e.target.value) || 0,
-                              })
-                            }
-                            className="w-16 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-                          />
-                          <button
-                            onClick={saveEntry}
-                            className="text-xs bg-amber-500 text-slate-950 font-semibold rounded-md px-2 py-1.5 shrink-0"
-                          >
-                            Save
-                          </button>
-                          <button
-                            onClick={() => setEditingEntry(null)}
-                            className="text-slate-500 hover:text-slate-300 p-1 shrink-0"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
+                        <div key={r.id} className="space-y-1.5">
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              autoFocus
+                              value={editingEntry.spec}
+                              onChange={(e) =>
+                                setEditingEntry({ ...editingEntry, spec: e.target.value })
+                              }
+                              className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                            />
+                            <input
+                              type="number"
+                              value={editingEntry.qty}
+                              onChange={(e) =>
+                                setEditingEntry({
+                                  ...editingEntry,
+                                  qty: Number(e.target.value) || 0,
+                                })
+                              }
+                              className="w-16 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                            />
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              value={editingEntry.location || ""}
+                              onChange={(e) =>
+                                setEditingEntry({ ...editingEntry, location: e.target.value })
+                              }
+                              placeholder="Location (optional)"
+                              className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-400 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                            />
+                            <button
+                              onClick={saveEntry}
+                              className="text-xs bg-amber-500 text-slate-950 font-semibold rounded-md px-2 py-1.5 shrink-0"
+                            >
+                              Save
+                            </button>
+                            <button
+                              onClick={() => setEditingEntry(null)}
+                              className="text-slate-500 hover:text-slate-300 p-1 shrink-0"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
                       ) : (
                         <div
@@ -3529,26 +3579,33 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
                             r.fulfilled ? "bg-emerald-500/10 border border-emerald-500/30" : ""
                           }`}
                         >
-                          <span className="flex items-center gap-1.5 min-w-0">
-                            {r.fulfilled && isEditor && (
-                              <button
-                                onClick={() => toggleFulfilled(r.id)}
-                                title="Uncheck to edit quantity again"
-                                className="shrink-0"
+                          <span className="flex flex-col min-w-0">
+                            <span className="flex items-center gap-1.5 min-w-0">
+                              {r.fulfilled && isEditor && (
+                                <button
+                                  onClick={() => toggleFulfilled(r.id)}
+                                  title="Uncheck to edit quantity again"
+                                  className="shrink-0"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 hover:text-emerald-300" />
+                                </button>
+                              )}
+                              {r.fulfilled && !isEditor && (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                              )}
+                              <span
+                                className={`text-sm truncate ${
+                                  r.fulfilled ? "text-emerald-300" : "text-slate-200"
+                                }`}
                               >
-                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 hover:text-emerald-300" />
-                              </button>
-                            )}
-                            {r.fulfilled && !isEditor && (
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                            )}
-                            <span
-                              className={`text-sm truncate ${
-                                r.fulfilled ? "text-emerald-300" : "text-slate-200"
-                              }`}
-                            >
-                              {r.spec}
+                                {r.spec}
+                              </span>
                             </span>
+                            {r.location && (
+                              <span className="text-xs text-slate-500 truncate pl-0">
+                                📍 {r.location}
+                              </span>
+                            )}
                           </span>
                           <div className="flex items-center gap-2 shrink-0">
                             <span className="text-xs text-slate-500">x</span>
@@ -7302,6 +7359,7 @@ function JobInventory({
         <TransferListModal
           jobName={job.name}
           items={items}
+          requisitions={job.requisitions || []}
           onClose={() => setTransferListOpen(false)}
         />
       )}
