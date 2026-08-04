@@ -9416,17 +9416,17 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
       )}
 
       {updateAvailable && (
-        <div className="fixed top-0 inset-x-0 z-[80] bg-amber-500 text-slate-950 text-sm font-medium shadow-lg">
-          <div className="max-w-5xl mx-auto px-4 py-2 flex items-center justify-between gap-3">
+        <button
+          onClick={applyUpdate}
+          className="fixed top-0 inset-x-0 z-[80] w-full bg-amber-500 text-slate-950 text-sm font-medium shadow-lg text-left"
+        >
+          <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
             <span>A new version of Riggy is ready</span>
-            <button
-              onClick={applyUpdate}
-              className="bg-slate-950 text-amber-400 text-xs font-semibold rounded-md px-3 py-1.5 hover:bg-slate-900 shrink-0"
-            >
+            <span className="bg-slate-950 text-amber-400 text-xs font-semibold rounded-md px-4 py-2.5 shrink-0">
               Update now
-            </button>
+            </span>
           </div>
-        </div>
+        </button>
       )}
 
       {syncing && (
