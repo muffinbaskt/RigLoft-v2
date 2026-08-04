@@ -1417,24 +1417,23 @@ function SerialsModal({ itemName, serials, onClose }) {
   );
 }
 
-function TransferListModal({ jobName, items, requisitions = [], onClose }) {
+function TransferListModal({ jobName, items, requisitions = [], catalog = [], onClose }) {
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
 
-  // These always sort to the top, in this exact order — matched against
-  // the item name as a plain substring, case-insensitive. Anything not
-  // matching one of these falls after, sorted alphabetically as usual.
-  const PRIORITY_KEYWORDS = ["conex", "bolt-skip", "bottleracks", "gangbox", "printshack"];
-  const priorityRank = (name) => {
-    const lower = (name || "").toLowerCase();
-    const idx = PRIORITY_KEYWORDS.findIndex((kw) => lower.includes(kw));
-    return idx === -1 ? PRIORITY_KEYWORDS.length : idx;
+  // Pinned items (set from the catalog screen) always sort to the top,
+  // ahead of everything else — determined by the item's actual catalog
+  // link, not by matching text in the name (which broke on things like a
+  // stray space in "Gang Box" vs "Gangbox").
+  const isPinned = (item) => {
+    const match = getCachedCatalogMatch(item, catalog);
+    return !!(match && match.pinned);
   };
   const sortWithPriority = (list, getName) =>
     [...list].sort((a, b) => {
-      const rankA = priorityRank(getName(a));
-      const rankB = priorityRank(getName(b));
-      if (rankA !== rankB) return rankA - rankB;
+      const pinA = isPinned(a) ? 0 : 1;
+      const pinB = isPinned(b) ? 0 : 1;
+      if (pinA !== pinB) return pinA - pinB;
       return getName(a).localeCompare(getName(b));
     });
 
@@ -1784,11 +1783,12 @@ function emptyCatalogItem() {
     category: "",
     vendor: "",
     needsTransfer: false,
+    pinned: false,
   };
 }
 
 function CatalogItemForm({ initial, existingCategories = [], existingVendors = [], onSave, onCancel }) {
-  const [item, setItem] = useState({ needsTransfer: false, category: "", ...initial });
+  const [item, setItem] = useState({ needsTransfer: false, pinned: false, category: "", ...initial });
   const set = (field) => (val) => setItem((prev) => ({ ...prev, [field]: val }));
   const canSave = item.name.trim().length > 0;
 
@@ -1866,26 +1866,49 @@ function CatalogItemForm({ initial, existingCategories = [], existingVendors = [
               Always needs transfer when job ships?
             </label>
             <div className="flex gap-2">
-              {[
-                { v: true, label: "Yes" },
-                { v: false, label: "No" },
-              ].map((opt) => (
-                <button
-                  key={opt.label}
-                  onClick={() => set("needsTransfer")(opt.v)}
-                  className={`flex-1 text-sm rounded-md py-2 border transition-colors ${
-                    item.needsTransfer === opt.v
-                      ? "bg-purple-500/15 border-purple-500/50 text-purple-300"
-                      : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
+              <button
+                onClick={() => set("needsTransfer")(true)}
+                className={`flex-1 text-sm rounded-md py-2 border transition-colors ${
+                  item.needsTransfer
+                    ? "bg-purple-500/15 border-purple-500/50 text-purple-300"
+                    : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Yes
+              </button>
+              <button
+                onClick={() =>
+                  setItem((prev) => ({ ...prev, needsTransfer: false, pinned: false }))
+                }
+                className={`flex-1 text-sm rounded-md py-2 border transition-colors ${
+                  !item.needsTransfer
+                    ? "bg-purple-500/15 border-purple-500/50 text-purple-300"
+                    : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                No
+              </button>
+              <button
+                onClick={() =>
+                  setItem((prev) =>
+                    prev.pinned
+                      ? { ...prev, pinned: false }
+                      : { ...prev, pinned: true, needsTransfer: true }
+                  )
+                }
+                className={`flex-1 text-sm rounded-md py-2 border transition-colors ${
+                  item.pinned
+                    ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
+                    : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Pin
+              </button>
             </div>
             <p className="text-xs text-slate-600 mt-1">
               Items matched to this catalog entry during import will be pre-flagged for
-              transfer automatically.
+              transfer automatically. Pinned items always sort to the top of the transfer list,
+              ahead of everything else.
             </p>
           </div>
         </div>
@@ -7400,6 +7423,7 @@ function JobInventory({
           jobName={job.name}
           items={items}
           requisitions={job.requisitions || []}
+          catalog={catalog}
           onClose={() => setTransferListOpen(false)}
         />
       )}
