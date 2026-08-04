@@ -6509,6 +6509,7 @@ function JobInventory({
 
   const counts = {
     total: items.length,
+    totalUnits: items.reduce((sum, i) => sum + (Number(i.qtyNeeded) || 0), 0),
     ordered: items.filter((i) => i.ordered).length,
     received: items.filter((i) => normalizeReceived(i.received) === "yes").length,
     complete: items.filter((i) => i.status === "green").length,
@@ -6831,9 +6832,15 @@ function JobInventory({
 
         {/* Stat strip */}
         <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mb-5">
-          <div className="bg-slate-900 border border-slate-800 rounded-md p-3">
+          <div
+            className="bg-slate-900 border border-slate-800 rounded-md p-3"
+            title="Item entries / total units needed across all of them"
+          >
             <p className="text-xs text-slate-500">Items</p>
-            <p className="text-lg font-bold text-slate-100">{counts.total}</p>
+            <p className="text-lg font-bold text-slate-100">
+              {counts.total}
+              <span className="text-slate-500 font-normal"> / {counts.totalUnits}</span>
+            </p>
           </div>
           <div className="bg-slate-900 border border-slate-800 rounded-md p-3">
             <p className="text-xs text-slate-500">Ordered</p>
