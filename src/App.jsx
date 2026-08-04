@@ -5337,6 +5337,8 @@ function JobCard({
             ) : (
               <>
                 {items.length} item{items.length === 1 ? "" : "s"}
+                {" ("}
+                {items.reduce((sum, i) => sum + (Number(i.qtyNeeded) || 0), 0)} units)
                 {outstanding > 0 ? ` · ${outstanding} outstanding` : " · all complete"}
               </>
             )}
@@ -6511,9 +6513,24 @@ function JobInventory({
     total: items.length,
     totalUnits: items.reduce((sum, i) => sum + (Number(i.qtyNeeded) || 0), 0),
     ordered: items.filter((i) => i.ordered).length,
+    orderedUnits: items
+      .filter((i) => i.ordered)
+      .reduce((sum, i) => sum + (Number(i.qtyNeeded) || 0), 0),
     received: items.filter((i) => normalizeReceived(i.received) === "yes").length,
+    receivedUnits: items
+      .filter((i) => normalizeReceived(i.received) === "yes")
+      .reduce((sum, i) => sum + (Number(i.qtyNeeded) || 0), 0),
     complete: items.filter((i) => i.status === "green").length,
+    completeUnits: items
+      .filter((i) => i.status === "green")
+      .reduce((sum, i) => sum + (Number(i.qtyNeeded) || 0), 0),
     outstanding: items.filter((i) => i.status !== "green").length,
+    // Outstanding shows the actual remaining gap (still needed minus what's
+    // on hand), not just the total scope of those items — that's the more
+    // useful number for "what's actually left to get."
+    outstandingUnits: items
+      .filter((i) => i.status !== "green")
+      .reduce((sum, i) => sum + Math.max(0, (Number(i.qtyNeeded) || 0) - (Number(i.qtyHave) || 0)), 0),
   };
 
   if (requisitionsOpen) {
@@ -6842,21 +6859,45 @@ function JobInventory({
               <span className="text-slate-500 font-normal"> / {counts.totalUnits}</span>
             </p>
           </div>
-          <div className="bg-slate-900 border border-slate-800 rounded-md p-3">
+          <div
+            className="bg-slate-900 border border-slate-800 rounded-md p-3"
+            title="Item entries / total units ordered across all of them"
+          >
             <p className="text-xs text-slate-500">Ordered</p>
-            <p className="text-lg font-bold text-slate-100">{counts.ordered}</p>
+            <p className="text-lg font-bold text-slate-100">
+              {counts.ordered}
+              <span className="text-slate-500 font-normal"> / {counts.orderedUnits}</span>
+            </p>
           </div>
-          <div className="bg-slate-900 border border-slate-800 rounded-md p-3">
+          <div
+            className="bg-slate-900 border border-slate-800 rounded-md p-3"
+            title="Item entries / total units received across all of them"
+          >
             <p className="text-xs text-slate-500">Received</p>
-            <p className="text-lg font-bold text-slate-100">{counts.received}</p>
+            <p className="text-lg font-bold text-slate-100">
+              {counts.received}
+              <span className="text-slate-500 font-normal"> / {counts.receivedUnits}</span>
+            </p>
           </div>
-          <div className="bg-slate-900 border border-slate-800 rounded-md p-3">
+          <div
+            className="bg-slate-900 border border-slate-800 rounded-md p-3"
+            title="Item entries / total units across all of them"
+          >
             <p className="text-xs text-slate-500">Complete</p>
-            <p className="text-lg font-bold text-emerald-400">{counts.complete}</p>
+            <p className="text-lg font-bold text-emerald-400">
+              {counts.complete}
+              <span className="text-slate-500 font-normal"> / {counts.completeUnits}</span>
+            </p>
           </div>
-          <div className="bg-slate-900 border border-slate-800 rounded-md p-3">
+          <div
+            className="bg-slate-900 border border-slate-800 rounded-md p-3"
+            title="Item entries / units still actually needed (not yet on hand)"
+          >
             <p className="text-xs text-slate-500">Outstanding</p>
-            <p className="text-lg font-bold text-amber-400">{counts.outstanding}</p>
+            <p className="text-lg font-bold text-amber-400">
+              {counts.outstanding}
+              <span className="text-slate-500 font-normal"> / {counts.outstandingUnits}</span>
+            </p>
           </div>
         </div>
 
