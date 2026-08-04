@@ -712,6 +712,7 @@ function ItemForm({
         serials: finalSerials,
         status: "green",
         catalogId: manualCatalogLinkId,
+        needsTransfer: !!(effectiveCatalogMatch && effectiveCatalogMatch.needsTransfer),
       });
     };
 
@@ -8601,9 +8602,18 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     };
     const migrateGang = (job) => ({
       ...job,
-      items: (job.items || []).map((i) =>
-        migrateItemContainers({ ...i, gang: normalizeGangName(i.gang) })
-      ),
+      items: (job.items || []).map((i) => {
+        let needsTransfer = i.needsTransfer;
+        if (job.isQuickTransfer) {
+          const match = getCachedCatalogMatch(i, loadedCatalog);
+          needsTransfer = !!(match && match.needsTransfer);
+        }
+        return migrateItemContainers({
+          ...i,
+          gang: normalizeGangName(i.gang),
+          needsTransfer,
+        });
+      }),
     });
     const finalJobs =
       loadedJobs && loadedJobs.length > 0 ? loadedJobs.map(migrateGang) : [seedJob()];
