@@ -5996,22 +5996,20 @@ function JobCard({
       </div>
       {isEditor && (
         <div className="flex items-center gap-1 shrink-0">
-          {job.isQuickTransfer && (
-            <span
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleSeal(job);
-              }}
-              title={job.sealed ? "Unseal (allow editing again)" : "Seal (make read-only)"}
-              className="text-slate-600 hover:text-slate-300 p-1.5 rounded-md hover:bg-slate-800"
-            >
-              {job.sealed ? (
-                <Unlock className="w-3.5 h-3.5" />
-              ) : (
-                <Lock className="w-3.5 h-3.5" />
-              )}
-            </span>
-          )}
+          <span
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleSeal(job);
+            }}
+            title={job.sealed ? "Unseal (allow editing again)" : "Seal (make read-only)"}
+            className="text-slate-600 hover:text-slate-300 p-1.5 rounded-md hover:bg-slate-800"
+          >
+            {job.sealed ? (
+              <Unlock className="w-3.5 h-3.5" />
+            ) : (
+              <Lock className="w-3.5 h-3.5" />
+            )}
+          </span>
           <span
             onClick={(e) => {
               e.stopPropagation();
