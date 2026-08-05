@@ -3852,6 +3852,7 @@ function TodoListModal({
       return;
     }
     setNewText("");
+    playSaveChime();
     await submitSuggestion({
       jobId: job.id,
       itemId: null,
@@ -3870,6 +3871,7 @@ function TodoListModal({
     }
     if (sentIds[t.id]) return;
     setSentIds((prev) => ({ ...prev, [t.id]: true }));
+    playSaveChime();
     await submitSuggestion({
       jobId: job.id,
       itemId: null,
@@ -4808,6 +4810,7 @@ function SuggestEditModal({ job, item, onSubmit, onClose }) {
 
   const handleSubmit = async () => {
     setSubmitting(true);
+    playSaveChime();
     const result = await submitSuggestion({
       jobId: job.id,
       itemId: item.id,
@@ -4969,6 +4972,7 @@ function SuggestNewItemModal({ job, onClose }) {
   const handleSubmit = async () => {
     if (!canSubmit) return;
     setSubmitting(true);
+    playSaveChime();
     const result = await submitSuggestion({
       jobId: job.id,
       itemId: null,
@@ -6472,7 +6476,7 @@ function JobInventory({
   const bulkSetOrdered = (value) =>
     bulkUpdate((i) => ({ ...i, ordered: value }), `Marked ${value ? "ordered" : "not ordered"}`);
   const bulkSetReceived = (value) =>
-    bulkUpdate((i) => ({ ...i, received: value }), `Marked ${value ? "received" : "not received"}`);
+    bulkUpdate((i) => ({ ...i, received: value }), `Marked received: ${value}`);
   const bulkSetGang = (gang) => {
     bulkUpdate((i) => ({ ...i, gang }), `Gang set to ${gang}`);
     setBulkGangPicker(false);
@@ -7210,10 +7214,22 @@ function JobInventory({
                   Mark ordered
                 </button>
                 <button
-                  onClick={() => bulkSetReceived(true)}
+                  onClick={() => bulkSetReceived("yes")}
                   className="text-xs bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-2.5 py-1.5 hover:bg-slate-700"
                 >
                   Mark received
+                </button>
+                <button
+                  onClick={() => bulkSetReceived("partial")}
+                  className="text-xs bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-2.5 py-1.5 hover:bg-slate-700"
+                >
+                  Mark partial
+                </button>
+                <button
+                  onClick={() => bulkSetReceived("no")}
+                  className="text-xs bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-2.5 py-1.5 hover:bg-slate-700"
+                >
+                  Mark not received
                 </button>
                 <button
                   onClick={() => setBulkGangPicker(true)}
