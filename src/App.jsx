@@ -6810,21 +6810,6 @@ function JobInventory({
     }));
   };
 
-  const toggleSealed = () => {
-    onUpdateJob((prevJob) => ({
-      ...prevJob,
-      sealed: !prevJob.sealed,
-      activityLog: [
-        {
-          id: Date.now(),
-          time: timeStamp(),
-          message: prevJob.sealed ? "Job unsealed" : "Job sealed (read-only)",
-        },
-        ...prevJob.activityLog,
-      ].slice(0, 50),
-    }));
-  };
-
   const renameContainer = (oldName, newName) => {
     onUpdateJob((prevJob) => ({
       ...prevJob,
@@ -7511,29 +7496,6 @@ function JobInventory({
                     </button>
                   )}
                 </div>
-            )}
-            {rawIsEditor && (
-              <div className="border-t border-slate-700">
-                <button
-                  onClick={() => {
-                    toggleSealed();
-                    setMenuOpen(false);
-                  }}
-                  className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
-                >
-                  {job.sealed ? (
-                    <>
-                      <Unlock className="w-4 h-4 text-slate-400" />
-                      Unseal job
-                    </>
-                  ) : (
-                    <>
-                      <Lock className="w-4 h-4 text-slate-400" />
-                      Seal job (read-only)
-                    </>
-                  )}
-                </button>
-              </div>
             )}
             {isEditor ? (
               <button
