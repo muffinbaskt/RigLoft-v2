@@ -5993,7 +5993,6 @@ function JobPicker({
             </p>
             <div className="space-y-2.5">
               {quickTransferJobs.map((job) => {
-                const outstanding = (job.items || []).filter((i) => i.status !== "green").length;
                 const children = childrenOf(job.id);
                 const isCollapsed = collapsed[job.id];
                 return (
@@ -6015,17 +6014,17 @@ function JobPicker({
                       ) : (
                         <span className="w-7 shrink-0" />
                       )}
-                      <div className="flex-1 min-w-0">
-                        <JobCard
-                          job={job}
-                          indent={false}
-                          outstanding={outstanding}
-                          entryCount={children.length > 0 ? children.length : undefined}
-                          isEditor={isEditor}
-                          onSelect={() => onSelect(job.id)}
-                          onRename={onRenameRequest}
-                          onDelete={onDeleteRequest}
-                        />
+                      <div className="flex-1 min-w-0 px-1 py-1">
+                        <p className="font-semibold text-slate-100 text-base flex items-center gap-1.5">
+                          <Truck className="w-4 h-4 text-sky-400 shrink-0" />
+                          <span className="truncate">{job.name}</span>
+                          <span className="text-[10px] font-medium tracking-wide uppercase bg-sky-500/10 border border-sky-500/40 text-sky-300 rounded-full px-1.5 py-0.5 shrink-0">
+                            Quick
+                          </span>
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {children.length} entr{children.length === 1 ? "y" : "ies"}
+                        </p>
                       </div>
                     </div>
 
