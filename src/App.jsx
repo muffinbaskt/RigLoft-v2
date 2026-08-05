@@ -7,6 +7,8 @@ import {
   X,
   Trash2,
   Pencil,
+  Lock,
+  Unlock,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -180,6 +182,7 @@ function newJob(name, parentId = null, color = null, isQuickTransfer = false) {
     parentId,
     color,
     isQuickTransfer,
+    sealed: false,
     items: [],
     containerOptions: [],
     categoryOptions: [],
@@ -5898,6 +5901,7 @@ function JobCard({
   onSelect,
   onRename,
   onDelete,
+  onToggleSeal,
 }) {
   const borderClass = job.isQuickTransfer
     ? "border-l-sky-500"
@@ -5943,6 +5947,12 @@ function JobCard({
                 Quick
               </span>
             )}
+            {job.sealed && (
+              <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-700 border border-slate-600 text-slate-300 rounded-full px-1.5 py-0.5 shrink-0 flex items-center gap-1">
+                <Lock className="w-2.5 h-2.5" />
+                Sealed
+              </span>
+            )}
             {!job.isQuickTransfer && job.parentId && (
               <span className="text-[10px] font-medium tracking-wide uppercase bg-purple-500/10 border border-purple-500/40 text-purple-300 rounded-full px-1.5 py-0.5 shrink-0">
                 Sub-job
@@ -5986,6 +5996,22 @@ function JobCard({
       </div>
       {isEditor && (
         <div className="flex items-center gap-1 shrink-0">
+          {job.isQuickTransfer && (
+            <span
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleSeal(job);
+              }}
+              title={job.sealed ? "Unseal (allow editing again)" : "Seal (make read-only)"}
+              className="text-slate-600 hover:text-slate-300 p-1.5 rounded-md hover:bg-slate-800"
+            >
+              {job.sealed ? (
+                <Unlock className="w-3.5 h-3.5" />
+              ) : (
+                <Lock className="w-3.5 h-3.5" />
+              )}
+            </span>
+          )}
           <span
             onClick={(e) => {
               e.stopPropagation();
@@ -6020,6 +6046,7 @@ function JobPicker({
   onCreateQuickTransferClick,
   onCreateSubJobClick,
   onDeleteRequest,
+  onToggleJobSeal,
   onRenameRequest,
   onResetRequest,
   onOpenCatalog,
@@ -6302,6 +6329,7 @@ function JobPicker({
                             onSelect={() => onSelect(job.id)}
                             onRename={onRenameRequest}
                             onDelete={onDeleteRequest}
+                            onToggleSeal={onToggleJobSeal}
                           />
                         );
                       })}
@@ -6446,6 +6474,7 @@ function JobPicker({
                         onSelect={() => onSelect(job.id)}
                         onRename={onRenameRequest}
                         onDelete={onDeleteRequest}
+                        onToggleSeal={onToggleJobSeal}
                       />
                     </div>
                   </div>
@@ -6466,6 +6495,7 @@ function JobPicker({
                             onSelect={() => onSelect(child.id)}
                             onRename={onRenameRequest}
                             onDelete={onDeleteRequest}
+                            onToggleSeal={onToggleJobSeal}
                           />
                         );
                       })}
@@ -6528,6 +6558,14 @@ function JobPicker({
                           {children.length} entr{children.length === 1 ? "y" : "ies"}
                         </p>
                       </div>
+                      {isEditor && (
+                        <button
+                          onClick={() => onDeleteRequest(job)}
+                          className="text-slate-600 hover:text-red-400 p-1.5 shrink-0"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
 
                     {!isCollapsed && children.length > 0 && (
@@ -6546,6 +6584,7 @@ function JobPicker({
                               onSelect={() => onSelect(child.id)}
                               onRename={onRenameRequest}
                               onDelete={onDeleteRequest}
+                              onToggleSeal={onToggleJobSeal}
                             />
                           );
                         })}
@@ -6626,7 +6665,7 @@ function JobPicker({
 
 function JobInventory({
   job,
-  isEditor,
+  isEditor: rawIsEditor,
   onRequestLogin,
   onUpdateJob,
   onBackToJobs,
@@ -6635,6 +6674,11 @@ function JobInventory({
   onOpenCatalog,
   onRenameJob,
 }) {
+  // A sealed job behaves exactly like browse-only mode, regardless of
+  // being actually logged in — reuses every existing disabled-editing
+  // check throughout this screen instead of needing a second, separate
+  // "can I edit this" system.
+  const isEditor = rawIsEditor && !job.sealed;
   const items = job.items || [];
   const containerOptions = job.containerOptions || [];
   const categoryOptions = job.categoryOptions || [];
@@ -6762,6 +6806,21 @@ function JobInventory({
           message: `Synced gang/storage/category/transfer from catalog for ${preview.length} item${
             preview.length === 1 ? "" : "s"
           }`,
+        },
+        ...prevJob.activityLog,
+      ].slice(0, 50),
+    }));
+  };
+
+  const toggleSealed = () => {
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      sealed: !prevJob.sealed,
+      activityLog: [
+        {
+          id: Date.now(),
+          time: timeStamp(),
+          message: prevJob.sealed ? "Job unsealed" : "Job sealed (read-only)",
         },
         ...prevJob.activityLog,
       ].slice(0, 50),
@@ -7295,8 +7354,16 @@ function JobInventory({
                   />
                 )}
                 {job.name}
+                {job.sealed && (
+                  <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-700 border border-slate-600 text-slate-300 rounded-full px-1.5 py-0.5 shrink-0 flex items-center gap-1">
+                    <Lock className="w-2.5 h-2.5" />
+                    Sealed
+                  </span>
+                )}
               </h1>
-              <p className="text-xs text-slate-500 leading-tight">Job inventory tracker</p>
+              <p className="text-xs text-slate-500 leading-tight">
+                {job.sealed ? "Sealed — read only" : "Job inventory tracker"}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0 relative">
@@ -7446,6 +7513,29 @@ function JobInventory({
                     </button>
                   )}
                 </div>
+            )}
+            {rawIsEditor && (
+              <div className="border-t border-slate-700">
+                <button
+                  onClick={() => {
+                    toggleSealed();
+                    setMenuOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                >
+                  {job.sealed ? (
+                    <>
+                      <Unlock className="w-4 h-4 text-slate-400" />
+                      Unseal job
+                    </>
+                  ) : (
+                    <>
+                      <Lock className="w-4 h-4 text-slate-400" />
+                      Seal job (read-only)
+                    </>
+                  )}
+                </button>
+              </div>
             )}
             {isEditor ? (
               <button
@@ -9869,6 +9959,10 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     setShowQuickTransferModal(false);
   };
 
+  const toggleJobSeal = (job) => {
+    setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, sealed: !j.sealed } : j)));
+  };
+
   const deleteJob = (job) => {
     setJobs((prev) => prev.filter((j) => j.id !== job.id && j.parentId !== job.id));
     if (activeJobId === job.id || jobs.find((j) => j.id === activeJobId)?.parentId === job.id) {
@@ -10410,6 +10504,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           onCreateQuickTransferClick={() => setShowTransferOrReturnChoice(true)}
           onCreateSubJobClick={(job) => setSubJobParent(job)}
           onDeleteRequest={(job) => setJobDeleteTarget(job)}
+          onToggleJobSeal={toggleJobSeal}
           onRenameRequest={(job) => setJobRenameTarget(job)}
           onResetRequest={() => setResetConfirmOpen(true)}
           onOpenCatalog={() => setCatalogModalOpen(true)}
@@ -10435,7 +10530,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
       ) : (
         <JobInventory
           job={activeJob}
-          isEditor={isEditor}
+          isEditor={isEditor && !activeJob.sealed}
           onRequestLogin={onRequestLogin}
           onUpdateJob={updateActiveJob}
           onBackToJobs={() => setShowPicker(true)}
