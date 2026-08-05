@@ -32,6 +32,7 @@ import {
   Inbox,
   ClipboardList,
   RotateCcw,
+  Home,
   QrCode,
   Bell,
 } from "lucide-react";
@@ -3381,7 +3382,7 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
   );
 }
 
-function ReturnDetailPage({ ret, onUpdate, onBack, onDeleteReturn }) {
+function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
   const [name, setName] = useState("");
   const [qty, setQty] = useState("");
   const [smeText, setSmeText] = useState("");
@@ -3430,6 +3431,9 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onDeleteReturn }) {
           <div className="flex items-center gap-3 min-w-0">
             <button onClick={onBack} className="text-slate-400 hover:text-slate-200 shrink-0">
               <ChevronLeft className="w-5 h-5" />
+            </button>
+            <button onClick={onGoHome} className="text-slate-400 hover:text-slate-200 shrink-0">
+              <Home className="w-4 h-4" />
             </button>
             <div className="min-w-0">
               <p className="font-semibold text-slate-100 truncate flex items-center gap-1.5">
@@ -3564,7 +3568,7 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onDeleteReturn }) {
   );
 }
 
-function ReturnsListPage({ returns, onOpenReturn, onBack }) {
+function ReturnsListPage({ returns, onOpenReturn, onBack, onGoHome }) {
   const [collapsed, setCollapsed] = useState({});
 
   const jobGroups = [...new Map(returns.map((r) => [r.jobId, r.jobName])).entries()].sort(
@@ -3577,6 +3581,9 @@ function ReturnsListPage({ returns, onOpenReturn, onBack }) {
         <div className="max-w-3xl mx-auto px-4 py-4 flex items-center gap-3">
           <button onClick={onBack} className="text-slate-400 hover:text-slate-200">
             <ChevronLeft className="w-5 h-5" />
+          </button>
+          <button onClick={onGoHome} className="text-slate-400 hover:text-slate-200">
+            <Home className="w-4 h-4" />
           </button>
           <p className="font-semibold text-slate-100 flex items-center gap-1.5">
             <RotateCcw className="w-4 h-4 text-emerald-400" />
@@ -6146,14 +6153,9 @@ function JobPicker({
               <button
                 onClick={onOpenReturnsList}
                 title="Returns"
-                className="relative flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
               >
                 <RotateCcw className="w-4 h-4" />
-                {returnsCount > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 bg-emerald-500 text-slate-950 text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
-                    {returnsCount > 9 ? "9+" : returnsCount}
-                  </span>
-                )}
               </button>
             )}
             <button
@@ -10320,6 +10322,11 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
             setActiveReturnId(null);
             setShowReturnsListPage(true);
           }}
+          onGoHome={() => {
+            setActiveReturnId(null);
+            setShowReturnsListPage(false);
+            setShowPicker(true);
+          }}
           onDeleteReturn={deleteReturn}
         />
       ) : showReturnsListPage ? (
@@ -10330,6 +10337,10 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
             setShowReturnsListPage(false);
           }}
           onBack={() => setShowReturnsListPage(false)}
+          onGoHome={() => {
+            setShowReturnsListPage(false);
+            setShowPicker(true);
+          }}
         />
       ) : showingPicker ? (
         <JobPicker
