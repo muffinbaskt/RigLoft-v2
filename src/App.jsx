@@ -31,6 +31,7 @@ import {
   ListChecks,
   Inbox,
   ClipboardList,
+  RotateCcw,
   QrCode,
   Bell,
 } from "lucide-react";
@@ -156,6 +157,17 @@ function seedJob() {
     ],
     containerOptions: DEFAULT_CONTAINER_OPTIONS,
     activityLog: [{ id: 1, time: timeStamp(), message: "Job created with 3 sample items." }],
+  };
+}
+
+function newReturn(jobId, jobName, date) {
+  return {
+    id: Date.now(),
+    jobId,
+    jobName,
+    date,
+    items: [],
+    createdAt: timeStamp(),
   };
 }
 
@@ -3369,6 +3381,267 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
   );
 }
 
+function ReturnDetailPage({ ret, onUpdate, onBack, onDeleteReturn }) {
+  const [name, setName] = useState("");
+  const [qty, setQty] = useState("");
+  const [smeText, setSmeText] = useState("");
+  const [deleteItemTarget, setDeleteItemTarget] = useState(null);
+  const [deleteReturnConfirm, setDeleteReturnConfirm] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const addItem = () => {
+    if (!name.trim()) return;
+    playSaveChime();
+    const newItem = {
+      id: Date.now(),
+      name: name.trim(),
+      qty: qty.trim() === "" ? 0 : Number(qty) || 0,
+      sme: parseSerials(smeText),
+    };
+    onUpdate({ ...ret, items: [...ret.items, newItem] });
+    setName("");
+    setQty("");
+    setSmeText("");
+  };
+
+  const deleteItem = (id) => {
+    onUpdate({ ...ret, items: ret.items.filter((i) => i.id !== id) });
+    setDeleteItemTarget(null);
+  };
+
+  const asText = ret.items
+    .map((i) => (i.sme.length > 0 ? `${i.name}: ${i.sme.join(", ")}` : `${i.name} x${i.qty}`))
+    .join("\n");
+
+  const copyList = async () => {
+    const ok = await copyToClipboard(
+      `Return — ${ret.jobName} — ${ret.date}\n\n${asText || "(no items yet)"}`
+    );
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
+        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3 min-w-0">
+            <button onClick={onBack} className="text-slate-400 hover:text-slate-200 shrink-0">
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <div className="min-w-0">
+              <p className="font-semibold text-slate-100 truncate flex items-center gap-1.5">
+                <RotateCcw className="w-4 h-4 text-emerald-400 shrink-0" />
+                Return — {ret.jobName}
+              </p>
+              <p className="text-xs text-slate-500">{ret.date}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setDeleteReturnConfirm(true)}
+            className="text-slate-500 hover:text-red-400 p-2 shrink-0"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-4 py-5">
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 mb-5">
+          <p className="text-xs font-medium text-slate-400 mb-2">Add item</p>
+          <div className="grid grid-cols-3 gap-2 mb-2">
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addItem()}
+              placeholder="Item name"
+              className="col-span-2 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+            <input
+              type="number"
+              min="0"
+              value={qty}
+              onChange={(e) => setQty(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addItem()}
+              placeholder="Qty (0 ok)"
+              className="bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+          </div>
+          <div className="flex gap-2">
+            <input
+              value={smeText}
+              onChange={(e) => setSmeText(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addItem()}
+              placeholder="SME # (optional)"
+              className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+            <button
+              onClick={addItem}
+              disabled={!name.trim()}
+              className="text-sm bg-amber-500 text-slate-950 font-semibold rounded-md px-4 py-2 hover:bg-amber-400 disabled:opacity-40"
+            >
+              Add
+            </button>
+          </div>
+        </div>
+
+        {ret.items.length === 0 ? (
+          <p className="text-sm text-slate-500 text-center py-10">
+            No items logged yet — add whatever's actually come back in above.
+          </p>
+        ) : (
+          <div className="space-y-2 mb-5">
+            {ret.items.map((i) => (
+              <div
+                key={i.id}
+                className={`border rounded-lg p-3 flex items-center justify-between gap-3 ${
+                  i.qty === 0
+                    ? "border-red-500/40 bg-red-500/10"
+                    : "border-slate-800 bg-slate-900"
+                }`}
+              >
+                <div className="min-w-0">
+                  <p
+                    className={`text-sm font-medium ${
+                      i.qty === 0 ? "text-red-300" : "text-slate-100"
+                    }`}
+                  >
+                    {i.name} <span className="text-slate-500 font-normal">x{i.qty}</span>
+                    {i.qty === 0 && (
+                      <span className="ml-1.5 text-[10px] font-medium tracking-wide uppercase bg-red-500/15 border border-red-500/40 text-red-300 rounded-full px-1.5 py-0.5">
+                        0 qty
+                      </span>
+                    )}
+                  </p>
+                  {i.sme.length > 0 && (
+                    <p className="text-xs text-fuchsia-300 font-mono mt-0.5 break-words">
+                      {i.sme.join(", ")}
+                    </p>
+                  )}
+                </div>
+                <button
+                  onClick={() => setDeleteItemTarget(i)}
+                  className="text-slate-600 hover:text-red-400 shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {ret.items.length > 0 && (
+          <button
+            onClick={copyList}
+            className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 border border-slate-700 text-slate-200 hover:bg-slate-800"
+          >
+            <Copy className="w-4 h-4" />
+            {copied ? "Copied!" : "Copy print-ready list"}
+          </button>
+        )}
+      </main>
+
+      {deleteItemTarget && (
+        <ConfirmDelete
+          title="Remove this item?"
+          message={`"${deleteItemTarget.name}" will be removed from this return.`}
+          onConfirm={() => deleteItem(deleteItemTarget.id)}
+          onCancel={() => setDeleteItemTarget(null)}
+        />
+      )}
+
+      {deleteReturnConfirm && (
+        <ConfirmDelete
+          title="Delete this whole return?"
+          message={`The entire return record for ${ret.date} will be permanently removed.`}
+          onConfirm={() => onDeleteReturn(ret.id)}
+          onCancel={() => setDeleteReturnConfirm(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ReturnsListPage({ returns, onOpenReturn, onBack }) {
+  const [collapsed, setCollapsed] = useState({});
+
+  const jobGroups = [...new Map(returns.map((r) => [r.jobId, r.jobName])).entries()].sort(
+    (a, b) => a[1].localeCompare(b[1])
+  );
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
+        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center gap-3">
+          <button onClick={onBack} className="text-slate-400 hover:text-slate-200">
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <p className="font-semibold text-slate-100 flex items-center gap-1.5">
+            <RotateCcw className="w-4 h-4 text-emerald-400" />
+            Returns
+          </p>
+        </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-4 py-5">
+        {jobGroups.length === 0 ? (
+          <p className="text-sm text-slate-500 text-center py-10">
+            No returns logged yet — start one from "+ Quick Transfer" on the job picker screen.
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {jobGroups.map(([jobId, jobName]) => {
+              const entries = returns
+                .filter((r) => r.jobId === jobId)
+                .sort((a, b) => b.date.localeCompare(a.date));
+              const isCollapsed = collapsed[jobId];
+              return (
+                <div key={jobId}>
+                  <button
+                    onClick={() => setCollapsed((prev) => ({ ...prev, [jobId]: !prev[jobId] }))}
+                    className="w-full flex items-center gap-2 mb-2 text-left"
+                  >
+                    <ChevronDown
+                      className={`w-4 h-4 text-slate-500 shrink-0 transition-transform ${
+                        isCollapsed ? "-rotate-90" : ""
+                      }`}
+                    />
+                    <span className="font-semibold text-slate-100">{jobName}</span>
+                    <span className="text-xs text-slate-600">
+                      {entries.length} return{entries.length === 1 ? "" : "s"}
+                    </span>
+                  </button>
+                  {!isCollapsed && (
+                    <div className="space-y-2 pl-6">
+                      {entries.map((r) => (
+                        <button
+                          key={r.id}
+                          onClick={() => onOpenReturn(r)}
+                          className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700"
+                        >
+                          <p className="text-sm font-medium text-slate-100">{r.date}</p>
+                          <p className="text-xs text-slate-500">
+                            {r.items.length} item{r.items.length === 1 ? "" : "s"}
+                            {r.items.some((i) => i.qty === 0) && (
+                              <span className="text-red-400"> · some at 0 qty</span>
+                            )}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
 function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
   const requisitions = job.requisitions || [];
   const [addingCategory, setAddingCategory] = useState(false);
@@ -5284,6 +5557,146 @@ function ConfirmDelete({ title, message, confirmLabel = "Delete", onConfirm, onC
   );
 }
 
+function TransferOrReturnModal({ onChooseTransfer, onChooseReturn, onCancel }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+        <h3 className="text-slate-100 font-semibold mb-1.5">Quick Transfer</h3>
+        <p className="text-xs text-slate-500 mb-4">What's this for?</p>
+        <div className="space-y-2.5">
+          <button
+            onClick={onChooseTransfer}
+            className="w-full text-left border border-slate-700 rounded-md p-3 hover:border-sky-500/50 hover:bg-sky-500/5"
+          >
+            <p className="text-sm font-medium text-slate-100 flex items-center gap-2">
+              <Truck className="w-4 h-4 text-sky-400" />
+              Transfer
+            </p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Sending items out to the field.
+            </p>
+          </button>
+          <button
+            onClick={onChooseReturn}
+            className="w-full text-left border border-slate-700 rounded-md p-3 hover:border-emerald-500/50 hover:bg-emerald-500/5"
+          >
+            <p className="text-sm font-medium text-slate-100 flex items-center gap-2">
+              <RotateCcw className="w-4 h-4 text-emerald-400" />
+              Return
+            </p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Tracking items coming back into the shop.
+            </p>
+          </button>
+        </div>
+        <button
+          onClick={onCancel}
+          className="w-full text-sm rounded-md py-2.5 mt-4 border border-slate-700 text-slate-300 hover:bg-slate-800"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function NewReturnModal({ jobs, onSubmit, onCancel }) {
+  const [search, setSearch] = useState("");
+  const [selectedJob, setSelectedJob] = useState(null);
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const [date, setDate] = useState(todayStr);
+
+  const realJobs = jobs.filter((j) => !j.isQuickTransfer);
+  const filtered = realJobs.filter((j) =>
+    j.name.toLowerCase().includes(search.trim().toLowerCase())
+  );
+
+  if (!selectedJob) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+        <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+            <h3 className="text-slate-100 font-semibold">Which job is this return for?</h3>
+            <button onClick={onCancel} className="text-slate-400 hover:text-slate-200">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="px-5 pt-4 shrink-0">
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                autoFocus
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search jobs..."
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md pl-9 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            {filtered.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-10">No jobs match.</p>
+            ) : (
+              <div className="space-y-2">
+                {filtered.map((j) => (
+                  <button
+                    key={j.id}
+                    onClick={() => setSelectedJob(j)}
+                    className="w-full text-left border border-slate-800 rounded-md p-3 hover:border-slate-700"
+                  >
+                    <p className="text-sm text-slate-100">{j.name}</p>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+        <h3 className="text-slate-100 font-semibold mb-1">Return for "{selectedJob.name}"</h3>
+        <p className="text-xs text-slate-500 mb-4">When did this come back in?</p>
+        <div className="flex gap-2 mb-4">
+          <button
+            onClick={() => setDate(todayStr)}
+            className={`flex-1 text-sm rounded-md py-2 border transition-colors ${
+              date === todayStr
+                ? "bg-emerald-500/15 border-emerald-500/50 text-emerald-300"
+                : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            Today
+          </button>
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="flex-1 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+          />
+        </div>
+        <div className="flex gap-3">
+          <button
+            onClick={() => setSelectedJob(null)}
+            className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            Back
+          </button>
+          <button
+            onClick={() => onSubmit(selectedJob, date)}
+            className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+          >
+            Continue
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function QuickTransferNameModal({ onSubmit, onCancel }) {
   const [name, setName] = useState("");
 
@@ -5539,6 +5952,8 @@ function JobPicker({
   onOpenSuggestions,
   onOpenFieldRequests,
   pendingFieldRequestCount,
+  onOpenReturnsList,
+  returnsCount,
   onCheckForUpdate,
   updateCheckMessage,
 }) {
@@ -5704,6 +6119,20 @@ function JobPicker({
                 {pendingFieldRequestCount > 0 && (
                   <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-slate-950 text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
                     {pendingFieldRequestCount > 9 ? "9+" : pendingFieldRequestCount}
+                  </span>
+                )}
+              </button>
+            )}
+            {isEditor && (
+              <button
+                onClick={onOpenReturnsList}
+                title="Returns"
+                className="relative flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+              >
+                <RotateCcw className="w-4 h-4" />
+                {returnsCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 bg-emerald-500 text-slate-950 text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                    {returnsCount > 9 ? "9+" : returnsCount}
                   </span>
                 )}
               </button>
@@ -7714,6 +8143,7 @@ function JobInventory({
 const JOBS_KEY = "warehub-jobs";
 const ACTIVE_JOB_KEY = "warehub-active-job";
 const CATALOG_KEY = "warehub-catalog";
+const RETURNS_KEY = "warehub-returns";
 // Set to "true" the moment we ever successfully save real job data. Lets us
 // tell "genuinely new account" apart from "storage came back empty when it
 // shouldn't have" — the latter must never be treated as a fresh start.
@@ -8432,6 +8862,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   // load and every successful save, not just when going offline.
   const jobsBaseRef = useRef([]);
   const [catalog, setCatalog] = useState([]);
+  const [returns, setReturns] = useState([]);
   const [catalogModalOpen, setCatalogModalOpen] = useState(false);
   const catalogSaveTimer = useRef(null);
   const catalogRef = useRef([]);
@@ -8778,10 +9209,21 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     const jobsResult = await getWithRetry(JOBS_KEY);
     const activeResult = await getWithRetry(ACTIVE_JOB_KEY);
     const catalogResult = await getWithRetry(CATALOG_KEY);
+    const returnsResult = await getWithRetry(RETURNS_KEY);
 
     if (!jobsResult.ok || !catalogResult.ok) {
       setLoadFailed(true);
       return;
+    }
+
+    // Returns are lower-stakes than jobs/catalog — don't block the whole
+    // app from loading if this one specifically fails for some reason.
+    try {
+      if (returnsResult.ok && returnsResult.value) {
+        setReturns(JSON.parse(returnsResult.value));
+      }
+    } catch {
+      // corrupted stored data — just start with an empty list
     }
 
     let loadedJobs = null;
@@ -9315,6 +9757,11 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   };
 
   const [showQuickTransferModal, setShowQuickTransferModal] = useState(false);
+  const [showTransferOrReturnChoice, setShowTransferOrReturnChoice] = useState(false);
+  const [showNewReturnModal, setShowNewReturnModal] = useState(false);
+  const [showReturnsListPage, setShowReturnsListPage] = useState(false);
+  const [activeReturnId, setActiveReturnId] = useState(null);
+  const activeReturn = returns.find((r) => r.id === activeReturnId) || null;
 
   const createOrOpenQuickTransfer = (name) => {
     const trimmed = name.trim();
@@ -9403,6 +9850,36 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     setCatalog((prev) =>
       prev.map((c) => (ids.includes(c.id) ? { ...c, vendor } : c))
     );
+  };
+
+  // Returns use a simple direct save — no offline queue or merge logic,
+  // since these are lower-stakes, append-mostly records rather than the
+  // constantly-edited job/catalog data that actually needs conflict
+  // resolution.
+  const updateReturns = (updater) => {
+    setReturns((prev) => {
+      const next = updater(prev);
+      saveWithRetry(RETURNS_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
+  const createReturn = (job, date) => {
+    const ret = newReturn(job.id, job.name, date);
+    updateReturns((prev) => [...prev, ret]);
+    setActiveReturnId(ret.id);
+    setShowNewReturnModal(false);
+    setShowPicker(false);
+  };
+
+  const updateReturn = (updated) => {
+    updateReturns((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+  };
+
+  const deleteReturn = (id) => {
+    updateReturns((prev) => prev.filter((r) => r.id !== id));
+    setActiveReturnId(null);
+    setShowReturnsListPage(true);
   };
 
   const resetAllData = async () => {
@@ -9816,7 +10293,26 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         </div>
       )}
 
-      {showingPicker ? (
+      {activeReturn ? (
+        <ReturnDetailPage
+          ret={activeReturn}
+          onUpdate={updateReturn}
+          onBack={() => {
+            setActiveReturnId(null);
+            setShowReturnsListPage(true);
+          }}
+          onDeleteReturn={deleteReturn}
+        />
+      ) : showReturnsListPage ? (
+        <ReturnsListPage
+          returns={returns}
+          onOpenReturn={(r) => {
+            setActiveReturnId(r.id);
+            setShowReturnsListPage(false);
+          }}
+          onBack={() => setShowReturnsListPage(false)}
+        />
+      ) : showingPicker ? (
         <JobPicker
           jobs={jobs}
           catalog={catalog}
@@ -9827,7 +10323,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
             setShowPicker(false);
           }}
           onCreateClick={() => setShowNewJobModal(true)}
-          onCreateQuickTransferClick={() => setShowQuickTransferModal(true)}
+          onCreateQuickTransferClick={() => setShowTransferOrReturnChoice(true)}
           onCreateSubJobClick={(job) => setSubJobParent(job)}
           onDeleteRequest={(job) => setJobDeleteTarget(job)}
           onRenameRequest={(job) => setJobRenameTarget(job)}
@@ -9847,6 +10343,8 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
             refreshFieldRequestCount();
           }}
           pendingFieldRequestCount={pendingFieldRequestCount}
+          onOpenReturnsList={() => setShowReturnsListPage(true)}
+          returnsCount={returns.length}
           onCheckForUpdate={checkForUpdateNow}
           updateCheckMessage={updateCheckMessage}
         />
@@ -9908,6 +10406,28 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           confirmLabel="Create job"
           onConfirm={(name, color) => createJob(name, color)}
           onCancel={() => setShowNewJobModal(false)}
+        />
+      )}
+
+      {showTransferOrReturnChoice && (
+        <TransferOrReturnModal
+          onChooseTransfer={() => {
+            setShowTransferOrReturnChoice(false);
+            setShowQuickTransferModal(true);
+          }}
+          onChooseReturn={() => {
+            setShowTransferOrReturnChoice(false);
+            setShowNewReturnModal(true);
+          }}
+          onCancel={() => setShowTransferOrReturnChoice(false)}
+        />
+      )}
+
+      {showNewReturnModal && (
+        <NewReturnModal
+          jobs={jobs}
+          onSubmit={createReturn}
+          onCancel={() => setShowNewReturnModal(false)}
         />
       )}
 
