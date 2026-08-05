@@ -5634,8 +5634,27 @@ function NewReturnModal({ jobs, onSubmit, onCancel }) {
             </div>
           </div>
           <div className="flex-1 overflow-y-auto px-5 py-4">
+            {search.trim() && (
+              <button
+                onClick={() =>
+                  setSelectedJob({ id: `custom-${search.trim()}`, name: search.trim() })
+                }
+                className="w-full text-left border border-dashed border-amber-500/40 bg-amber-500/5 rounded-md p-3 hover:border-amber-500/60 mb-3"
+              >
+                <p className="text-sm text-amber-300">
+                  Use "{search.trim()}" as a custom job
+                </p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Not tracked in Riggy — just a name for this return.
+                </p>
+              </button>
+            )}
             {filtered.length === 0 ? (
-              <p className="text-sm text-slate-500 text-center py-10">No jobs match.</p>
+              !search.trim() && (
+                <p className="text-sm text-slate-500 text-center py-10">
+                  Search for a job, or type any name to use as a custom one.
+                </p>
+              )
             ) : (
               <div className="space-y-2">
                 {filtered.map((j) => (
