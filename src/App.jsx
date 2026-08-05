@@ -649,25 +649,51 @@ function ItemForm({
   const effectiveCatalogMatch = manualCatalogLink || existingCatalogMatch;
 
   const handleSerialsChange = (text) => {
+    const prevCount = parseSerials(serialsText).length;
+    const newCount = parseSerials(text).length;
     setSerialsText(text);
-    const count = parseSerials(text).length;
     setItem((prev) => {
       const currentHave = totalHave(prev.containers);
-      if (count <= currentHave) return prev;
-      if (prev.containers.length === 0) {
-        // No container yet — rather than silently doing nothing, or
-        // guessing an existing container that might be entirely wrong,
-        // create a clearly-labeled placeholder so it's obvious this still
-        // needs a real container assigned.
-        const placeholderName = "SME Item Placeholder";
-        onAddContainer(placeholderName);
-        return { ...prev, containers: [{ name: placeholderName, qty: count }] };
+
+      if (newCount > prevCount) {
+        // Increasing — same as before, bump the have-count up to match.
+        if (newCount <= currentHave) return prev;
+        if (prev.containers.length === 0) {
+          // No container yet — rather than silently doing nothing, or
+          // guessing an existing container that might be entirely wrong,
+          // create a clearly-labeled placeholder so it's obvious this
+          // still needs a real container assigned.
+          const placeholderName = "SME Item Placeholder";
+          onAddContainer(placeholderName);
+          return { ...prev, containers: [{ name: placeholderName, qty: newCount }] };
+        }
+        const updated = [...prev.containers];
+        updated[0] = { ...updated[0], qty: updated[0].qty + (newCount - currentHave) };
+        return { ...prev, containers: updated };
       }
-      // Bump the first container's qty (or create one) so the have-count
-      // still makes sense.
-      const updated = [...prev.containers];
-      updated[0] = { ...updated[0], qty: updated[0].qty + (count - currentHave) };
-      return { ...prev, containers: updated };
+
+      if (newCount < prevCount && prev.containers.length > 0) {
+        // Decreasing — this is the careful case. Some items genuinely have
+        // no SME# tracked at all (currentHave can be bigger than
+        // prevCount), and removing a serial shouldn't eat into that
+        // untracked buffer — it should only account for the one serial
+        // that actually went away.
+        // Example: have 6, only 5 have SME#s (1 untracked). Remove one
+        // SME# → 4 tracked. Have should drop to 5 (4 + the same 1
+        // untracked), not fall all the way to 4.
+        const untracked = Math.max(0, currentHave - prevCount);
+        const targetHave = newCount + untracked;
+        const reduceBy = currentHave - targetHave;
+        if (reduceBy <= 0) return prev;
+        const updated = [...prev.containers];
+        updated[0] = {
+          ...updated[0],
+          qty: Math.max(0, updated[0].qty - Math.min(reduceBy, updated[0].qty)),
+        };
+        return { ...prev, containers: updated };
+      }
+
+      return prev;
     });
   };
 
@@ -712,15 +738,28 @@ function ItemForm({
 
   if (isQuickTransfer) {
     const handleQuickSerialsChange = (text) => {
+      const prevCount = parseSerials(serialsText).length;
+      const newCount = parseSerials(text).length;
       setSerialsText(text);
-      const count = parseSerials(text).length;
       setItem((prev) => {
         const currentQty = Number(prev.qtyNeeded) || 0;
-        // Only ever bumps up, never down — if you've already typed a
-        // bigger quantity than the SME count on purpose, this leaves it
-        // alone rather than overwriting it.
-        if (count <= currentQty) return prev;
-        return { ...prev, qtyNeeded: count };
+        if (newCount > prevCount) {
+          // Only ever bumps up, never down — if you've already typed a
+          // bigger quantity than the SME count on purpose, this leaves it
+          // alone rather than overwriting it.
+          if (newCount <= currentQty) return prev;
+          return { ...prev, qtyNeeded: newCount };
+        }
+        if (newCount < prevCount) {
+          // Preserves any untracked buffer (items with no SME# at all),
+          // same logic as the full item form — only reduces by exactly
+          // how many serials actually went away.
+          const untracked = Math.max(0, currentQty - prevCount);
+          const targetQty = newCount + untracked;
+          if (targetQty >= currentQty) return prev;
+          return { ...prev, qtyNeeded: targetQty };
+        }
+        return prev;
       });
     };
 
