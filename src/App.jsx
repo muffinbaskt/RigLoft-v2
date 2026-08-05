@@ -6989,15 +6989,17 @@ function JobInventory({
   const bulkSetContainer = (container) => {
     bulkUpdate(
       (i) => {
-        // Uses whichever is larger — normally that's qtyNeeded (the item
-        // hasn't fully arrived yet), but if you actually have MORE on hand
-        // than what was needed, this preserves the real surplus instead of
-        // silently truncating it down to the needed amount.
-        const qty = Math.max(i.qtyHave, i.qtyNeeded);
+        // Preserves whatever you actually have on hand, exactly as-is —
+        // whether that's less than what's needed (a normal partial item),
+        // exactly enough, or more than needed (a genuine surplus). Moving
+        // an item to a different container should never change how many
+        // of it you actually have.
+        const qty = i.qtyHave;
         const containers = [{ name: container, qty }];
-        return { ...i, containers, qtyHave: totalHave(containers), status: "green" };
+        const status = qty >= i.qtyNeeded ? "green" : qty > 0 ? "yellow" : "red";
+        return { ...i, containers, qtyHave: qty, status };
       },
-      `Moved to container "${container}" (full quantity)`
+      `Moved to container "${container}"`
     );
     setBulkContainerPicker(false);
   };
@@ -8043,7 +8045,7 @@ function JobInventory({
               container
             </h3>
             <p className="text-xs text-slate-500 mb-3">
-              Sets the full quantity needed into this one container for each item selected,
+              Moves whatever quantity each item actually has on hand into this one container,
               replacing any existing breakdown. For a partial amount split across containers,
               use "Pull items into this container" from the Containers screen instead.
             </p>
