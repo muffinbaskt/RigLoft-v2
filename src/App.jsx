@@ -711,6 +711,19 @@ function ItemForm({
     : null;
 
   if (isQuickTransfer) {
+    const handleQuickSerialsChange = (text) => {
+      setSerialsText(text);
+      const count = parseSerials(text).length;
+      setItem((prev) => {
+        const currentQty = Number(prev.qtyNeeded) || 0;
+        // Only ever bumps up, never down — if you've already typed a
+        // bigger quantity than the SME count on purpose, this leaves it
+        // alone rather than overwriting it.
+        if (count <= currentQty) return prev;
+        return { ...prev, qtyNeeded: count };
+      });
+    };
+
     const saveQuickItem = () => {
       if (!canSave) return;
       const finalQtyNeeded = Number(item.qtyNeeded) || 0;
@@ -794,7 +807,7 @@ function ItemForm({
               <label className="block text-xs font-medium text-slate-400 mb-1.5">SME</label>
               <input
                 value={serialsText}
-                onChange={(e) => setSerialsText(e.target.value)}
+                onChange={(e) => handleQuickSerialsChange(e.target.value)}
                 placeholder="12345, 12346, 12347"
                 className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
               />
