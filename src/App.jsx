@@ -478,6 +478,7 @@ function parseImportText(text, catalog) {
         matched: !!match,
         gang: match ? match.gang : "Unassigned",
         storage: match ? match.storage : "Unassigned",
+        storageDetail: match && match.storage === "Other" ? match.storageDetail || "" : "",
         category: match ? match.category || "" : "",
         container: containerPart,
         serials,
@@ -994,6 +995,10 @@ function ItemForm({
                         ...prev,
                         gang: effectiveCatalogMatch.gang,
                         storage: effectiveCatalogMatch.storage,
+                        storageDetail:
+                          effectiveCatalogMatch.storage === "Other"
+                            ? effectiveCatalogMatch.storageDetail || ""
+                            : prev.storageDetail,
                         category: effectiveCatalogMatch.category || "",
                         needsTransfer: !!effectiveCatalogMatch.needsTransfer,
                       }))
@@ -2869,6 +2874,140 @@ function ContainerDetailModal({
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function GeneralTodoModal({ todos, onAdd, onToggle, onDelete, onClearFinished, onClose }) {
+  const [newText, setNewText] = useState("");
+
+  const pending = [...todos]
+    .filter((t) => !t.done)
+    .sort((a, b) => a.text.localeCompare(b.text));
+  const done = [...todos]
+    .filter((t) => t.done)
+    .sort((a, b) => a.text.localeCompare(b.text));
+
+  const handleAdd = () => {
+    if (!newText.trim()) return;
+    onAdd(newText);
+    setNewText("");
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <div>
+            <h2 className="text-slate-100 font-semibold text-base flex items-center gap-2">
+              <ClipboardList className="w-4 h-4 text-slate-400" />
+              Shop To Do
+            </h2>
+            <p className="text-xs text-slate-500">General stuff, not tied to any one job</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 border-b border-slate-800 shrink-0">
+          <div className="flex gap-2">
+            <input
+              autoFocus
+              value={newText}
+              onChange={(e) => setNewText(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+              placeholder="What needs to get done?"
+              className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+            <button
+              onClick={handleAdd}
+              disabled={!newText.trim()}
+              className="text-sm bg-amber-500 text-slate-950 font-semibold rounded-md px-4 py-2 hover:bg-amber-400 disabled:opacity-40"
+            >
+              Add
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {pending.length === 0 && done.length === 0 ? (
+            <p className="text-sm text-slate-500 text-center py-10">
+              Nothing on the list yet.
+            </p>
+          ) : (
+            <>
+              {pending.length > 0 && (
+                <div className="space-y-2 mb-4">
+                  {pending.map((t) => (
+                    <label
+                      key={t.id}
+                      className="flex items-start gap-2.5 border border-slate-800 rounded-md p-3 cursor-pointer hover:border-slate-700"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={false}
+                        onChange={() => onToggle(t.id)}
+                        className="w-4 h-4 rounded accent-emerald-500 mt-0.5 shrink-0 cursor-pointer"
+                      />
+                      <p className="text-sm text-slate-100 flex-1 min-w-0">{t.text}</p>
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          onDelete(t.id);
+                        }}
+                        className="text-slate-600 hover:text-red-400 shrink-0"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {done.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs font-medium text-slate-600">Done</p>
+                    <button
+                      onClick={() => onClearFinished(done.map((t) => t.id))}
+                      className="text-xs text-slate-500 hover:text-red-400"
+                    >
+                      Clear all finished tasks
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {done.map((t) => (
+                      <label
+                        key={t.id}
+                        className="flex items-start gap-2.5 border border-slate-800 rounded-md p-3 cursor-pointer hover:border-slate-700 opacity-60"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={true}
+                          onChange={() => onToggle(t.id)}
+                          className="w-4 h-4 rounded accent-emerald-500 mt-0.5 shrink-0 cursor-pointer"
+                        />
+                        <p className="text-sm text-slate-400 line-through flex-1 min-w-0">
+                          {t.text}
+                        </p>
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            onDelete(t.id);
+                          }}
+                          className="text-slate-600 hover:text-red-400 shrink-0"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -4943,6 +5082,7 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
           matched: !!match,
           gang: match ? match.gang : "Unassigned",
           storage: match ? match.storage : "Unassigned",
+          storageDetail: match && match.storage === "Other" ? match.storageDetail || "" : "",
           category: match ? match.category || "" : "",
           needsTransfer: match ? !!match.needsTransfer : false,
           duplicateOf: dup || null,
@@ -6066,6 +6206,7 @@ function JobPicker({
   pendingFieldRequestCount,
   onOpenReturnsList,
   returnsCount,
+  onOpenGeneralTodo,
   onCheckForUpdate,
   updateCheckMessage,
 }) {
@@ -6242,6 +6383,15 @@ function JobPicker({
                 className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
               >
                 <RotateCcw className="w-4 h-4" />
+              </button>
+            )}
+            {isEditor && (
+              <button
+                onClick={onOpenGeneralTodo}
+                title="Shop To Do"
+                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+              >
+                <ClipboardList className="w-4 h-4" />
               </button>
             )}
             <button
@@ -6777,7 +6927,15 @@ function JobInventory({
 
       const fieldChanges = {};
       if (match.gang && match.gang !== i.gang) fieldChanges.gang = match.gang;
-      if (match.storage && match.storage !== i.storage) fieldChanges.storage = match.storage;
+      if (match.storage && match.storage !== i.storage) {
+        fieldChanges.storage = match.storage;
+        // "Other" is meaningless without the actual detail text — carry
+        // that over too whenever the storage itself is changing, not just
+        // the "Other" label on its own.
+        if (match.storage === "Other") {
+          fieldChanges.storageDetail = match.storageDetail || "";
+        }
+      }
       // Category still only fills in if missing — never overwrites one you
       // deliberately chose by hand, unlike gang/storage which should match
       // the catalog template once something is actually linked to it.
@@ -7278,6 +7436,9 @@ function JobInventory({
                       {c.fieldChanges.storage && (
                         <span className="text-teal-300">
                           Storage → {c.fieldChanges.storage}
+                          {c.fieldChanges.storage === "Other" && c.fieldChanges.storageDetail
+                            ? ` (${c.fieldChanges.storageDetail})`
+                            : ""}
                         </span>
                       )}
                       {c.fieldChanges.category && (
@@ -8278,6 +8439,7 @@ const JOBS_KEY = "warehub-jobs";
 const ACTIVE_JOB_KEY = "warehub-active-job";
 const CATALOG_KEY = "warehub-catalog";
 const RETURNS_KEY = "warehub-returns";
+const GENERAL_TODOS_KEY = "warehub-general-todos";
 // Set to "true" the moment we ever successfully save real job data. Lets us
 // tell "genuinely new account" apart from "storage came back empty when it
 // shouldn't have" — the latter must never be treated as a fresh start.
@@ -8997,6 +9159,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   const jobsBaseRef = useRef([]);
   const [catalog, setCatalog] = useState([]);
   const [returns, setReturns] = useState([]);
+  const [generalTodos, setGeneralTodos] = useState([]);
   const [catalogModalOpen, setCatalogModalOpen] = useState(false);
   const catalogSaveTimer = useRef(null);
   const catalogRef = useRef([]);
@@ -9344,6 +9507,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     const activeResult = await getWithRetry(ACTIVE_JOB_KEY);
     const catalogResult = await getWithRetry(CATALOG_KEY);
     const returnsResult = await getWithRetry(RETURNS_KEY);
+    const generalTodosResult = await getWithRetry(GENERAL_TODOS_KEY);
 
     if (!jobsResult.ok || !catalogResult.ok) {
       setLoadFailed(true);
@@ -9355,6 +9519,13 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     try {
       if (returnsResult.ok && returnsResult.value) {
         setReturns(JSON.parse(returnsResult.value));
+      }
+    } catch {
+      // corrupted stored data — just start with an empty list
+    }
+    try {
+      if (generalTodosResult.ok && generalTodosResult.value) {
+        setGeneralTodos(JSON.parse(generalTodosResult.value));
       }
     } catch {
       // corrupted stored data — just start with an empty list
@@ -9894,6 +10065,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   const [showTransferOrReturnChoice, setShowTransferOrReturnChoice] = useState(false);
   const [showNewReturnModal, setShowNewReturnModal] = useState(false);
   const [showReturnsListPage, setShowReturnsListPage] = useState(false);
+  const [showGeneralTodo, setShowGeneralTodo] = useState(false);
   const [activeReturnId, setActiveReturnId] = useState(null);
   const activeReturn = returns.find((r) => r.id === activeReturnId) || null;
 
@@ -10000,6 +10172,38 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
       saveWithRetry(RETURNS_KEY, JSON.stringify(next)).catch(() => {});
       return next;
     });
+  };
+
+  const updateGeneralTodos = (updater) => {
+    setGeneralTodos((prev) => {
+      const next = updater(prev);
+      saveWithRetry(GENERAL_TODOS_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
+  const addGeneralTodo = (text) => {
+    if (!text.trim()) return;
+    playSaveChime();
+    updateGeneralTodos((prev) => [
+      { id: Date.now(), text: text.trim(), done: false },
+      ...prev,
+    ]);
+  };
+
+  const toggleGeneralTodo = (id) => {
+    playSoftTap();
+    updateGeneralTodos((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t))
+    );
+  };
+
+  const deleteGeneralTodo = (id) => {
+    updateGeneralTodos((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const clearFinishedGeneralTodos = (ids) => {
+    updateGeneralTodos((prev) => prev.filter((t) => !ids.includes(t.id)));
   };
 
   const createReturn = (job, date) => {
@@ -10493,6 +10697,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           pendingFieldRequestCount={pendingFieldRequestCount}
           onOpenReturnsList={() => setShowReturnsListPage(true)}
           returnsCount={returns.length}
+          onOpenGeneralTodo={() => setShowGeneralTodo(true)}
           onCheckForUpdate={checkForUpdateNow}
           updateCheckMessage={updateCheckMessage}
         />
@@ -10545,6 +10750,17 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
             setFieldRequestsOpen(false);
             refreshFieldRequestCount();
           }}
+        />
+      )}
+
+      {showGeneralTodo && (
+        <GeneralTodoModal
+          todos={generalTodos}
+          onAdd={addGeneralTodo}
+          onToggle={toggleGeneralTodo}
+          onDelete={deleteGeneralTodo}
+          onClearFinished={clearFinishedGeneralTodos}
+          onClose={() => setShowGeneralTodo(false)}
         />
       )}
 
