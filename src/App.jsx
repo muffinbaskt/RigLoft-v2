@@ -1848,6 +1848,7 @@ function emptyCatalogItem() {
     name: "",
     gang: GANG_OPTIONS[0],
     storage: STORAGE_OPTIONS[0],
+    storageDetail: "",
     category: "",
     vendor: "",
     needsTransfer: false,
@@ -1856,7 +1857,7 @@ function emptyCatalogItem() {
 }
 
 function CatalogItemForm({ initial, existingCategories = [], existingVendors = [], onSave, onCancel }) {
-  const [item, setItem] = useState({ needsTransfer: false, pinned: false, category: "", ...initial });
+  const [item, setItem] = useState({ needsTransfer: false, pinned: false, category: "", storageDetail: "", ...initial });
   const set = (field) => (val) => setItem((prev) => ({ ...prev, [field]: val }));
   const canSave = item.name.trim().length > 0;
 
@@ -1890,6 +1891,14 @@ function CatalogItemForm({ initial, existingCategories = [], existingVendors = [
               Default storage location
             </label>
             <Select value={item.storage} onChange={set("storage")} options={STORAGE_OPTIONS} />
+            {item.storage === "Other" && (
+              <input
+                value={item.storageDetail || ""}
+                onChange={(e) => set("storageDetail")(e.target.value)}
+                placeholder="Specify location..."
+                className="w-full mt-2 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60"
+              />
+            )}
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">
