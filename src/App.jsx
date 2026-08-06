@@ -7198,12 +7198,11 @@ function JobInventory({
   const bulkSetContainer = (container) => {
     bulkUpdate(
       (i) => {
-        // Preserves whatever you actually have on hand, exactly as-is —
-        // whether that's less than what's needed (a normal partial item),
-        // exactly enough, or more than needed (a genuine surplus). Moving
-        // an item to a different container should never change how many
-        // of it you actually have.
-        const qty = i.qtyHave;
+        // Preserves whatever you actually have on hand — except for 0,
+        // which is a special case: nothing's been accounted for yet, so
+        // moving it into a container means you're placing the full needed
+        // quantity there now, not "moving zero of it."
+        const qty = i.qtyHave === 0 ? i.qtyNeeded : i.qtyHave;
         const containers = [{ name: container, qty }];
         const status = qty >= i.qtyNeeded ? "green" : qty > 0 ? "yellow" : "red";
         return { ...i, containers, qtyHave: qty, status };
@@ -8265,7 +8264,8 @@ function JobInventory({
               container
             </h3>
             <p className="text-xs text-slate-500 mb-3">
-              Moves whatever quantity each item actually has on hand into this one container,
+              Moves whatever quantity each item actually has on hand into this one container
+              (items still at 0 get the full needed quantity, since nothing's been placed yet),
               replacing any existing breakdown. For a partial amount split across containers,
               use "Pull items into this container" from the Containers screen instead.
             </p>
