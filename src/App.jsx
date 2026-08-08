@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import QRCode from "qrcode";
+import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import { supabase } from "./supabaseClient";
 import {
   Package,
@@ -35,6 +36,8 @@ import {
   ClipboardList,
   RotateCcw,
   Home,
+  ZoomIn,
+  ZoomOut,
   Map as MapIcon,
   QrCode,
   Bell,
@@ -3777,8 +3780,8 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
 // so every other container's size in cells is a rough real-world scale
 // relative to that — a 40' conex is genuinely ~10x the length of a pallet,
 // and looks it on the grid.
-const MAP_GRID_COLS = 30;
-const MAP_GRID_ROWS = 18;
+const MAP_GRID_COLS = 100;
+const MAP_GRID_ROWS = 80;
 
 const CONTAINER_SIZE_PRESETS = [
   { key: "pallet", label: "Pallet (~48\"x40\")", colSpan: 1, rowSpan: 1 },
@@ -4240,57 +4243,101 @@ function ShopMapPage({
       <main className="max-w-5xl mx-auto px-4 py-5">
         <p className="text-xs text-slate-500 mb-3">
           {isEditor
-            ? "Drag anything to reposition it. Tap a container to see what's inside it, or tap a building to rename/recolor/delete it."
-            : "Tap a container to see what's inside it."}
+            ? "Drag anything to reposition it. Pinch, scroll, or use the buttons to zoom — drag empty space to pan around. Tap a container to see what's inside it, or tap a building to rename/recolor/delete it."
+            : "Pinch, scroll, or use the buttons to zoom — drag empty space to pan around. Tap a container to see what's inside it."}
           {viewJobId !== "all" &&
             " Containers for the selected job are glowing so they stand out from the rest."}
         </p>
-        <div
-          ref={canvasRef}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          className="relative w-full bg-slate-900 border border-slate-800 rounded-lg overflow-hidden select-none"
-          style={{
-            aspectRatio: `${MAP_GRID_COLS} / ${MAP_GRID_ROWS}`,
-            backgroundImage:
-              "linear-gradient(to right, rgba(148,163,184,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(148,163,184,0.08) 1px, transparent 1px)",
-            backgroundSize: `${100 / MAP_GRID_COLS}% ${100 / MAP_GRID_ROWS}%`,
-            touchAction: isEditor ? "none" : "auto",
-          }}
+        <TransformWrapper
+          disabled={!!dragId}
+          minScale={0.5}
+          maxScale={6}
+          initialScale={1}
+          limitToBounds={true}
+          doubleClick={{ disabled: true }}
         >
-          {shapes.length === 0 && (
-            <p className="absolute inset-0 flex items-center justify-center text-sm text-slate-600 px-4 text-center">
-              {isEditor
-                ? 'Nothing placed yet — tap "Add" to start laying out the shop and yard.'
-                : "Nothing on the map yet."}
-            </p>
-          )}
-          {shapes.map((s) => {
-            const isGlowing =
-              viewJobId !== "all" && s.type === "container" && s.jobId === viewJobId;
-            return (
-              <div
-                key={s.id}
-                onPointerDown={(e) => handlePointerDown(e, s)}
-                onClick={() => handleShapeClick(s)}
-                title={s.label}
-                className={`absolute rounded-md border-2 flex items-center justify-center text-[10px] font-semibold text-slate-950 px-1 text-center leading-tight overflow-hidden transition-shadow ${mapColorClass(
-                  s.color
-                )} ${isEditor ? "cursor-move" : s.type === "container" ? "cursor-pointer" : ""} ${
-                  isGlowing ? "ring-4 ring-amber-400 ring-offset-1 ring-offset-slate-900 z-10" : ""
-                }`}
-                style={{
-                  left: `${((s.col - 1) / MAP_GRID_COLS) * 100}%`,
-                  top: `${((s.row - 1) / MAP_GRID_ROWS) * 100}%`,
-                  width: `${((s.colSpan || 1) / MAP_GRID_COLS) * 100}%`,
-                  height: `${((s.rowSpan || 1) / MAP_GRID_ROWS) * 100}%`,
-                }}
-              >
-                {(s.colSpan || 1) >= 2 && <span className="truncate px-0.5">{s.label}</span>}
+          {({ zoomIn, zoomOut, resetTransform }) => (
+            <>
+              <div className="flex gap-2 mb-2">
+                <button
+                  onClick={() => zoomIn()}
+                  className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+                >
+                  <ZoomIn className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => zoomOut()}
+                  className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+                >
+                  <ZoomOut className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => resetTransform()}
+                  className="text-xs bg-slate-800 border border-slate-700 text-slate-300 rounded-md px-3 hover:bg-slate-700"
+                >
+                  Reset view
+                </button>
               </div>
-            );
-          })}
-        </div>
+              <TransformComponent
+                wrapperStyle={{ width: "100%", height: "65vh", maxHeight: "700px" }}
+                contentStyle={{ width: "100%" }}
+              >
+                <div
+                  ref={canvasRef}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  className="relative w-full bg-slate-900 border border-slate-800 rounded-lg overflow-hidden select-none"
+                  style={{
+                    aspectRatio: `${MAP_GRID_COLS} / ${MAP_GRID_ROWS}`,
+                    backgroundImage:
+                      "linear-gradient(to right, rgba(148,163,184,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(148,163,184,0.08) 1px, transparent 1px)",
+                    backgroundSize: `${100 / MAP_GRID_COLS}% ${100 / MAP_GRID_ROWS}%`,
+                    touchAction: isEditor ? "none" : "auto",
+                  }}
+                >
+                  {shapes.length === 0 && (
+                    <p className="absolute inset-0 flex items-center justify-center text-sm text-slate-600 px-4 text-center">
+                      {isEditor
+                        ? 'Nothing placed yet — tap "Add" to start laying out the shop and yard.'
+                        : "Nothing on the map yet."}
+                    </p>
+                  )}
+                  {shapes.map((s) => {
+                    const isGlowing =
+                      viewJobId !== "all" && s.type === "container" && s.jobId === viewJobId;
+                    return (
+                      <div
+                        key={s.id}
+                        onPointerDown={(e) => handlePointerDown(e, s)}
+                        onClick={() => handleShapeClick(s)}
+                        title={s.label}
+                        className={`absolute rounded-md border-2 flex items-center justify-center text-[10px] font-semibold text-slate-950 px-1 text-center leading-tight overflow-hidden transition-shadow ${mapColorClass(
+                          s.color
+                        )} ${
+                          isEditor ? "cursor-move" : s.type === "container" ? "cursor-pointer" : ""
+                        } ${
+                          isGlowing
+                            ? "ring-4 ring-amber-400 ring-offset-1 ring-offset-slate-900 z-10"
+                            : ""
+                        }`}
+                        style={{
+                          left: `${((s.col - 1) / MAP_GRID_COLS) * 100}%`,
+                          top: `${((s.row - 1) / MAP_GRID_ROWS) * 100}%`,
+                          width: `${((s.colSpan || 1) / MAP_GRID_COLS) * 100}%`,
+                          height: `${((s.rowSpan || 1) / MAP_GRID_ROWS) * 100}%`,
+                        }}
+                      >
+                        {(s.colSpan || 1) >= 2 && (
+                          <span className="truncate px-0.5">{s.label}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </TransformComponent>
+            </>
+          )}
+        </TransformWrapper>
 
         {shapes.length > 0 && (
           <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1.5">
@@ -4404,7 +4451,10 @@ function ShopMapPage({
               </button>
             </div>
             <button
-              onClick={() => setDeleteTarget(editingShape)}
+              onClick={() => {
+                setDeleteTarget(editingShape);
+                setEditingShape(null);
+              }}
               className="w-full text-xs text-red-400 hover:text-red-300 py-1.5"
             >
               Remove from map
