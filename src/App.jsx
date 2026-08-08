@@ -4147,6 +4147,7 @@ function ShopMapPage({
   const [editingShape, setEditingShape] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [viewJobId, setViewJobId] = useState("all");
+  const [previewContainer, setPreviewContainer] = useState(null);
 
   const realJobs = jobs.filter((j) => !j.isQuickTransfer);
 
@@ -4188,7 +4189,7 @@ function ShopMapPage({
       return;
     }
     if (shape.type === "container") {
-      onViewContainer(shape.jobId, shape.containerName);
+      setPreviewContainer(shape);
     } else if (isEditor) {
       setEditingShape(shape);
     }
@@ -4424,6 +4425,80 @@ function ShopMapPage({
           onCancel={() => setDeleteTarget(null)}
         />
       )}
+
+      {previewContainer && (() => {
+        const job = jobs.find((j) => j.id === previewContainer.jobId);
+        const containerItems = job
+          ? (job.items || []).filter((i) =>
+              (i.containers || []).some((c) => c.name === previewContainer.containerName)
+            )
+          : [];
+        return (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+            <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+                <div className="min-w-0">
+                  <h3 className="text-slate-100 font-semibold truncate">
+                    {previewContainer.containerName}
+                  </h3>
+                  <p className="text-xs text-slate-500 truncate">
+                    {job ? job.name : "Unknown job"}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setPreviewContainer(null)}
+                  className="text-slate-400 hover:text-slate-200 shrink-0"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto px-5 py-4">
+                {!job ? (
+                  <p className="text-sm text-slate-500 text-center py-8">
+                    That job couldn't be found — it may have been deleted.
+                  </p>
+                ) : containerItems.length === 0 ? (
+                  <p className="text-sm text-slate-500 text-center py-8">
+                    Nothing assigned to this container yet.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {containerItems.map((i) => {
+                      const c = (i.containers || []).find(
+                        (c) => c.name === previewContainer.containerName
+                      );
+                      return (
+                        <div
+                          key={i.id}
+                          className="border border-slate-800 rounded-md p-3 flex items-center justify-between gap-2"
+                        >
+                          <p className="text-sm text-slate-100 truncate">{i.name}</p>
+                          <p className="text-xs text-slate-500 shrink-0">
+                            {c ? c.qty : i.qtyHave} of {i.qtyNeeded}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              {job && (
+                <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+                  <button
+                    onClick={() => {
+                      onViewContainer(previewContainer.jobId, previewContainer.containerName);
+                      setPreviewContainer(null);
+                    }}
+                    className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+                  >
+                    Open full container view
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -10201,7 +10276,14 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     }
     try {
       if (mapResult.ok && mapResult.value) {
-        setMapShapes(JSON.parse(mapResult.value));
+        const loadedShapes = JSON.parse(mapResult.value);
+        const cleanedShapes = loadedShapes.filter(
+          (s) => s.col != null && s.row != null && s.colSpan != null && s.rowSpan != null
+        );
+        setMapShapes(cleanedShapes);
+        if (cleanedShapes.length !== loadedShapes.length) {
+          saveWithRetry(SHOP_MAP_KEY, JSON.stringify(cleanedShapes)).catch(() => {});
+        }
       }
     } catch {
       // corrupted stored data — just start with an empty list
