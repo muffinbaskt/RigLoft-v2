@@ -35,6 +35,7 @@ import {
   ClipboardList,
   RotateCcw,
   Home,
+  Map as MapIcon,
   QrCode,
   Bell,
 } from "lucide-react";
@@ -3771,6 +3772,400 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
   );
 }
 
+const MAP_COLORS = [
+  { key: "gray", label: "Building/structure", swatch: "bg-slate-400", building: "bg-slate-400 border-slate-300" },
+  { key: "red", label: "Gangbox", swatch: "bg-red-500", building: "bg-red-500 border-red-400" },
+  { key: "brown", label: "Pallet", swatch: "bg-amber-800", building: "bg-amber-800 border-amber-700" },
+  { key: "blue", label: "Conex", swatch: "bg-sky-500", building: "bg-sky-500 border-sky-400" },
+  { key: "green", label: "Other", swatch: "bg-emerald-500", building: "bg-emerald-500 border-emerald-400" },
+];
+const mapColorClass = (key) => (MAP_COLORS.find((c) => c.key === key) || MAP_COLORS[0]).building;
+
+function ShopMapAddForm({ jobs, onSave, onCancel }) {
+  const [kind, setKind] = useState("building"); // "building" | "container"
+  const [label, setLabel] = useState("");
+  const [color, setColor] = useState("gray");
+  const [jobSearch, setJobSearch] = useState("");
+  const [selectedJob, setSelectedJob] = useState(null);
+  const [containerName, setContainerName] = useState("");
+
+  const realJobs = jobs.filter((j) => !j.isQuickTransfer);
+  const filteredJobs = realJobs.filter((j) =>
+    j.name.toLowerCase().includes(jobSearch.trim().toLowerCase())
+  );
+  const availableContainers = selectedJob ? selectedJob.containerOptions || [] : [];
+
+  const canSave =
+    kind === "building" ? label.trim().length > 0 : selectedJob && containerName;
+
+  const handleSave = () => {
+    if (!canSave) return;
+    if (kind === "building") {
+      onSave({ type: "building", label: label.trim(), color, x: 50, y: 50, w: 12, h: 8 });
+    } else {
+      onSave({
+        type: "container",
+        label: containerName,
+        color,
+        jobId: selectedJob.id,
+        containerName,
+        x: 50,
+        y: 50,
+        w: 4,
+        h: 4,
+      });
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg p-5 max-h-[90vh] overflow-y-auto">
+        <h3 className="text-slate-100 font-semibold mb-3">Add to map</h3>
+
+        <div className="flex gap-2 mb-4">
+          <button
+            onClick={() => setKind("building")}
+            className={`flex-1 text-sm rounded-md py-2 border ${
+              kind === "building"
+                ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
+                : "bg-slate-800 border-slate-700 text-slate-400"
+            }`}
+          >
+            Building/structure
+          </button>
+          <button
+            onClick={() => setKind("container")}
+            className={`flex-1 text-sm rounded-md py-2 border ${
+              kind === "container"
+                ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
+                : "bg-slate-800 border-slate-700 text-slate-400"
+            }`}
+          >
+            Container
+          </button>
+        </div>
+
+        {kind === "building" ? (
+          <div className="mb-4">
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Label</label>
+            <input
+              autoFocus
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="e.g. Rigging Loft, Tent"
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+          </div>
+        ) : !selectedJob ? (
+          <div className="mb-4">
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              Which job?
+            </label>
+            <input
+              autoFocus
+              value={jobSearch}
+              onChange={(e) => setJobSearch(e.target.value)}
+              placeholder="Search jobs..."
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+            <div className="space-y-1.5 max-h-40 overflow-y-auto">
+              {filteredJobs.map((j) => (
+                <button
+                  key={j.id}
+                  onClick={() => setSelectedJob(j)}
+                  className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-700 text-slate-200 hover:bg-slate-800"
+                >
+                  {j.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-medium text-slate-400">
+                Which container in "{selectedJob.name}"?
+              </label>
+              <button
+                onClick={() => setSelectedJob(null)}
+                className="text-xs text-slate-500 hover:text-slate-300"
+              >
+                Change job
+              </button>
+            </div>
+            {availableContainers.length === 0 ? (
+              <p className="text-xs text-slate-500">
+                No containers set up on that job yet.
+              </p>
+            ) : (
+              <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                {availableContainers.map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => setContainerName(c)}
+                    className={`w-full text-left text-sm rounded-md px-3 py-2 border ${
+                      containerName === c
+                        ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
+                        : "border-slate-700 text-slate-200 hover:bg-slate-800"
+                    }`}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="mb-4">
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">Color</label>
+          <div className="flex gap-2 flex-wrap">
+            {MAP_COLORS.map((c) => (
+              <button
+                key={c.key}
+                onClick={() => setColor(c.key)}
+                title={c.label}
+                className={`w-8 h-8 rounded-md ${c.swatch} ${
+                  color === c.key ? "ring-2 ring-offset-2 ring-offset-slate-900 ring-amber-400" : ""
+                }`}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div className="flex gap-3">
+          <button
+            onClick={onCancel}
+            className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!canSave}
+            className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+          >
+            Place on map
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShopMapPage({ shapes, jobs, isEditor, onAddShape, onMoveShape, onUpdateShape, onDeleteShape, onViewContainer, onBack, onGoHome }) {
+  const canvasRef = useRef(null);
+  const [dragId, setDragId] = useState(null);
+  const draggedRef = useRef(false);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [editingShape, setEditingShape] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  const posFromEvent = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+    const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
+    return { x, y };
+  };
+
+  const handlePointerDown = (e, shape) => {
+    if (!isEditor) return;
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    draggedRef.current = false;
+    setDragId(shape.id);
+  };
+
+  const handlePointerMove = (e) => {
+    if (!dragId) return;
+    draggedRef.current = true;
+    const { x, y } = posFromEvent(e);
+    onMoveShape(dragId, x, y);
+  };
+
+  const handlePointerUp = () => {
+    setDragId(null);
+  };
+
+  const handleShapeClick = (shape) => {
+    if (draggedRef.current) {
+      draggedRef.current = false;
+      return;
+    }
+    if (shape.type === "container") {
+      onViewContainer(shape.jobId, shape.containerName);
+    } else if (isEditor) {
+      setEditingShape(shape);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
+        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <button onClick={onBack} className="text-slate-400 hover:text-slate-200 shrink-0">
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <button onClick={onGoHome} className="text-slate-400 hover:text-slate-200 shrink-0">
+              <Home className="w-4 h-4" />
+            </button>
+            <p className="font-semibold text-slate-100 flex items-center gap-1.5">
+              <MapIcon className="w-4 h-4 text-amber-400" />
+              Shop Map
+            </p>
+          </div>
+          {isEditor && (
+            <button
+              onClick={() => setShowAddForm(true)}
+              className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400 shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              Add
+            </button>
+          )}
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto px-4 py-5">
+        <p className="text-xs text-slate-500 mb-3">
+          {isEditor
+            ? "Drag anything to reposition it. Tap a container to see what's inside it, or tap a building to rename/recolor/delete it."
+            : "Tap a container to see what's inside it."}
+        </p>
+        <div
+          ref={canvasRef}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          className="relative w-full bg-slate-900 border border-slate-800 rounded-lg overflow-hidden select-none"
+          style={{ aspectRatio: "16 / 10", touchAction: isEditor ? "none" : "auto" }}
+        >
+          {shapes.length === 0 && (
+            <p className="absolute inset-0 flex items-center justify-center text-sm text-slate-600 px-4 text-center">
+              {isEditor
+                ? 'Nothing placed yet — tap "Add" to start laying out the shop and yard.'
+                : "Nothing on the map yet."}
+            </p>
+          )}
+          {shapes.map((s) => (
+            <div
+              key={s.id}
+              onPointerDown={(e) => handlePointerDown(e, s)}
+              onClick={() => handleShapeClick(s)}
+              title={s.label}
+              className={`absolute rounded-md border-2 flex items-center justify-center text-[10px] font-semibold text-slate-950 px-1 text-center leading-tight overflow-hidden ${mapColorClass(
+                s.color
+              )} ${isEditor ? "cursor-move" : s.type === "container" ? "cursor-pointer" : ""}`}
+              style={{
+                left: `${s.x}%`,
+                top: `${s.y}%`,
+                width: `${s.w}%`,
+                height: `${s.h}%`,
+                transform: "translate(-50%, -50%)",
+              }}
+            >
+              {s.w >= 6 && <span className="truncate px-0.5">{s.label}</span>}
+            </div>
+          ))}
+        </div>
+
+        {shapes.length > 0 && (
+          <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1.5">
+            {shapes.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => handleShapeClick(s)}
+                className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200"
+              >
+                <span className={`w-2.5 h-2.5 rounded-sm ${mapColorClass(s.color)}`} />
+                {s.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </main>
+
+      {showAddForm && (
+        <ShopMapAddForm
+          jobs={jobs}
+          onSave={(shape) => {
+            onAddShape(shape);
+            setShowAddForm(false);
+          }}
+          onCancel={() => setShowAddForm(false)}
+        />
+      )}
+
+      {editingShape && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg p-5">
+            <h3 className="text-slate-100 font-semibold mb-3">Edit</h3>
+            <input
+              autoFocus
+              value={editingShape.label}
+              onChange={(e) => setEditingShape({ ...editingShape, label: e.target.value })}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-3 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+            <div className="flex gap-2 flex-wrap mb-4">
+              {MAP_COLORS.map((c) => (
+                <button
+                  key={c.key}
+                  onClick={() => setEditingShape({ ...editingShape, color: c.key })}
+                  title={c.label}
+                  className={`w-8 h-8 rounded-md ${c.swatch} ${
+                    editingShape.color === c.key
+                      ? "ring-2 ring-offset-2 ring-offset-slate-900 ring-amber-400"
+                      : ""
+                  }`}
+                />
+              ))}
+            </div>
+            <div className="flex gap-3 mb-2">
+              <button
+                onClick={() => setEditingShape(null)}
+                className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  onUpdateShape(editingShape.id, {
+                    label: editingShape.label,
+                    color: editingShape.color,
+                  });
+                  setEditingShape(null);
+                }}
+                className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Save
+              </button>
+            </div>
+            <button
+              onClick={() => setDeleteTarget(editingShape)}
+              className="w-full text-xs text-red-400 hover:text-red-300 py-1.5"
+            >
+              Remove from map
+            </button>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <ConfirmDelete
+          title="Remove this from the map?"
+          message={`"${deleteTarget.label}" will be removed.`}
+          onConfirm={() => {
+            onDeleteShape(deleteTarget.id);
+            setDeleteTarget(null);
+            setEditingShape(null);
+          }}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 function ReturnsListPage({ returns, onOpenReturn, onBack, onGoHome }) {
   const [collapsed, setCollapsed] = useState({});
 
@@ -6207,6 +6602,7 @@ function JobPicker({
   onOpenReturnsList,
   returnsCount,
   onOpenGeneralTodo,
+  onOpenMap,
   onCheckForUpdate,
   updateCheckMessage,
 }) {
@@ -6394,6 +6790,13 @@ function JobPicker({
                 <ClipboardList className="w-4 h-4" />
               </button>
             )}
+            <button
+              onClick={onOpenMap}
+              title="Shop Map"
+              className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+            >
+              <MapIcon className="w-4 h-4" />
+            </button>
             <button
               onClick={onOpenCatalog}
               title="Item catalog"
@@ -6830,6 +7233,7 @@ function JobInventory({
   onSaveCatalogItem,
   onOpenCatalog,
   onRenameJob,
+  autoOpenContainer,
 }) {
   // A sealed job behaves exactly like browse-only mode, regardless of
   // being actually logged in — reuses every existing disabled-editing
@@ -6864,8 +7268,8 @@ function JobInventory({
   const [referenceDocsOpen, setReferenceDocsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
-  const [containersOpen, setContainersOpen] = useState(false);
-  const [containerToOpen, setContainerToOpen] = useState(null);
+  const [containersOpen, setContainersOpen] = useState(!!autoOpenContainer);
+  const [containerToOpen, setContainerToOpen] = useState(autoOpenContainer || null);
 
   const openContainerFromItem = (containerName) => {
     setContainerToOpen(containerName);
@@ -8440,6 +8844,7 @@ const ACTIVE_JOB_KEY = "warehub-active-job";
 const CATALOG_KEY = "warehub-catalog";
 const RETURNS_KEY = "warehub-returns";
 const GENERAL_TODOS_KEY = "warehub-general-todos";
+const SHOP_MAP_KEY = "warehub-shop-map";
 // Set to "true" the moment we ever successfully save real job data. Lets us
 // tell "genuinely new account" apart from "storage came back empty when it
 // shouldn't have" — the latter must never be treated as a fresh start.
@@ -9160,6 +9565,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   const [catalog, setCatalog] = useState([]);
   const [returns, setReturns] = useState([]);
   const [generalTodos, setGeneralTodos] = useState([]);
+  const [mapShapes, setMapShapes] = useState([]);
   const [catalogModalOpen, setCatalogModalOpen] = useState(false);
   const catalogSaveTimer = useRef(null);
   const catalogRef = useRef([]);
@@ -9508,6 +9914,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     const catalogResult = await getWithRetry(CATALOG_KEY);
     const returnsResult = await getWithRetry(RETURNS_KEY);
     const generalTodosResult = await getWithRetry(GENERAL_TODOS_KEY);
+    const mapResult = await getWithRetry(SHOP_MAP_KEY);
 
     if (!jobsResult.ok || !catalogResult.ok) {
       setLoadFailed(true);
@@ -9526,6 +9933,13 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     try {
       if (generalTodosResult.ok && generalTodosResult.value) {
         setGeneralTodos(JSON.parse(generalTodosResult.value));
+      }
+    } catch {
+      // corrupted stored data — just start with an empty list
+    }
+    try {
+      if (mapResult.ok && mapResult.value) {
+        setMapShapes(JSON.parse(mapResult.value));
       }
     } catch {
       // corrupted stored data — just start with an empty list
@@ -10066,6 +10480,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   const [showNewReturnModal, setShowNewReturnModal] = useState(false);
   const [showReturnsListPage, setShowReturnsListPage] = useState(false);
   const [showGeneralTodo, setShowGeneralTodo] = useState(false);
+  const [showMapPage, setShowMapPage] = useState(false);
   const [activeReturnId, setActiveReturnId] = useState(null);
   const activeReturn = returns.find((r) => r.id === activeReturnId) || null;
 
@@ -10205,6 +10620,46 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   const clearFinishedGeneralTodos = (ids) => {
     updateGeneralTodos((prev) => prev.filter((t) => !ids.includes(t.id)));
   };
+
+  const updateMapShapes = (updater) => {
+    setMapShapes((prev) => {
+      const next = updater(prev);
+      saveWithRetry(SHOP_MAP_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
+  const addMapShape = (shape) => {
+    updateMapShapes((prev) => [...prev, { ...shape, id: Date.now() }]);
+  };
+
+  const moveMapShape = (id, x, y) => {
+    updateMapShapes((prev) => prev.map((s) => (s.id === id ? { ...s, x, y } : s)));
+  };
+
+  const updateMapShape = (id, changes) => {
+    updateMapShapes((prev) => prev.map((s) => (s.id === id ? { ...s, ...changes } : s)));
+  };
+
+  const deleteMapShape = (id) => {
+    updateMapShapes((prev) => prev.filter((s) => s.id !== id));
+  };
+
+  // Lets the map jump straight into a specific container inside a specific
+  // job, reusing the exact same "open this container" flow already built
+  // for clicking a container tag on an item card.
+  const [pendingContainerOpen, setPendingContainerOpen] = useState(null);
+  const viewMapContainer = (jobId, containerName) => {
+    setActiveJobId(jobId);
+    setPendingContainerOpen(containerName);
+    setShowPicker(false);
+    setShowMapPage(false);
+  };
+
+  useEffect(() => {
+    if (pendingContainerOpen) setPendingContainerOpen(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeJobId]);
 
   const createReturn = (job, date) => {
     const ret = newReturn(job.id, job.name, date);
@@ -10663,6 +11118,22 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
             setShowPicker(true);
           }}
         />
+      ) : showMapPage ? (
+        <ShopMapPage
+          shapes={mapShapes}
+          jobs={jobs}
+          isEditor={isEditor}
+          onAddShape={addMapShape}
+          onMoveShape={moveMapShape}
+          onUpdateShape={updateMapShape}
+          onDeleteShape={deleteMapShape}
+          onViewContainer={viewMapContainer}
+          onBack={() => setShowMapPage(false)}
+          onGoHome={() => {
+            setShowMapPage(false);
+            setShowPicker(true);
+          }}
+        />
       ) : showingPicker ? (
         <JobPicker
           jobs={jobs}
@@ -10698,11 +11169,13 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           onOpenReturnsList={() => setShowReturnsListPage(true)}
           returnsCount={returns.length}
           onOpenGeneralTodo={() => setShowGeneralTodo(true)}
+          onOpenMap={() => setShowMapPage(true)}
           onCheckForUpdate={checkForUpdateNow}
           updateCheckMessage={updateCheckMessage}
         />
       ) : (
         <JobInventory
+          key={activeJob.id}
           job={activeJob}
           isEditor={isEditor && !activeJob.sealed}
           onRequestLogin={onRequestLogin}
@@ -10712,6 +11185,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           onSaveCatalogItem={saveCatalogItem}
           onOpenCatalog={() => setCatalogModalOpen(true)}
           onRenameJob={(name, color) => renameJob(activeJob.id, name, color)}
+          autoOpenContainer={pendingContainerOpen}
         />
       )}
 
