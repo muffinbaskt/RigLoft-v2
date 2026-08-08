@@ -3772,22 +3772,63 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
   );
 }
 
-const MAP_COLORS = [
-  { key: "gray", label: "Building/structure", swatch: "bg-slate-400", building: "bg-slate-400 border-slate-300" },
-  { key: "red", label: "Gangbox", swatch: "bg-red-500", building: "bg-red-500 border-red-400" },
-  { key: "brown", label: "Pallet", swatch: "bg-amber-800", building: "bg-amber-800 border-amber-700" },
-  { key: "blue", label: "Conex", swatch: "bg-sky-500", building: "bg-sky-500 border-sky-400" },
-  { key: "green", label: "Other", swatch: "bg-emerald-500", building: "bg-emerald-500 border-emerald-400" },
-];
-const mapColorClass = (key) => (MAP_COLORS.find((c) => c.key === key) || MAP_COLORS[0]).building;
 
-function ShopMapAddForm({ jobs, onSave, onCancel }) {
-  const [kind, setKind] = useState("building"); // "building" | "container"
+// A 1x1 cell is sized to roughly match a pallet's real footprint (48"x40"),
+// so every other container's size in cells is a rough real-world scale
+// relative to that — a 40' conex is genuinely ~10x the length of a pallet,
+// and looks it on the grid.
+const MAP_GRID_COLS = 30;
+const MAP_GRID_ROWS = 18;
+
+const CONTAINER_SIZE_PRESETS = [
+  { key: "pallet", label: "Pallet (~48\"x40\")", colSpan: 1, rowSpan: 1 },
+  { key: "gangbox", label: "Gangbox (~5'x2')", colSpan: 2, rowSpan: 1 },
+  { key: "conex20", label: "20' Conex", colSpan: 5, rowSpan: 2 },
+  { key: "conex40", label: "40' Conex", colSpan: 10, rowSpan: 2 },
+  { key: "custom", label: "Custom size", colSpan: null, rowSpan: null },
+];
+
+const MAP_COLORS = [
+  { key: "slate", swatch: "bg-slate-400", cls: "bg-slate-400 border-slate-300" },
+  { key: "red", swatch: "bg-red-500", cls: "bg-red-500 border-red-400" },
+  { key: "orange", swatch: "bg-orange-500", cls: "bg-orange-500 border-orange-400" },
+  { key: "amber", swatch: "bg-amber-500", cls: "bg-amber-500 border-amber-400" },
+  { key: "yellow", swatch: "bg-yellow-400", cls: "bg-yellow-400 border-yellow-300" },
+  { key: "lime", swatch: "bg-lime-500", cls: "bg-lime-500 border-lime-400" },
+  { key: "green", swatch: "bg-green-500", cls: "bg-green-500 border-green-400" },
+  { key: "emerald", swatch: "bg-emerald-500", cls: "bg-emerald-500 border-emerald-400" },
+  { key: "teal", swatch: "bg-teal-500", cls: "bg-teal-500 border-teal-400" },
+  { key: "cyan", swatch: "bg-cyan-500", cls: "bg-cyan-500 border-cyan-400" },
+  { key: "sky", swatch: "bg-sky-500", cls: "bg-sky-500 border-sky-400" },
+  { key: "blue", swatch: "bg-blue-500", cls: "bg-blue-500 border-blue-400" },
+  { key: "indigo", swatch: "bg-indigo-500", cls: "bg-indigo-500 border-indigo-400" },
+  { key: "violet", swatch: "bg-violet-500", cls: "bg-violet-500 border-violet-400" },
+  { key: "purple", swatch: "bg-purple-500", cls: "bg-purple-500 border-purple-400" },
+  { key: "fuchsia", swatch: "bg-fuchsia-500", cls: "bg-fuchsia-500 border-fuchsia-400" },
+  { key: "pink", swatch: "bg-pink-500", cls: "bg-pink-500 border-pink-400" },
+  { key: "rose", swatch: "bg-rose-500", cls: "bg-rose-500 border-rose-400" },
+  { key: "brown", swatch: "bg-amber-800", cls: "bg-amber-800 border-amber-700" },
+  { key: "stone", swatch: "bg-stone-500", cls: "bg-stone-500 border-stone-400" },
+];
+const mapColorClass = (key) => (MAP_COLORS.find((c) => c.key === key) || MAP_COLORS[0]).cls;
+
+function ShopMapAddForm({ jobs, presetJobId, onSave, onCancel }) {
+  const [kind, setKind] = useState("building");
   const [label, setLabel] = useState("");
-  const [color, setColor] = useState("gray");
+  const [color, setColor] = useState("slate");
   const [jobSearch, setJobSearch] = useState("");
-  const [selectedJob, setSelectedJob] = useState(null);
+  const [selectedJob, setSelectedJob] = useState(
+    presetJobId ? jobs.find((j) => j.id === presetJobId) || null : null
+  );
+  const [containerMode, setContainerMode] = useState("existing");
   const [containerName, setContainerName] = useState("");
+  const [newContainerName, setNewContainerName] = useState("");
+  const [addItemToo, setAddItemToo] = useState(false);
+  const [itemName, setItemName] = useState("");
+  const [itemQty, setItemQty] = useState("");
+  const [sizePreset, setSizePreset] = useState("pallet");
+  const [colSpan, setColSpan] = useState(1);
+  const [rowSpan, setRowSpan] = useState(1);
 
   const realJobs = jobs.filter((j) => !j.isQuickTransfer);
   const filteredJobs = realJobs.filter((j) =>
@@ -3795,31 +3836,51 @@ function ShopMapAddForm({ jobs, onSave, onCancel }) {
   );
   const availableContainers = selectedJob ? selectedJob.containerOptions || [] : [];
 
+  const applyPreset = (key) => {
+    setSizePreset(key);
+    const preset = CONTAINER_SIZE_PRESETS.find((p) => p.key === key);
+    if (preset && preset.colSpan) {
+      setColSpan(preset.colSpan);
+      setRowSpan(preset.rowSpan);
+    }
+  };
+
+  const effectiveContainerName =
+    containerMode === "existing" ? containerName : newContainerName.trim();
+
   const canSave =
-    kind === "building" ? label.trim().length > 0 : selectedJob && containerName;
+    kind === "building"
+      ? label.trim().length > 0
+      : selectedJob && effectiveContainerName && (!addItemToo || itemName.trim());
 
   const handleSave = () => {
     if (!canSave) return;
     if (kind === "building") {
-      onSave({ type: "building", label: label.trim(), color, x: 50, y: 50, w: 12, h: 8 });
+      onSave({
+        shape: { type: "building", label: label.trim(), color, colSpan, rowSpan },
+      });
     } else {
       onSave({
-        type: "container",
-        label: containerName,
-        color,
-        jobId: selectedJob.id,
-        containerName,
-        x: 50,
-        y: 50,
-        w: 4,
-        h: 4,
+        shape: {
+          type: "container",
+          label: effectiveContainerName,
+          color,
+          jobId: selectedJob.id,
+          containerName: effectiveContainerName,
+          colSpan,
+          rowSpan,
+        },
+        isNewContainer: containerMode === "new",
+        newItem: addItemToo
+          ? { name: itemName.trim(), qty: itemQty.trim() === "" ? 0 : Number(itemQty) || 0 }
+          : null,
       });
     }
   };
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4">
-      <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg p-5 max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4 py-8">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg p-5 max-h-full overflow-y-auto">
         <h3 className="text-slate-100 font-semibold mb-3">Add to map</h3>
 
         <div className="flex gap-2 mb-4">
@@ -3884,38 +3945,152 @@ function ShopMapAddForm({ jobs, onSave, onCancel }) {
           <div className="mb-4">
             <div className="flex items-center justify-between mb-1.5">
               <label className="block text-xs font-medium text-slate-400">
-                Which container in "{selectedJob.name}"?
+                Container in "{selectedJob.name}"
               </label>
+              {!presetJobId && (
+                <button
+                  onClick={() => setSelectedJob(null)}
+                  className="text-xs text-slate-500 hover:text-slate-300"
+                >
+                  Change job
+                </button>
+              )}
+            </div>
+
+            <div className="flex gap-2 mb-2">
               <button
-                onClick={() => setSelectedJob(null)}
-                className="text-xs text-slate-500 hover:text-slate-300"
+                onClick={() => setContainerMode("existing")}
+                className={`flex-1 text-xs rounded-md py-1.5 border ${
+                  containerMode === "existing"
+                    ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
+                    : "bg-slate-800 border-slate-700 text-slate-400"
+                }`}
               >
-                Change job
+                Existing container
+              </button>
+              <button
+                onClick={() => setContainerMode("new")}
+                className={`flex-1 text-xs rounded-md py-1.5 border ${
+                  containerMode === "new"
+                    ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
+                    : "bg-slate-800 border-slate-700 text-slate-400"
+                }`}
+              >
+                Create new
               </button>
             </div>
-            {availableContainers.length === 0 ? (
-              <p className="text-xs text-slate-500">
-                No containers set up on that job yet.
-              </p>
+
+            {containerMode === "existing" ? (
+              availableContainers.length === 0 ? (
+                <p className="text-xs text-slate-500">
+                  No containers set up on that job yet — use "Create new" instead.
+                </p>
+              ) : (
+                <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                  {availableContainers.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setContainerName(c)}
+                      className={`w-full text-left text-sm rounded-md px-3 py-2 border ${
+                        containerName === c
+                          ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
+                          : "border-slate-700 text-slate-200 hover:bg-slate-800"
+                      }`}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              )
             ) : (
-              <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                {availableContainers.map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => setContainerName(c)}
-                    className={`w-full text-left text-sm rounded-md px-3 py-2 border ${
-                      containerName === c
-                        ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
-                        : "border-slate-700 text-slate-200 hover:bg-slate-800"
-                    }`}
-                  >
-                    {c}
-                  </button>
-                ))}
+              <input
+                value={newContainerName}
+                onChange={(e) => setNewContainerName(e.target.value)}
+                placeholder="New container name"
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            )}
+
+            <label className="flex items-center gap-2 mt-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={addItemToo}
+                onChange={(e) => setAddItemToo(e.target.checked)}
+                className="w-4 h-4 rounded accent-amber-500"
+              />
+              <span className="text-xs text-slate-300">Also add an item to it now</span>
+            </label>
+            {addItemToo && (
+              <div className="grid grid-cols-3 gap-2 mt-2">
+                <input
+                  value={itemName}
+                  onChange={(e) => setItemName(e.target.value)}
+                  placeholder="Item name"
+                  className="col-span-2 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                />
+                <input
+                  type="number"
+                  min="0"
+                  value={itemQty}
+                  onChange={(e) => setItemQty(e.target.value)}
+                  placeholder="Qty"
+                  className="bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                />
               </div>
             )}
           </div>
         )}
+
+        <div className="mb-4">
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">
+            Size on the grid
+          </label>
+          <div className="grid grid-cols-2 gap-1.5 mb-2">
+            {CONTAINER_SIZE_PRESETS.map((p) => (
+              <button
+                key={p.key}
+                onClick={() => applyPreset(p.key)}
+                className={`text-xs rounded-md py-1.5 px-2 border text-left ${
+                  sizePreset === p.key
+                    ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
+                    : "bg-slate-800 border-slate-700 text-slate-400"
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {sizePreset === "custom" && (
+            <div className="flex items-center gap-2">
+              <div className="flex-1">
+                <label className="block text-[10px] text-slate-500 mb-1">Width (cells)</label>
+                <input
+                  type="number"
+                  min="1"
+                  max={MAP_GRID_COLS}
+                  value={colSpan}
+                  onChange={(e) => setColSpan(Math.max(1, Number(e.target.value) || 1))}
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                />
+              </div>
+              <div className="flex-1">
+                <label className="block text-[10px] text-slate-500 mb-1">Height (cells)</label>
+                <input
+                  type="number"
+                  min="1"
+                  max={MAP_GRID_ROWS}
+                  value={rowSpan}
+                  onChange={(e) => setRowSpan(Math.max(1, Number(e.target.value) || 1))}
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                />
+              </div>
+            </div>
+          )}
+          <p className="text-[10px] text-slate-600 mt-1.5">
+            1 cell ≈ a pallet's footprint. If it's sitting sideways in real life, just swap the
+            width/height here to match.
+          </p>
+        </div>
 
         <div className="mb-4">
           <label className="block text-xs font-medium text-slate-400 mb-1.5">Color</label>
@@ -3924,8 +4099,7 @@ function ShopMapAddForm({ jobs, onSave, onCancel }) {
               <button
                 key={c.key}
                 onClick={() => setColor(c.key)}
-                title={c.label}
-                className={`w-8 h-8 rounded-md ${c.swatch} ${
+                className={`w-7 h-7 rounded-md ${c.swatch} ${
                   color === c.key ? "ring-2 ring-offset-2 ring-offset-slate-900 ring-amber-400" : ""
                 }`}
               />
@@ -3953,19 +4127,40 @@ function ShopMapAddForm({ jobs, onSave, onCancel }) {
   );
 }
 
-function ShopMapPage({ shapes, jobs, isEditor, onAddShape, onMoveShape, onUpdateShape, onDeleteShape, onViewContainer, onBack, onGoHome }) {
+function ShopMapPage({
+  shapes,
+  jobs,
+  isEditor,
+  onAddShape,
+  onMoveShape,
+  onUpdateShape,
+  onDeleteShape,
+  onViewContainer,
+  onCreateContainerAndItem,
+  onBack,
+  onGoHome,
+}) {
   const canvasRef = useRef(null);
   const [dragId, setDragId] = useState(null);
   const draggedRef = useRef(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingShape, setEditingShape] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [viewJobId, setViewJobId] = useState("all");
 
-  const posFromEvent = (e) => {
+  const realJobs = jobs.filter((j) => !j.isQuickTransfer);
+
+  const cellFromEvent = (e, shape) => {
     const rect = canvasRef.current.getBoundingClientRect();
-    const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
-    const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
-    return { x, y };
+    const cellW = rect.width / MAP_GRID_COLS;
+    const cellH = rect.height / MAP_GRID_ROWS;
+    const colSpan = shape.colSpan || 1;
+    const rowSpan = shape.rowSpan || 1;
+    let col = Math.round((e.clientX - rect.left) / cellW - colSpan / 2) + 1;
+    let row = Math.round((e.clientY - rect.top) / cellH - rowSpan / 2) + 1;
+    col = Math.max(1, Math.min(MAP_GRID_COLS - colSpan + 1, col));
+    row = Math.max(1, Math.min(MAP_GRID_ROWS - rowSpan + 1, row));
+    return { col, row };
   };
 
   const handlePointerDown = (e, shape) => {
@@ -3978,14 +4173,14 @@ function ShopMapPage({ shapes, jobs, isEditor, onAddShape, onMoveShape, onUpdate
 
   const handlePointerMove = (e) => {
     if (!dragId) return;
+    const shape = shapes.find((s) => s.id === dragId);
+    if (!shape) return;
     draggedRef.current = true;
-    const { x, y } = posFromEvent(e);
-    onMoveShape(dragId, x, y);
+    const { col, row } = cellFromEvent(e, shape);
+    onMoveShape(dragId, col, row);
   };
 
-  const handlePointerUp = () => {
-    setDragId(null);
-  };
+  const handlePointerUp = () => setDragId(null);
 
   const handleShapeClick = (shape) => {
     if (draggedRef.current) {
@@ -4002,7 +4197,7 @@ function ShopMapPage({ shapes, jobs, isEditor, onAddShape, onMoveShape, onUpdate
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
+        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3 min-w-0">
             <button onClick={onBack} className="text-slate-400 hover:text-slate-200 shrink-0">
               <ChevronLeft className="w-5 h-5" />
@@ -4025,20 +4220,42 @@ function ShopMapPage({ shapes, jobs, isEditor, onAddShape, onMoveShape, onUpdate
             </button>
           )}
         </div>
+        <div className="max-w-5xl mx-auto px-4 pb-3">
+          <select
+            value={viewJobId}
+            onChange={(e) => setViewJobId(e.target.value)}
+            className="w-full sm:w-auto appearance-none bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+          >
+            <option value="all">View: All jobs</option>
+            {realJobs.map((j) => (
+              <option key={j.id} value={j.id}>
+                View: {j.name}
+              </option>
+            ))}
+          </select>
+        </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 py-5">
+      <main className="max-w-5xl mx-auto px-4 py-5">
         <p className="text-xs text-slate-500 mb-3">
           {isEditor
             ? "Drag anything to reposition it. Tap a container to see what's inside it, or tap a building to rename/recolor/delete it."
             : "Tap a container to see what's inside it."}
+          {viewJobId !== "all" &&
+            " Containers for the selected job are glowing so they stand out from the rest."}
         </p>
         <div
           ref={canvasRef}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           className="relative w-full bg-slate-900 border border-slate-800 rounded-lg overflow-hidden select-none"
-          style={{ aspectRatio: "16 / 10", touchAction: isEditor ? "none" : "auto" }}
+          style={{
+            aspectRatio: `${MAP_GRID_COLS} / ${MAP_GRID_ROWS}`,
+            backgroundImage:
+              "linear-gradient(to right, rgba(148,163,184,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(148,163,184,0.08) 1px, transparent 1px)",
+            backgroundSize: `${100 / MAP_GRID_COLS}% ${100 / MAP_GRID_ROWS}%`,
+            touchAction: isEditor ? "none" : "auto",
+          }}
         >
           {shapes.length === 0 && (
             <p className="absolute inset-0 flex items-center justify-center text-sm text-slate-600 px-4 text-center">
@@ -4047,26 +4264,31 @@ function ShopMapPage({ shapes, jobs, isEditor, onAddShape, onMoveShape, onUpdate
                 : "Nothing on the map yet."}
             </p>
           )}
-          {shapes.map((s) => (
-            <div
-              key={s.id}
-              onPointerDown={(e) => handlePointerDown(e, s)}
-              onClick={() => handleShapeClick(s)}
-              title={s.label}
-              className={`absolute rounded-md border-2 flex items-center justify-center text-[10px] font-semibold text-slate-950 px-1 text-center leading-tight overflow-hidden ${mapColorClass(
-                s.color
-              )} ${isEditor ? "cursor-move" : s.type === "container" ? "cursor-pointer" : ""}`}
-              style={{
-                left: `${s.x}%`,
-                top: `${s.y}%`,
-                width: `${s.w}%`,
-                height: `${s.h}%`,
-                transform: "translate(-50%, -50%)",
-              }}
-            >
-              {s.w >= 6 && <span className="truncate px-0.5">{s.label}</span>}
-            </div>
-          ))}
+          {shapes.map((s) => {
+            const isGlowing =
+              viewJobId !== "all" && s.type === "container" && s.jobId === viewJobId;
+            return (
+              <div
+                key={s.id}
+                onPointerDown={(e) => handlePointerDown(e, s)}
+                onClick={() => handleShapeClick(s)}
+                title={s.label}
+                className={`absolute rounded-md border-2 flex items-center justify-center text-[10px] font-semibold text-slate-950 px-1 text-center leading-tight overflow-hidden transition-shadow ${mapColorClass(
+                  s.color
+                )} ${isEditor ? "cursor-move" : s.type === "container" ? "cursor-pointer" : ""} ${
+                  isGlowing ? "ring-4 ring-amber-400 ring-offset-1 ring-offset-slate-900 z-10" : ""
+                }`}
+                style={{
+                  left: `${((s.col - 1) / MAP_GRID_COLS) * 100}%`,
+                  top: `${((s.row - 1) / MAP_GRID_ROWS) * 100}%`,
+                  width: `${((s.colSpan || 1) / MAP_GRID_COLS) * 100}%`,
+                  height: `${((s.rowSpan || 1) / MAP_GRID_ROWS) * 100}%`,
+                }}
+              >
+                {(s.colSpan || 1) >= 2 && <span className="truncate px-0.5">{s.label}</span>}
+              </div>
+            );
+          })}
         </div>
 
         {shapes.length > 0 && (
@@ -4088,8 +4310,13 @@ function ShopMapPage({ shapes, jobs, isEditor, onAddShape, onMoveShape, onUpdate
       {showAddForm && (
         <ShopMapAddForm
           jobs={jobs}
-          onSave={(shape) => {
-            onAddShape(shape);
+          presetJobId={viewJobId !== "all" ? viewJobId : null}
+          onSave={({ shape, isNewContainer, newItem }) => {
+            const placed = { ...shape, col: 2, row: 2 };
+            onAddShape(placed);
+            if (shape.type === "container" && (isNewContainer || newItem)) {
+              onCreateContainerAndItem(shape.jobId, shape.containerName, isNewContainer, newItem);
+            }
             setShowAddForm(false);
           }}
           onCancel={() => setShowAddForm(false)}
@@ -4106,13 +4333,46 @@ function ShopMapPage({ shapes, jobs, isEditor, onAddShape, onMoveShape, onUpdate
               onChange={(e) => setEditingShape({ ...editingShape, label: e.target.value })}
               className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-3 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
             />
+            <div className="flex items-center gap-2 mb-3">
+              <div className="flex-1">
+                <label className="block text-[10px] text-slate-500 mb-1">Width (cells)</label>
+                <input
+                  type="number"
+                  min="1"
+                  max={MAP_GRID_COLS}
+                  value={editingShape.colSpan || 1}
+                  onChange={(e) =>
+                    setEditingShape({
+                      ...editingShape,
+                      colSpan: Math.max(1, Number(e.target.value) || 1),
+                    })
+                  }
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                />
+              </div>
+              <div className="flex-1">
+                <label className="block text-[10px] text-slate-500 mb-1">Height (cells)</label>
+                <input
+                  type="number"
+                  min="1"
+                  max={MAP_GRID_ROWS}
+                  value={editingShape.rowSpan || 1}
+                  onChange={(e) =>
+                    setEditingShape({
+                      ...editingShape,
+                      rowSpan: Math.max(1, Number(e.target.value) || 1),
+                    })
+                  }
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                />
+              </div>
+            </div>
             <div className="flex gap-2 flex-wrap mb-4">
               {MAP_COLORS.map((c) => (
                 <button
                   key={c.key}
                   onClick={() => setEditingShape({ ...editingShape, color: c.key })}
-                  title={c.label}
-                  className={`w-8 h-8 rounded-md ${c.swatch} ${
+                  className={`w-7 h-7 rounded-md ${c.swatch} ${
                     editingShape.color === c.key
                       ? "ring-2 ring-offset-2 ring-offset-slate-900 ring-amber-400"
                       : ""
@@ -4132,6 +4392,8 @@ function ShopMapPage({ shapes, jobs, isEditor, onAddShape, onMoveShape, onUpdate
                   onUpdateShape(editingShape.id, {
                     label: editingShape.label,
                     color: editingShape.color,
+                    colSpan: editingShape.colSpan,
+                    rowSpan: editingShape.rowSpan,
                   });
                   setEditingShape(null);
                 }}
@@ -10656,6 +10918,46 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     setShowMapPage(false);
   };
 
+  // Lets the map's "add a container" flow create a real container (and
+  // optionally a real item inside it) on an arbitrary job — not
+  // necessarily the one currently open — without needing to leave the map
+  // page to do it.
+  const createContainerAndItemFromMap = (jobId, containerName, isNewContainer, newItem) => {
+    setJobs((prev) =>
+      prev.map((j) => {
+        if (j.id !== jobId) return j;
+        const containerOptions =
+          isNewContainer && !(j.containerOptions || []).includes(containerName)
+            ? [...(j.containerOptions || []), containerName]
+            : j.containerOptions || [];
+        if (!newItem) return { ...j, containerOptions };
+        const qty = Number(newItem.qty) || 0;
+        const item = {
+          ...emptyItem(STORAGE_OPTIONS[0]),
+          id: Date.now(),
+          name: newItem.name,
+          qtyNeeded: qty,
+          qtyHave: qty,
+          containers: [{ name: containerName, qty }],
+          status: "green",
+        };
+        return {
+          ...j,
+          containerOptions,
+          items: [...(j.items || []), item],
+          activityLog: [
+            {
+              id: Date.now(),
+              time: timeStamp(),
+              message: `Added "${newItem.name}" via Shop Map`,
+            },
+            ...(j.activityLog || []),
+          ].slice(0, 50),
+        };
+      })
+    );
+  };
+
   useEffect(() => {
     if (pendingContainerOpen) setPendingContainerOpen(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -11128,6 +11430,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           onUpdateShape={updateMapShape}
           onDeleteShape={deleteMapShape}
           onViewContainer={viewMapContainer}
+          onCreateContainerAndItem={createContainerAndItemFromMap}
           onBack={() => setShowMapPage(false)}
           onGoHome={() => {
             setShowMapPage(false);
