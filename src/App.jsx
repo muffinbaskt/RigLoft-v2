@@ -3782,6 +3782,7 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
 // long, and looks it on the grid.
 const MAP_GRID_COLS = 100;
 const MAP_GRID_ROWS = 80;
+const MAP_FEET_PER_CELL = 4;
 
 const MAP_COLORS = [
   { key: "slate", swatch: "bg-slate-400", cls: "bg-slate-400 border-slate-300" },
@@ -4082,6 +4083,9 @@ function ShopMapPage({
   const [paintDraft, setPaintDraft] = useState(null);
   const paintModeRef = useRef(null); // "paint" | "erase", set by the first cell touched
   const paintedThisGestureRef = useRef(false);
+  const [showMeasureHelper, setShowMeasureHelper] = useState(false);
+  const [measureWidth, setMeasureWidth] = useState("");
+  const [measureHeight, setMeasureHeight] = useState("");
 
   const realJobs = jobs.filter((j) => !j.isQuickTransfer);
   const cellKey = (col, row) => `${col},${row}`;
@@ -4175,6 +4179,34 @@ function ShopMapPage({
 
   const cancelPaint = () => setPaintDraft(null);
 
+  const fillMeasuredRectangle = () => {
+    const cellsWide = Math.max(1, Math.round((Number(measureWidth) || 0) / MAP_FEET_PER_CELL));
+    const cellsHigh = Math.max(1, Math.round((Number(measureHeight) || 0) / MAP_FEET_PER_CELL));
+    if (!measureWidth || !measureHeight) return;
+
+    // Anchor at wherever's already been painted, so this can be used to
+    // start a shape OR to "square up" one that's already underway. With
+    // nothing painted yet, default to roughly the middle of the grid.
+    let startCol, startRow;
+    if (paintDraft.cells.length > 0) {
+      startCol = Math.min(...paintDraft.cells.map((c) => c.col));
+      startRow = Math.min(...paintDraft.cells.map((c) => c.row));
+    } else {
+      startCol = Math.max(1, Math.floor(MAP_GRID_COLS / 2 - cellsWide / 2));
+      startRow = Math.max(1, Math.floor(MAP_GRID_ROWS / 2 - cellsHigh / 2));
+    }
+
+    const cells = [];
+    for (let dc = 0; dc < cellsWide; dc++) {
+      for (let dr = 0; dr < cellsHigh; dr++) {
+        const col = startCol + dc;
+        const row = startRow + dr;
+        if (col <= MAP_GRID_COLS && row <= MAP_GRID_ROWS) cells.push({ col, row });
+      }
+    }
+    setPaintDraft((prev) => ({ ...prev, cells }));
+  };
+
   // For labeling: place text near the middle of each shape's painted area.
   const centroidOf = (cells) => {
     const minCol = Math.min(...cells.map((c) => c.col));
@@ -4230,11 +4262,17 @@ function ShopMapPage({
 
       {paintDraft && (
         <div className="bg-amber-500 text-slate-950 text-sm font-medium">
-          <div className="max-w-5xl mx-auto px-4 py-2.5 flex items-center justify-between gap-3">
+          <div className="max-w-5xl mx-auto px-4 py-2.5 flex items-center justify-between gap-3 flex-wrap">
             <span>
               Painting "{paintDraft.label}" — tap or drag cells to add/remove them ({paintDraft.cells.length} painted)
             </span>
             <div className="flex gap-2 shrink-0">
+              <button
+                onClick={() => setShowMeasureHelper((v) => !v)}
+                className="text-xs bg-slate-950/10 border border-slate-950/30 rounded-md px-3 py-1.5 hover:bg-slate-950/20"
+              >
+                {showMeasureHelper ? "Hide" : "Have a measurement?"}
+              </button>
               <button
                 onClick={cancelPaint}
                 className="text-xs bg-slate-950/10 border border-slate-950/30 rounded-md px-3 py-1.5 hover:bg-slate-950/20"
@@ -4249,6 +4287,42 @@ function ShopMapPage({
               </button>
             </div>
           </div>
+          {showMeasureHelper && (
+            <div className="border-t border-slate-950/20">
+              <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
+                <span className="text-xs">Real size (feet):</span>
+                <input
+                  type="number"
+                  min="1"
+                  value={measureWidth}
+                  onChange={(e) => setMeasureWidth(e.target.value)}
+                  placeholder="Width"
+                  className="w-20 bg-slate-950/10 border border-slate-950/30 rounded-md px-2 py-1.5 text-xs placeholder:text-slate-800/50 focus:outline-none"
+                />
+                <span className="text-xs">x</span>
+                <input
+                  type="number"
+                  min="1"
+                  value={measureHeight}
+                  onChange={(e) => setMeasureHeight(e.target.value)}
+                  placeholder="Height"
+                  className="w-20 bg-slate-950/10 border border-slate-950/30 rounded-md px-2 py-1.5 text-xs placeholder:text-slate-800/50 focus:outline-none"
+                />
+                <span className="text-xs">
+                  ≈ {Math.max(1, Math.round((Number(measureWidth) || 0) / MAP_FEET_PER_CELL))} x{" "}
+                  {Math.max(1, Math.round((Number(measureHeight) || 0) / MAP_FEET_PER_CELL))} cells
+                  (1 cell ≈ {MAP_FEET_PER_CELL}ft)
+                </span>
+                <button
+                  onClick={fillMeasuredRectangle}
+                  disabled={!measureWidth || !measureHeight}
+                  className="text-xs bg-slate-950 text-amber-400 font-semibold rounded-md px-3 py-1.5 hover:bg-slate-900 disabled:opacity-40"
+                >
+                  Fill that size
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
