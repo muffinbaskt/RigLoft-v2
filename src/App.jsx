@@ -4087,6 +4087,13 @@ function ShopMapPage({
   const [measureWidth, setMeasureWidth] = useState("");
   const [measureHeight, setMeasureHeight] = useState("");
 
+  // Dragging an already-painted shape as a whole, preserving its exact
+  // footprint — separate from painting, which edits individual cells.
+  const [movingShapeId, setMovingShapeId] = useState(null);
+  const [moveOffset, setMoveOffset] = useState({ dc: 0, dr: 0 });
+  const moveStartCellRef = useRef(null);
+  const movedRef = useRef(false);
+
   const realJobs = jobs.filter((j) => !j.isQuickTransfer);
   const cellKey = (col, row) => `${col},${row}`;
 
@@ -4113,6 +4120,18 @@ function ShopMapPage({
     });
   };
 
+  const handleShapePointerDown = (e, shape) => {
+    if (paintDraft || !isEditor) return;
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const cell = cellFromEvent(e);
+    if (!cell) return;
+    moveStartCellRef.current = cell;
+    movedRef.current = false;
+    setMovingShapeId(shape.id);
+    setMoveOffset({ dc: 0, dr: 0 });
+  };
+
   const handleCanvasPointerDown = (e) => {
     if (!paintDraft) return;
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -4126,6 +4145,15 @@ function ShopMapPage({
   };
 
   const handleCanvasPointerMove = (e) => {
+    if (movingShapeId) {
+      const cell = cellFromEvent(e);
+      if (!cell || !moveStartCellRef.current) return;
+      const dc = cell.col - moveStartCellRef.current.col;
+      const dr = cell.row - moveStartCellRef.current.row;
+      if (dc !== 0 || dr !== 0) movedRef.current = true;
+      setMoveOffset({ dc, dr });
+      return;
+    }
     if (!paintDraft || !paintModeRef.current) return;
     const cell = cellFromEvent(e);
     if (!cell) return;
@@ -4133,11 +4161,30 @@ function ShopMapPage({
   };
 
   const handleCanvasPointerUp = () => {
+    if (movingShapeId) {
+      if (movedRef.current) {
+        const shape = shapes.find((s) => s.id === movingShapeId);
+        if (shape) {
+          const newCells = shape.cells.map((c) => ({
+            col: Math.max(1, Math.min(MAP_GRID_COLS, c.col + moveOffset.dc)),
+            row: Math.max(1, Math.min(MAP_GRID_ROWS, c.row + moveOffset.dr)),
+          }));
+          onUpdateShapeCells(movingShapeId, newCells);
+        }
+      }
+      setMovingShapeId(null);
+      setMoveOffset({ dc: 0, dr: 0 });
+      moveStartCellRef.current = null;
+      return;
+    }
     paintModeRef.current = null;
   };
 
   const handleCellClick = (shape) => {
-    if (paintDraft) return;
+    if (paintDraft || movedRef.current) {
+      movedRef.current = false;
+      return;
+    }
     if (shape.type === "container") {
       setPreviewContainer(shape);
     } else if (isEditor) {
@@ -4337,7 +4384,7 @@ function ShopMapPage({
           </p>
         )}
         <TransformWrapper
-          disabled={!!paintDraft}
+          disabled={!!paintDraft || !!movingShapeId}
           minScale={0.5}
           maxScale={8}
           initialScale={1}
@@ -4400,32 +4447,32 @@ function ShopMapPage({
                       const isGlowing =
                         viewJobId !== "all" && s.type === "container" && s.jobId === viewJobId;
                       const dimmed = !!paintDraft;
-                      return s.cells.map((c, idx) => (
-                        <div
-                          key={`${s.id}-${idx}`}
-                          onClick={() => handleCellClick(s)}
-                          title={s.label}
-                          className={`absolute border ${mapColorClass(s.color)} ${
-                            dimmed ? "opacity-30" : ""
-                          } ${
-                            !dimmed && isEditor
-                              ? s.type === "building"
-                                ? "cursor-pointer"
-                                : "cursor-pointer"
-                              : ""
-                          } ${
-                            isGlowing
-                              ? "ring-2 ring-amber-400 ring-inset z-10"
-                              : ""
-                          }`}
-                          style={{
-                            left: `${((c.col - 1) / MAP_GRID_COLS) * 100}%`,
-                            top: `${((c.row - 1) / MAP_GRID_ROWS) * 100}%`,
-                            width: `${(1 / MAP_GRID_COLS) * 100}%`,
-                            height: `${(1 / MAP_GRID_ROWS) * 100}%`,
-                          }}
-                        />
-                      ));
+                      const isMoving = s.id === movingShapeId;
+                      return s.cells.map((c, idx) => {
+                        const col = isMoving ? c.col + moveOffset.dc : c.col;
+                        const row = isMoving ? c.row + moveOffset.dr : c.row;
+                        return (
+                          <div
+                            key={`${s.id}-${idx}`}
+                            onPointerDown={(e) => handleShapePointerDown(e, s)}
+                            onClick={() => handleCellClick(s)}
+                            title={s.label}
+                            className={`absolute border ${mapColorClass(s.color)} ${
+                              dimmed ? "opacity-30" : ""
+                            } ${isMoving ? "opacity-70 z-20" : ""} ${
+                              !dimmed && isEditor ? "cursor-move" : ""
+                            } ${
+                              isGlowing ? "ring-2 ring-amber-400 ring-inset z-10" : ""
+                            }`}
+                            style={{
+                              left: `${((col - 1) / MAP_GRID_COLS) * 100}%`,
+                              top: `${((row - 1) / MAP_GRID_ROWS) * 100}%`,
+                              width: `${(1 / MAP_GRID_COLS) * 100}%`,
+                              height: `${(1 / MAP_GRID_ROWS) * 100}%`,
+                            }}
+                          />
+                        );
+                      });
                     })}
 
                   {paintDraft &&
@@ -4448,7 +4495,10 @@ function ShopMapPage({
                     .filter((s) => !paintDraft || s.id !== paintDraft.id)
                     .filter((s) => s.cells.length >= 6)
                     .map((s) => {
-                      const { col, row } = centroidOf(s.cells);
+                      const { col: baseCol, row: baseRow } = centroidOf(s.cells);
+                      const isMoving = s.id === movingShapeId;
+                      const col = isMoving ? baseCol + moveOffset.dc : baseCol;
+                      const row = isMoving ? baseRow + moveOffset.dr : baseRow;
                       return (
                         <span
                           key={`label-${s.id}`}
