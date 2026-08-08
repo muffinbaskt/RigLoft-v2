@@ -3776,20 +3776,12 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
 }
 
 
-// A 1x1 cell is sized to roughly match a pallet's real footprint (48"x40"),
-// so every other container's size in cells is a rough real-world scale
-// relative to that — a 40' conex is genuinely ~10x the length of a pallet,
-// and looks it on the grid.
+// A 1 cell is sized to roughly match a pallet's real footprint (48"x40"),
+// so painting a shape's real footprint in cells gives a rough real-world
+// scale automatically — a 40' conex painted out is genuinely ~10 cells
+// long, and looks it on the grid.
 const MAP_GRID_COLS = 100;
 const MAP_GRID_ROWS = 80;
-
-const CONTAINER_SIZE_PRESETS = [
-  { key: "pallet", label: "Pallet (~48\"x40\")", colSpan: 1, rowSpan: 1 },
-  { key: "gangbox", label: "Gangbox (~5'x2')", colSpan: 2, rowSpan: 1 },
-  { key: "conex20", label: "20' Conex", colSpan: 5, rowSpan: 2 },
-  { key: "conex40", label: "40' Conex", colSpan: 10, rowSpan: 2 },
-  { key: "custom", label: "Custom size", colSpan: null, rowSpan: null },
-];
 
 const MAP_COLORS = [
   { key: "slate", swatch: "bg-slate-400", cls: "bg-slate-400 border-slate-300" },
@@ -3815,7 +3807,7 @@ const MAP_COLORS = [
 ];
 const mapColorClass = (key) => (MAP_COLORS.find((c) => c.key === key) || MAP_COLORS[0]).cls;
 
-function ShopMapAddForm({ jobs, presetJobId, onSave, onCancel }) {
+function ShopMapAddForm({ jobs, presetJobId, onContinue, onCancel }) {
   const [kind, setKind] = useState("building");
   const [label, setLabel] = useState("");
   const [color, setColor] = useState("slate");
@@ -3829,49 +3821,32 @@ function ShopMapAddForm({ jobs, presetJobId, onSave, onCancel }) {
   const [addItemToo, setAddItemToo] = useState(false);
   const [itemName, setItemName] = useState("");
   const [itemQty, setItemQty] = useState("");
-  const [sizePreset, setSizePreset] = useState("pallet");
-  const [colSpan, setColSpan] = useState(1);
-  const [rowSpan, setRowSpan] = useState(1);
 
   const realJobs = jobs.filter((j) => !j.isQuickTransfer);
   const filteredJobs = realJobs.filter((j) =>
     j.name.toLowerCase().includes(jobSearch.trim().toLowerCase())
   );
   const availableContainers = selectedJob ? selectedJob.containerOptions || [] : [];
-
-  const applyPreset = (key) => {
-    setSizePreset(key);
-    const preset = CONTAINER_SIZE_PRESETS.find((p) => p.key === key);
-    if (preset && preset.colSpan) {
-      setColSpan(preset.colSpan);
-      setRowSpan(preset.rowSpan);
-    }
-  };
-
   const effectiveContainerName =
     containerMode === "existing" ? containerName : newContainerName.trim();
 
-  const canSave =
+  const canContinue =
     kind === "building"
       ? label.trim().length > 0
       : selectedJob && effectiveContainerName && (!addItemToo || itemName.trim());
 
-  const handleSave = () => {
-    if (!canSave) return;
+  const handleContinue = () => {
+    if (!canContinue) return;
     if (kind === "building") {
-      onSave({
-        shape: { type: "building", label: label.trim(), color, colSpan, rowSpan },
-      });
+      onContinue({ shape: { type: "building", label: label.trim(), color } });
     } else {
-      onSave({
+      onContinue({
         shape: {
           type: "container",
           label: effectiveContainerName,
           color,
           jobId: selectedJob.id,
           containerName: effectiveContainerName,
-          colSpan,
-          rowSpan,
         },
         isNewContainer: containerMode === "new",
         newItem: addItemToo
@@ -3884,7 +3859,10 @@ function ShopMapAddForm({ jobs, presetJobId, onSave, onCancel }) {
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4 py-8">
       <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg p-5 max-h-full overflow-y-auto">
-        <h3 className="text-slate-100 font-semibold mb-3">Add to map</h3>
+        <h3 className="text-slate-100 font-semibold mb-1">Add to map</h3>
+        <p className="text-xs text-slate-500 mb-3">
+          Fill this out, then you'll paint its footprint directly onto the grid.
+        </p>
 
         <div className="flex gap-2 mb-4">
           <button
@@ -3916,7 +3894,7 @@ function ShopMapAddForm({ jobs, presetJobId, onSave, onCancel }) {
               autoFocus
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              placeholder="e.g. Rigging Loft, Tent"
+              placeholder="e.g. Rigging Loft, Tent, Shop"
               className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
             />
           </div>
@@ -4045,57 +4023,6 @@ function ShopMapAddForm({ jobs, presetJobId, onSave, onCancel }) {
         )}
 
         <div className="mb-4">
-          <label className="block text-xs font-medium text-slate-400 mb-1.5">
-            Size on the grid
-          </label>
-          <div className="grid grid-cols-2 gap-1.5 mb-2">
-            {CONTAINER_SIZE_PRESETS.map((p) => (
-              <button
-                key={p.key}
-                onClick={() => applyPreset(p.key)}
-                className={`text-xs rounded-md py-1.5 px-2 border text-left ${
-                  sizePreset === p.key
-                    ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
-                    : "bg-slate-800 border-slate-700 text-slate-400"
-                }`}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-          {sizePreset === "custom" && (
-            <div className="flex items-center gap-2">
-              <div className="flex-1">
-                <label className="block text-[10px] text-slate-500 mb-1">Width (cells)</label>
-                <input
-                  type="number"
-                  min="1"
-                  max={MAP_GRID_COLS}
-                  value={colSpan}
-                  onChange={(e) => setColSpan(Math.max(1, Number(e.target.value) || 1))}
-                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-                />
-              </div>
-              <div className="flex-1">
-                <label className="block text-[10px] text-slate-500 mb-1">Height (cells)</label>
-                <input
-                  type="number"
-                  min="1"
-                  max={MAP_GRID_ROWS}
-                  value={rowSpan}
-                  onChange={(e) => setRowSpan(Math.max(1, Number(e.target.value) || 1))}
-                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-                />
-              </div>
-            </div>
-          )}
-          <p className="text-[10px] text-slate-600 mt-1.5">
-            1 cell ≈ a pallet's footprint. If it's sitting sideways in real life, just swap the
-            width/height here to match.
-          </p>
-        </div>
-
-        <div className="mb-4">
           <label className="block text-xs font-medium text-slate-400 mb-1.5">Color</label>
           <div className="flex gap-2 flex-wrap">
             {MAP_COLORS.map((c) => (
@@ -4118,11 +4045,11 @@ function ShopMapAddForm({ jobs, presetJobId, onSave, onCancel }) {
             Cancel
           </button>
           <button
-            onClick={handleSave}
-            disabled={!canSave}
+            onClick={handleContinue}
+            disabled={!canContinue}
             className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
           >
-            Place on map
+            Continue → Paint it
           </button>
         </div>
       </div>
@@ -4135,7 +4062,7 @@ function ShopMapPage({
   jobs,
   isEditor,
   onAddShape,
-  onMoveShape,
+  onUpdateShapeCells,
   onUpdateShape,
   onDeleteShape,
   onViewContainer,
@@ -4144,58 +4071,117 @@ function ShopMapPage({
   onGoHome,
 }) {
   const canvasRef = useRef(null);
-  const [dragId, setDragId] = useState(null);
-  const draggedRef = useRef(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingShape, setEditingShape] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [viewJobId, setViewJobId] = useState("all");
   const [previewContainer, setPreviewContainer] = useState(null);
 
-  const realJobs = jobs.filter((j) => !j.isQuickTransfer);
+  // A draft shape actively being painted — either brand new (no id match
+  // in `shapes` yet) or an existing one being reshaped.
+  const [paintDraft, setPaintDraft] = useState(null);
+  const paintModeRef = useRef(null); // "paint" | "erase", set by the first cell touched
+  const paintedThisGestureRef = useRef(false);
 
-  const cellFromEvent = (e, shape) => {
+  const realJobs = jobs.filter((j) => !j.isQuickTransfer);
+  const cellKey = (col, row) => `${col},${row}`;
+
+  const cellFromEvent = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
-    const cellW = rect.width / MAP_GRID_COLS;
-    const cellH = rect.height / MAP_GRID_ROWS;
-    const colSpan = shape.colSpan || 1;
-    const rowSpan = shape.rowSpan || 1;
-    let col = Math.round((e.clientX - rect.left) / cellW - colSpan / 2) + 1;
-    let row = Math.round((e.clientY - rect.top) / cellH - rowSpan / 2) + 1;
-    col = Math.max(1, Math.min(MAP_GRID_COLS - colSpan + 1, col));
-    row = Math.max(1, Math.min(MAP_GRID_ROWS - rowSpan + 1, row));
+    const col = Math.floor(((e.clientX - rect.left) / rect.width) * MAP_GRID_COLS) + 1;
+    const row = Math.floor(((e.clientY - rect.top) / rect.height) * MAP_GRID_ROWS) + 1;
+    if (col < 1 || col > MAP_GRID_COLS || row < 1 || row > MAP_GRID_ROWS) return null;
     return { col, row };
   };
 
-  const handlePointerDown = (e, shape) => {
-    if (!isEditor) return;
-    e.stopPropagation();
+  const applyPaint = (col, row) => {
+    setPaintDraft((prev) => {
+      if (!prev) return prev;
+      const key = cellKey(col, row);
+      const has = prev.cells.some((c) => cellKey(c.col, c.row) === key);
+      if (paintModeRef.current === "paint" && !has) {
+        return { ...prev, cells: [...prev.cells, { col, row }] };
+      }
+      if (paintModeRef.current === "erase" && has) {
+        return { ...prev, cells: prev.cells.filter((c) => cellKey(c.col, c.row) !== key) };
+      }
+      return prev;
+    });
+  };
+
+  const handleCanvasPointerDown = (e) => {
+    if (!paintDraft) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    draggedRef.current = false;
-    setDragId(shape.id);
+    const cell = cellFromEvent(e);
+    if (!cell) return;
+    const key = cellKey(cell.col, cell.row);
+    const has = paintDraft.cells.some((c) => cellKey(c.col, c.row) === key);
+    paintModeRef.current = has ? "erase" : "paint";
+    paintedThisGestureRef.current = true;
+    applyPaint(cell.col, cell.row);
   };
 
-  const handlePointerMove = (e) => {
-    if (!dragId) return;
-    const shape = shapes.find((s) => s.id === dragId);
-    if (!shape) return;
-    draggedRef.current = true;
-    const { col, row } = cellFromEvent(e, shape);
-    onMoveShape(dragId, col, row);
+  const handleCanvasPointerMove = (e) => {
+    if (!paintDraft || !paintModeRef.current) return;
+    const cell = cellFromEvent(e);
+    if (!cell) return;
+    applyPaint(cell.col, cell.row);
   };
 
-  const handlePointerUp = () => setDragId(null);
+  const handleCanvasPointerUp = () => {
+    paintModeRef.current = null;
+  };
 
-  const handleShapeClick = (shape) => {
-    if (draggedRef.current) {
-      draggedRef.current = false;
-      return;
-    }
+  const handleCellClick = (shape) => {
+    if (paintDraft) return;
     if (shape.type === "container") {
       setPreviewContainer(shape);
     } else if (isEditor) {
       setEditingShape(shape);
     }
+  };
+
+  const startNewShapePaint = ({ shape, isNewContainer, newItem }) => {
+    setShowAddForm(false);
+    setPaintDraft({ ...shape, id: null, cells: [], _isNewContainer: isNewContainer, _newItem: newItem });
+  };
+
+  const startReshape = (shape) => {
+    setEditingShape(null);
+    setPaintDraft({ ...shape, cells: [...shape.cells] });
+  };
+
+  const finishPaint = () => {
+    if (!paintDraft) return;
+    if (paintDraft.cells.length === 0) {
+      setPaintDraft(null);
+      return;
+    }
+    if (paintDraft.id) {
+      onUpdateShapeCells(paintDraft.id, paintDraft.cells);
+    } else {
+      onAddShape(paintDraft);
+      if (paintDraft.type === "container" && (paintDraft._isNewContainer || paintDraft._newItem)) {
+        onCreateContainerAndItem(
+          paintDraft.jobId,
+          paintDraft.containerName,
+          paintDraft._isNewContainer,
+          paintDraft._newItem
+        );
+      }
+    }
+    setPaintDraft(null);
+  };
+
+  const cancelPaint = () => setPaintDraft(null);
+
+  // For labeling: place text near the middle of each shape's painted area.
+  const centroidOf = (cells) => {
+    const minCol = Math.min(...cells.map((c) => c.col));
+    const maxCol = Math.max(...cells.map((c) => c.col));
+    const minRow = Math.min(...cells.map((c) => c.row));
+    const maxRow = Math.max(...cells.map((c) => c.row));
+    return { col: (minCol + maxCol) / 2, row: (minRow + maxRow) / 2 };
   };
 
   return (
@@ -4214,7 +4200,7 @@ function ShopMapPage({
               Shop Map
             </p>
           </div>
-          {isEditor && (
+          {isEditor && !paintDraft && (
             <button
               onClick={() => setShowAddForm(true)}
               className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400 shrink-0"
@@ -4224,131 +4210,200 @@ function ShopMapPage({
             </button>
           )}
         </div>
-        <div className="max-w-5xl mx-auto px-4 pb-3">
-          <select
-            value={viewJobId}
-            onChange={(e) => setViewJobId(e.target.value)}
-            className="w-full sm:w-auto appearance-none bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-          >
-            <option value="all">View: All jobs</option>
-            {realJobs.map((j) => (
-              <option key={j.id} value={j.id}>
-                View: {j.name}
-              </option>
-            ))}
-          </select>
-        </div>
+        {!paintDraft && (
+          <div className="max-w-5xl mx-auto px-4 pb-3">
+            <select
+              value={viewJobId}
+              onChange={(e) => setViewJobId(e.target.value)}
+              className="w-full sm:w-auto appearance-none bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            >
+              <option value="all">View: All jobs</option>
+              {realJobs.map((j) => (
+                <option key={j.id} value={j.id}>
+                  View: {j.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </header>
 
+      {paintDraft && (
+        <div className="bg-amber-500 text-slate-950 text-sm font-medium">
+          <div className="max-w-5xl mx-auto px-4 py-2.5 flex items-center justify-between gap-3">
+            <span>
+              Painting "{paintDraft.label}" — tap or drag cells to add/remove them ({paintDraft.cells.length} painted)
+            </span>
+            <div className="flex gap-2 shrink-0">
+              <button
+                onClick={cancelPaint}
+                className="text-xs bg-slate-950/10 border border-slate-950/30 rounded-md px-3 py-1.5 hover:bg-slate-950/20"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={finishPaint}
+                className="text-xs bg-slate-950 text-amber-400 font-semibold rounded-md px-3 py-1.5 hover:bg-slate-900"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <main className="max-w-5xl mx-auto px-4 py-5">
-        <p className="text-xs text-slate-500 mb-3">
-          {isEditor
-            ? "Drag anything to reposition it. Pinch, scroll, or use the buttons to zoom — drag empty space to pan around. Tap a container to see what's inside it, or tap a building to rename/recolor/delete it."
-            : "Pinch, scroll, or use the buttons to zoom — drag empty space to pan around. Tap a container to see what's inside it."}
-          {viewJobId !== "all" &&
-            " Containers for the selected job are glowing so they stand out from the rest."}
-        </p>
+        {!paintDraft && (
+          <p className="text-xs text-slate-500 mb-3">
+            {isEditor
+              ? "Pinch, scroll, or use the buttons to zoom — drag empty space to pan around. Tap a container to see what's inside it, or tap a building to edit it."
+              : "Pinch, scroll, or use the buttons to zoom — drag empty space to pan around. Tap a container to see what's inside it."}
+            {viewJobId !== "all" &&
+              " Containers for the selected job are glowing so they stand out from the rest."}
+          </p>
+        )}
         <TransformWrapper
-          disabled={!!dragId}
+          disabled={!!paintDraft}
           minScale={0.5}
-          maxScale={6}
+          maxScale={8}
           initialScale={1}
           limitToBounds={true}
           doubleClick={{ disabled: true }}
         >
           {({ zoomIn, zoomOut, resetTransform }) => (
             <>
-              <div className="flex gap-2 mb-2">
-                <button
-                  onClick={() => zoomIn()}
-                  className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
-                >
-                  <ZoomIn className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => zoomOut()}
-                  className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
-                >
-                  <ZoomOut className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => resetTransform()}
-                  className="text-xs bg-slate-800 border border-slate-700 text-slate-300 rounded-md px-3 hover:bg-slate-700"
-                >
-                  Reset view
-                </button>
-              </div>
+              {!paintDraft && (
+                <div className="flex gap-2 mb-2">
+                  <button
+                    onClick={() => zoomIn()}
+                    className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+                  >
+                    <ZoomIn className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => zoomOut()}
+                    className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+                  >
+                    <ZoomOut className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => resetTransform()}
+                    className="text-xs bg-slate-800 border border-slate-700 text-slate-300 rounded-md px-3 hover:bg-slate-700"
+                  >
+                    Reset view
+                  </button>
+                </div>
+              )}
               <TransformComponent
                 wrapperStyle={{ width: "100%", height: "65vh", maxHeight: "700px" }}
                 contentStyle={{ width: "100%" }}
               >
                 <div
                   ref={canvasRef}
-                  onPointerMove={handlePointerMove}
-                  onPointerUp={handlePointerUp}
+                  onPointerDown={handleCanvasPointerDown}
+                  onPointerMove={handleCanvasPointerMove}
+                  onPointerUp={handleCanvasPointerUp}
                   className="relative w-full bg-slate-900 border border-slate-800 rounded-lg overflow-hidden select-none"
                   style={{
                     aspectRatio: `${MAP_GRID_COLS} / ${MAP_GRID_ROWS}`,
                     backgroundImage:
                       "linear-gradient(to right, rgba(148,163,184,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(148,163,184,0.08) 1px, transparent 1px)",
                     backgroundSize: `${100 / MAP_GRID_COLS}% ${100 / MAP_GRID_ROWS}%`,
-                    touchAction: isEditor ? "none" : "auto",
+                    touchAction: "none",
                   }}
                 >
-                  {shapes.length === 0 && (
+                  {shapes.length === 0 && !paintDraft && (
                     <p className="absolute inset-0 flex items-center justify-center text-sm text-slate-600 px-4 text-center">
                       {isEditor
                         ? 'Nothing placed yet — tap "Add" to start laying out the shop and yard.'
                         : "Nothing on the map yet."}
                     </p>
                   )}
-                  {shapes.map((s) => {
-                    const isGlowing =
-                      viewJobId !== "all" && s.type === "container" && s.jobId === viewJobId;
-                    return (
+
+                  {shapes
+                    .filter((s) => !paintDraft || s.id !== paintDraft.id)
+                    .map((s) => {
+                      const isGlowing =
+                        viewJobId !== "all" && s.type === "container" && s.jobId === viewJobId;
+                      const dimmed = !!paintDraft;
+                      return s.cells.map((c, idx) => (
+                        <div
+                          key={`${s.id}-${idx}`}
+                          onClick={() => handleCellClick(s)}
+                          title={s.label}
+                          className={`absolute border ${mapColorClass(s.color)} ${
+                            dimmed ? "opacity-30" : ""
+                          } ${
+                            !dimmed && isEditor
+                              ? s.type === "building"
+                                ? "cursor-pointer"
+                                : "cursor-pointer"
+                              : ""
+                          } ${
+                            isGlowing
+                              ? "ring-2 ring-amber-400 ring-inset z-10"
+                              : ""
+                          }`}
+                          style={{
+                            left: `${((c.col - 1) / MAP_GRID_COLS) * 100}%`,
+                            top: `${((c.row - 1) / MAP_GRID_ROWS) * 100}%`,
+                            width: `${(1 / MAP_GRID_COLS) * 100}%`,
+                            height: `${(1 / MAP_GRID_ROWS) * 100}%`,
+                          }}
+                        />
+                      ));
+                    })}
+
+                  {paintDraft &&
+                    paintDraft.cells.map((c, idx) => (
                       <div
-                        key={s.id}
-                        onPointerDown={(e) => handlePointerDown(e, s)}
-                        onClick={() => handleShapeClick(s)}
-                        title={s.label}
-                        className={`absolute rounded-md border-2 flex items-center justify-center text-[10px] font-semibold text-slate-950 px-1 text-center leading-tight overflow-hidden transition-shadow ${mapColorClass(
-                          s.color
-                        )} ${
-                          isEditor ? "cursor-move" : s.type === "container" ? "cursor-pointer" : ""
-                        } ${
-                          isGlowing
-                            ? "ring-4 ring-amber-400 ring-offset-1 ring-offset-slate-900 z-10"
-                            : ""
-                        }`}
+                        key={`draft-${idx}`}
+                        className={`absolute border-2 border-dashed ${mapColorClass(
+                          paintDraft.color
+                        )} opacity-90`}
                         style={{
-                          left: `${((s.col - 1) / MAP_GRID_COLS) * 100}%`,
-                          top: `${((s.row - 1) / MAP_GRID_ROWS) * 100}%`,
-                          width: `${((s.colSpan || 1) / MAP_GRID_COLS) * 100}%`,
-                          height: `${((s.rowSpan || 1) / MAP_GRID_ROWS) * 100}%`,
+                          left: `${((c.col - 1) / MAP_GRID_COLS) * 100}%`,
+                          top: `${((c.row - 1) / MAP_GRID_ROWS) * 100}%`,
+                          width: `${(1 / MAP_GRID_COLS) * 100}%`,
+                          height: `${(1 / MAP_GRID_ROWS) * 100}%`,
                         }}
-                      >
-                        {(s.colSpan || 1) >= 2 && (
-                          <span className="truncate px-0.5">{s.label}</span>
-                        )}
-                      </div>
-                    );
-                  })}
+                      />
+                    ))}
+
+                  {shapes
+                    .filter((s) => !paintDraft || s.id !== paintDraft.id)
+                    .filter((s) => s.cells.length >= 6)
+                    .map((s) => {
+                      const { col, row } = centroidOf(s.cells);
+                      return (
+                        <span
+                          key={`label-${s.id}`}
+                          className="absolute text-[10px] font-semibold text-slate-950 bg-white/70 rounded px-1 pointer-events-none -translate-x-1/2 -translate-y-1/2"
+                          style={{
+                            left: `${((col - 0.5) / MAP_GRID_COLS) * 100}%`,
+                            top: `${((row - 0.5) / MAP_GRID_ROWS) * 100}%`,
+                          }}
+                        >
+                          {s.label}
+                        </span>
+                      );
+                    })}
                 </div>
               </TransformComponent>
             </>
           )}
         </TransformWrapper>
 
-        {shapes.length > 0 && (
+        {!paintDraft && shapes.length > 0 && (
           <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1.5">
             {shapes.map((s) => (
               <button
                 key={s.id}
-                onClick={() => handleShapeClick(s)}
+                onClick={() => handleCellClick(s)}
                 className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200"
               >
                 <span className={`w-2.5 h-2.5 rounded-sm ${mapColorClass(s.color)}`} />
-                {s.label}
+                {s.label} ({s.cells.length} cell{s.cells.length === 1 ? "" : "s"})
               </button>
             ))}
           </div>
@@ -4359,14 +4414,7 @@ function ShopMapPage({
         <ShopMapAddForm
           jobs={jobs}
           presetJobId={viewJobId !== "all" ? viewJobId : null}
-          onSave={({ shape, isNewContainer, newItem }) => {
-            const placed = { ...shape, col: 2, row: 2 };
-            onAddShape(placed);
-            if (shape.type === "container" && (isNewContainer || newItem)) {
-              onCreateContainerAndItem(shape.jobId, shape.containerName, isNewContainer, newItem);
-            }
-            setShowAddForm(false);
-          }}
+          onContinue={startNewShapePaint}
           onCancel={() => setShowAddForm(false)}
         />
       )}
@@ -4381,40 +4429,6 @@ function ShopMapPage({
               onChange={(e) => setEditingShape({ ...editingShape, label: e.target.value })}
               className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-3 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
             />
-            <div className="flex items-center gap-2 mb-3">
-              <div className="flex-1">
-                <label className="block text-[10px] text-slate-500 mb-1">Width (cells)</label>
-                <input
-                  type="number"
-                  min="1"
-                  max={MAP_GRID_COLS}
-                  value={editingShape.colSpan || 1}
-                  onChange={(e) =>
-                    setEditingShape({
-                      ...editingShape,
-                      colSpan: Math.max(1, Number(e.target.value) || 1),
-                    })
-                  }
-                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-                />
-              </div>
-              <div className="flex-1">
-                <label className="block text-[10px] text-slate-500 mb-1">Height (cells)</label>
-                <input
-                  type="number"
-                  min="1"
-                  max={MAP_GRID_ROWS}
-                  value={editingShape.rowSpan || 1}
-                  onChange={(e) =>
-                    setEditingShape({
-                      ...editingShape,
-                      rowSpan: Math.max(1, Number(e.target.value) || 1),
-                    })
-                  }
-                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-                />
-              </div>
-            </div>
             <div className="flex gap-2 flex-wrap mb-4">
               {MAP_COLORS.map((c) => (
                 <button
@@ -4440,8 +4454,6 @@ function ShopMapPage({
                   onUpdateShape(editingShape.id, {
                     label: editingShape.label,
                     color: editingShape.color,
-                    colSpan: editingShape.colSpan,
-                    rowSpan: editingShape.rowSpan,
                   });
                   setEditingShape(null);
                 }}
@@ -4451,10 +4463,13 @@ function ShopMapPage({
               </button>
             </div>
             <button
-              onClick={() => {
-                setDeleteTarget(editingShape);
-                setEditingShape(null);
-              }}
+              onClick={() => startReshape(editingShape)}
+              className="w-full text-xs text-amber-400 hover:text-amber-300 py-1.5"
+            >
+              Repaint cells
+            </button>
+            <button
+              onClick={() => setDeleteTarget(editingShape)}
               className="w-full text-xs text-red-400 hover:text-red-300 py-1.5"
             >
               Remove from map
@@ -10327,12 +10342,28 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     try {
       if (mapResult.ok && mapResult.value) {
         const loadedShapes = JSON.parse(mapResult.value);
-        const cleanedShapes = loadedShapes.filter(
-          (s) => s.col != null && s.row != null && s.colSpan != null && s.rowSpan != null
-        );
-        setMapShapes(cleanedShapes);
-        if (cleanedShapes.length !== loadedShapes.length) {
-          saveWithRetry(SHOP_MAP_KEY, JSON.stringify(cleanedShapes)).catch(() => {});
+        const migrated = loadedShapes
+          .map((s) => {
+            if (Array.isArray(s.cells) && s.cells.length > 0) return s;
+            // Old rectangle-based shape (from before cell-painting existed)
+            // — convert its rectangle into an equivalent set of filled
+            // cells instead of just discarding it.
+            if (s.col != null && s.row != null && s.colSpan != null && s.rowSpan != null) {
+              const cells = [];
+              for (let dc = 0; dc < s.colSpan; dc++) {
+                for (let dr = 0; dr < s.rowSpan; dr++) {
+                  cells.push({ col: s.col + dc, row: s.row + dr });
+                }
+              }
+              const { col, row, colSpan, rowSpan, ...rest } = s;
+              return { ...rest, cells };
+            }
+            return null; // genuinely broken/unrecoverable ghost entry
+          })
+          .filter((s) => s && Array.isArray(s.cells) && s.cells.length > 0);
+        setMapShapes(migrated);
+        if (migrated.length !== loadedShapes.length || migrated.some((s, i) => s !== loadedShapes[i])) {
+          saveWithRetry(SHOP_MAP_KEY, JSON.stringify(migrated)).catch(() => {});
         }
       }
     } catch {
@@ -11024,11 +11055,15 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   };
 
   const addMapShape = (shape) => {
-    updateMapShapes((prev) => [...prev, { ...shape, id: Date.now() }]);
+    // Strip the temporary form-only fields (_isNewContainer/_newItem) —
+    // those are only meant to drive the one-time container/item creation
+    // when painting finishes, not to be saved as part of the shape itself.
+    const { _isNewContainer, _newItem, ...clean } = shape;
+    updateMapShapes((prev) => [...prev, { ...clean, id: Date.now() }]);
   };
 
-  const moveMapShape = (id, x, y) => {
-    updateMapShapes((prev) => prev.map((s) => (s.id === id ? { ...s, x, y } : s)));
+  const updateShapeCells = (id, cells) => {
+    updateMapShapes((prev) => prev.map((s) => (s.id === id ? { ...s, cells } : s)));
   };
 
   const updateMapShape = (id, changes) => {
@@ -11558,7 +11593,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           jobs={jobs}
           isEditor={isEditor}
           onAddShape={addMapShape}
-          onMoveShape={moveMapShape}
+          onUpdateShapeCells={updateShapeCells}
           onUpdateShape={updateMapShape}
           onDeleteShape={deleteMapShape}
           onViewContainer={viewMapContainer}
