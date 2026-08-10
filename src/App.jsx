@@ -1531,27 +1531,49 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
     });
 
   const allTransferItems = items.filter((i) => i.needsTransfer);
+
+  // An item split across multiple containers needs each portion tracked
+  // independently — "transferred the copy in Conex 10-20" shouldn't touch
+  // the copy sitting in Conex 10-21. Items with no container at all are
+  // treated as a single implicit portion.
+  const NO_CONTAINER = "__unassigned__";
+  const containerPortions = (item) =>
+    item.containers && item.containers.length > 0
+      ? item.containers.map((c) => c.name)
+      : [NO_CONTAINER];
+  const isPortionTransferred = (item, containerName) =>
+    (item.transferredContainers || []).includes(containerName);
+  const remainingPortions = (item) =>
+    containerPortions(item).filter((name) => !isPortionTransferred(item, name));
+
   const activeItems = sortWithPriority(
-    allTransferItems.filter((i) => !i.transferLocked),
+    allTransferItems.filter((i) => remainingPortions(i).length > 0),
     (i) => i.name
   );
   const lockedItems = sortWithPriority(
-    allTransferItems.filter((i) => i.transferLocked),
+    allTransferItems.filter((i) => remainingPortions(i).length === 0),
     (i) => i.name
   );
   const transferItems = activeItems; // what actually gets copied/exported
 
-  // Grouped by container, for the partial-selection screen — "select all
-  // in this container" is the common case (that's what "partial transfer"
-  // usually means in practice), individual items still selectable too.
+  // Selection keys are item+container composite pairs, since the same
+  // item can have independent transfer status per container it sits in.
+  const portionKey = (itemId, containerName) => `${itemId}::${containerName}`;
+  const parsePortionKey = (key) => {
+    const sep = key.indexOf("::");
+    return { itemId: Number(key.slice(0, sep)), containerName: key.slice(sep + 2) };
+  };
+
   const containerGroups = [
-    ...new Map(
-      activeItems.flatMap((i) => (i.containers || []).map((c) => [c.name, c.name]))
-    ).keys(),
+    ...new Set(
+      activeItems.flatMap((i) => remainingPortions(i).filter((n) => n !== NO_CONTAINER))
+    ),
   ].sort((a, b) => a.localeCompare(b));
-  const unassignedActiveItems = activeItems.filter((i) => (i.containers || []).length === 0);
+  const unassignedActiveItems = activeItems.filter((i) =>
+    remainingPortions(i).includes(NO_CONTAINER)
+  );
   const itemsInContainer = (name) =>
-    activeItems.filter((i) => (i.containers || []).some((c) => c.name === name));
+    activeItems.filter((i) => remainingPortions(i).includes(name));
 
   const lineFor = (item) =>
     item.serials && item.serials.length > 0
@@ -1587,35 +1609,41 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
     }
   };
 
-  const toggleSelectItem = (id) => {
+  const toggleSelectPortion = (itemId, containerName) => {
+    const key = portionKey(itemId, containerName);
     setPartialSelect((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
 
   const toggleSelectContainer = (name) => {
-    const idsInContainer = itemsInContainer(name).map((i) => i.id);
-    const allSelected = idsInContainer.every((id) => partialSelect.has(id));
+    const keysInContainer = itemsInContainer(name).map((i) => portionKey(i.id, name));
+    const allSelected = keysInContainer.every((k) => partialSelect.has(k));
     setPartialSelect((prev) => {
       const next = new Set(prev);
-      idsInContainer.forEach((id) => (allSelected ? next.delete(id) : next.add(id)));
+      keysInContainer.forEach((k) => (allSelected ? next.delete(k) : next.add(k)));
       return next;
     });
   };
 
   const confirmPartialTransfer = () => {
-    const selectedItems = activeItems.filter((i) => partialSelect.has(i.id));
-    onLockItems([...partialSelect], transferDate);
+    const pairs = [...partialSelect].map(parsePortionKey);
+    const selectedItemIds = [...new Set(pairs.map((p) => p.itemId))];
+    const selectedItems = activeItems.filter((i) => selectedItemIds.includes(i.id));
+    onLockItems(pairs, transferDate);
     setPartialSelect(null);
     setJustTransferred(selectedItems);
   };
 
   const confirmFullTransfer = () => {
     const selectedItems = activeItems;
-    onLockItems(activeItems.map((i) => i.id), transferDate);
+    const pairs = activeItems.flatMap((i) =>
+      remainingPortions(i).map((containerName) => ({ itemId: i.id, containerName }))
+    );
+    onLockItems(pairs, transferDate);
     setConfirmFull(false);
     setJustTransferred(selectedItems);
   };
@@ -1705,7 +1733,7 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
           <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
             {containerGroups.map((name) => {
               const inContainer = itemsInContainer(name);
-              const allSelected = inContainer.every((i) => partialSelect.has(i.id));
+              const allSelected = inContainer.every((i) => partialSelect.has(portionKey(i.id, name)));
               return (
                 <div key={name}>
                   <label className="flex items-center gap-2 mb-1.5 cursor-pointer select-none">
@@ -1727,13 +1755,15 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
                       >
                         <input
                           type="checkbox"
-                          checked={partialSelect.has(item.id)}
-                          onChange={() => toggleSelectItem(item.id)}
+                          checked={partialSelect.has(portionKey(item.id, name))}
+                          onChange={() => toggleSelectPortion(item.id, name)}
                           className="w-4 h-4 rounded accent-amber-500 shrink-0"
                         />
                         <p className="text-sm text-slate-100 flex-1 min-w-0">
                           {item.name}{" "}
-                          <span className="text-slate-500">x{item.qtyHave}</span>
+                          <span className="text-slate-500">
+                            x{(item.containers || []).find((c) => c.name === name)?.qty ?? item.qtyHave}
+                          </span>
                         </p>
                       </label>
                     ))}
@@ -1752,8 +1782,8 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
                     >
                       <input
                         type="checkbox"
-                        checked={partialSelect.has(item.id)}
-                        onChange={() => toggleSelectItem(item.id)}
+                        checked={partialSelect.has(portionKey(item.id, NO_CONTAINER))}
+                        onChange={() => toggleSelectPortion(item.id, NO_CONTAINER)}
                         className="w-4 h-4 rounded accent-amber-500 shrink-0"
                       />
                       <p className="text-sm text-slate-100 flex-1 min-w-0">
@@ -5972,7 +6002,7 @@ function ItemCard({ item, selectMode, selected, isEditor, onToggleSelect, onEdit
       } ${
         selected
           ? "border-amber-500/70 bg-amber-500/5"
-          : item.transferLocked
+          : (item.transferredContainers || []).length > 0
           ? "border-purple-500/40 bg-purple-500/5"
           : item.gang === "Unassigned" || item.storage === "Unassigned"
           ? "border-amber-700/50 hover:border-amber-600/60"
@@ -6044,7 +6074,7 @@ function ItemCard({ item, selectMode, selected, isEditor, onToggleSelect, onEdit
       </div>
 
       <div className="flex flex-wrap gap-1.5 mt-3">
-        {item.transferLocked && (
+        {(item.transferredContainers || []).length > 0 && (
           <span className="text-xs rounded-full px-2.5 py-1 border border-purple-500/40 bg-purple-500/10 text-purple-300 flex items-center gap-1">
             <Lock className="w-3 h-3" />
             Transferred
@@ -7585,18 +7615,21 @@ function JobInventory({
     bulkUpdate((i) => ({ ...i, storage }), `Storage set to ${storage}`);
     setBulkStoragePicker(false);
   };
-  const lockTransferItems = (ids, date) => {
+  const lockTransferItems = (pairs, date) => {
     playSaveChime();
     onUpdateJob((prevJob) => ({
       ...prevJob,
-      items: (prevJob.items || []).map((i) =>
-        ids.includes(i.id) ? { ...i, transferLocked: true, transferredDate: date } : i
-      ),
+      items: (prevJob.items || []).map((i) => {
+        const containersToLock = pairs.filter((p) => p.itemId === i.id).map((p) => p.containerName);
+        if (containersToLock.length === 0) return i;
+        const merged = [...new Set([...(i.transferredContainers || []), ...containersToLock])];
+        return { ...i, transferredContainers: merged, transferredDate: date };
+      }),
       activityLog: [
         {
           id: uniqueId(),
           time: timeStamp(),
-          message: `Marked ${ids.length} item${ids.length === 1 ? "" : "s"} as transferred (${date})`,
+          message: `Marked ${pairs.length} item portion${pairs.length === 1 ? "" : "s"} as transferred (${date})`,
         },
         ...prevJob.activityLog,
       ].slice(0, 50),
@@ -7607,7 +7640,7 @@ function JobInventory({
     onUpdateJob((prevJob) => ({
       ...prevJob,
       items: (prevJob.items || []).map((i) =>
-        i.id === id ? { ...i, transferLocked: false } : i
+        i.id === id ? { ...i, transferredContainers: [] } : i
       ),
     }));
   };
@@ -7615,7 +7648,7 @@ function JobInventory({
   const [unlockConfirmTarget, setUnlockConfirmTarget] = useState(null); // { item, action: "edit" | "delete" }
 
   const requestEditItem = (item) => {
-    if (item.transferLocked) {
+    if ((item.transferredContainers || []).length > 0) {
       setUnlockConfirmTarget({ item, action: "edit" });
     } else {
       setFormState(item);
@@ -7623,7 +7656,7 @@ function JobInventory({
   };
 
   const requestDeleteItem = (item) => {
-    if (item.transferLocked) {
+    if ((item.transferredContainers || []).length > 0) {
       setUnlockConfirmTarget({ item, action: "delete" });
     } else {
       setDeleteTarget(item);
@@ -7634,7 +7667,7 @@ function JobInventory({
     if (!unlockConfirmTarget) return;
     const { item, action } = unlockConfirmTarget;
     unlockTransferItem(item.id);
-    const unlockedItem = { ...item, transferLocked: false };
+    const unlockedItem = { ...item, transferredContainers: [] };
     if (action === "edit") setFormState(unlockedItem);
     else setDeleteTarget(unlockedItem);
     setUnlockConfirmTarget(null);
@@ -10042,10 +10075,24 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
             const match = getCachedCatalogMatch(i, loadedCatalog);
             needsTransfer = !!(match && match.needsTransfer);
           }
+          // Old whole-item transferLocked boolean → new per-container
+          // tracking. Locks every container this item currently sits in
+          // (or the implicit "no container" slot), preserving the fact
+          // that it was already marked transferred rather than silently
+          // reverting it to active.
+          let transferredContainers = i.transferredContainers;
+          if (transferredContainers === undefined && i.transferLocked) {
+            transferredContainers =
+              i.containers && i.containers.length > 0
+                ? i.containers.map((c) => c.name)
+                : ["__unassigned__"];
+          }
+          const { transferLocked, ...rest } = i;
           return migrateItemContainers({
-            ...i,
+            ...rest,
             gang: normalizeGangName(i.gang),
             needsTransfer,
+            transferredContainers,
           });
         })
       ),
