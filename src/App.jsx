@@ -1490,9 +1490,12 @@ function SerialsModal({ itemName, serials, onClose }) {
   );
 }
 
-function TransferListModal({ jobName, items, requisitions = [], catalog = [], onClose }) {
+function TransferListModal({ jobName, items, requisitions = [], catalog = [], onLockItems, onUnlockItem, onClose }) {
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
+  const [choosingMode, setChoosingMode] = useState(false);
+  const [partialSelect, setPartialSelect] = useState(null); // Set of item ids, or null when not in partial mode
+  const [confirmFull, setConfirmFull] = useState(false);
 
   // Pinned items (set from the catalog screen) always sort to the top,
   // ahead of everything else — determined by the item's actual catalog
@@ -1510,10 +1513,28 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
       return getName(a).localeCompare(getName(b));
     });
 
-  const transferItems = sortWithPriority(
-    items.filter((i) => i.needsTransfer),
+  const allTransferItems = items.filter((i) => i.needsTransfer);
+  const activeItems = sortWithPriority(
+    allTransferItems.filter((i) => !i.transferLocked),
     (i) => i.name
   );
+  const lockedItems = sortWithPriority(
+    allTransferItems.filter((i) => i.transferLocked),
+    (i) => i.name
+  );
+  const transferItems = activeItems; // what actually gets copied/exported
+
+  // Grouped by container, for the partial-selection screen — "select all
+  // in this container" is the common case (that's what "partial transfer"
+  // usually means in practice), individual items still selectable too.
+  const containerGroups = [
+    ...new Map(
+      activeItems.flatMap((i) => (i.containers || []).map((c) => [c.name, c.name]))
+    ).keys(),
+  ].sort((a, b) => a.localeCompare(b));
+  const unassignedActiveItems = activeItems.filter((i) => (i.containers || []).length === 0);
+  const itemsInContainer = (name) =>
+    activeItems.filter((i) => (i.containers || []).some((c) => c.name === name));
 
   const lineFor = (item) =>
     item.serials && item.serials.length > 0
@@ -1549,6 +1570,131 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
     }
   };
 
+  const toggleSelectItem = (id) => {
+    setPartialSelect((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectContainer = (name) => {
+    const idsInContainer = itemsInContainer(name).map((i) => i.id);
+    const allSelected = idsInContainer.every((id) => partialSelect.has(id));
+    setPartialSelect((prev) => {
+      const next = new Set(prev);
+      idsInContainer.forEach((id) => (allSelected ? next.delete(id) : next.add(id)));
+      return next;
+    });
+  };
+
+  const confirmPartialTransfer = () => {
+    onLockItems([...partialSelect]);
+    setPartialSelect(null);
+  };
+
+  const confirmFullTransfer = () => {
+    onLockItems(activeItems.map((i) => i.id));
+    setConfirmFull(false);
+  };
+
+  // Partial-selection screen replaces the normal view while active.
+  if (partialSelect) {
+    const selectedCount = partialSelect.size;
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+        <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+            <div>
+              <h2 className="text-slate-100 font-semibold text-base">Select what's transferring</h2>
+              <p className="text-xs text-slate-500">{selectedCount} selected</p>
+            </div>
+            <button
+              onClick={() => setPartialSelect(null)}
+              className="text-slate-400 hover:text-slate-200 shrink-0"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+            {containerGroups.map((name) => {
+              const inContainer = itemsInContainer(name);
+              const allSelected = inContainer.every((i) => partialSelect.has(i.id));
+              return (
+                <div key={name}>
+                  <label className="flex items-center gap-2 mb-1.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={() => toggleSelectContainer(name)}
+                      className="w-4 h-4 rounded accent-amber-500"
+                    />
+                    <span className="text-xs font-semibold text-slate-400">
+                      📦 {name} — select all
+                    </span>
+                  </label>
+                  <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden ml-1">
+                    {inContainer.map((item) => (
+                      <label
+                        key={item.id}
+                        className="flex items-center gap-2.5 px-3 py-2 bg-slate-800/40 cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={partialSelect.has(item.id)}
+                          onChange={() => toggleSelectItem(item.id)}
+                          className="w-4 h-4 rounded accent-amber-500 shrink-0"
+                        />
+                        <p className="text-sm text-slate-100 flex-1 min-w-0">
+                          {item.name}{" "}
+                          <span className="text-slate-500">x{item.qtyHave}</span>
+                        </p>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            {unassignedActiveItems.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-slate-400 mb-1.5">No container assigned</p>
+                <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden ml-1">
+                  {unassignedActiveItems.map((item) => (
+                    <label
+                      key={item.id}
+                      className="flex items-center gap-2.5 px-3 py-2 bg-slate-800/40 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={partialSelect.has(item.id)}
+                        onChange={() => toggleSelectItem(item.id)}
+                        className="w-4 h-4 rounded accent-amber-500 shrink-0"
+                      />
+                      <p className="text-sm text-slate-100 flex-1 min-w-0">
+                        {item.name}{" "}
+                        <span className="text-slate-500">x{item.qtyHave}</span>
+                      </p>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+            <button
+              onClick={confirmPartialTransfer}
+              disabled={selectedCount === 0}
+              className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+            >
+              Mark {selectedCount || ""} selected as transferred
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40" onClick={onClose}>
       <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col" onClick={(e) => e.stopPropagation()}>
@@ -1559,7 +1705,8 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
               Transfer list
             </h2>
             <p className="text-xs text-slate-500 truncate">
-              {jobName} · {transferItems.length} item{transferItems.length === 1 ? "" : "s"}
+              {jobName} · {activeItems.length} item{activeItems.length === 1 ? "" : "s"} ready
+              {lockedItems.length > 0 ? ` · ${lockedItems.length} already transferred` : ""}
               {requisitions.length > 0
                 ? ` · ${requisitions.length} REQ${requisitions.length === 1 ? "" : "s"}`
                 : ""}
@@ -1571,7 +1718,7 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4">
-          {transferItems.length === 0 && requisitions.length === 0 ? (
+          {activeItems.length === 0 && lockedItems.length === 0 && requisitions.length === 0 ? (
             <p className="text-sm text-slate-500 text-center py-10">
               No items are marked to transfer yet, and there's nothing on the REQ page either.
               Mark items with "Needs transfer" in the item form, or add requisitions from the
@@ -1579,25 +1726,103 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
             </p>
           ) : (
             <>
-              {transferItems.length > 0 && (
-                <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden mb-4">
-                  {transferItems.map((item) => (
-                    <div key={item.id} className="px-3 py-2 bg-slate-800/40">
-                      <p className="text-sm text-slate-100">
-                        {item.name}{" "}
-                        {!(item.serials && item.serials.length > 0) && (
-                          <span className="text-slate-500">x{item.qtyHave}</span>
-                        )}
-                      </p>
-                      {item.serials && item.serials.length > 0 && (
-                        <p className="text-xs text-fuchsia-300 font-mono break-words mt-0.5">
-                          {item.serials.join(", ")}
+              {activeItems.length > 0 && (
+                <div className="mb-4">
+                  <p className="text-xs font-medium text-slate-500 mb-2">Ready to transfer</p>
+                  <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden">
+                    {activeItems.map((item) => (
+                      <div key={item.id} className="px-3 py-2 bg-slate-800/40">
+                        <p className="text-sm text-slate-100">
+                          {item.name}{" "}
+                          {!(item.serials && item.serials.length > 0) && (
+                            <span className="text-slate-500">x{item.qtyHave}</span>
+                          )}
                         </p>
-                      )}
-                    </div>
-                  ))}
+                        {item.serials && item.serials.length > 0 && (
+                          <p className="text-xs text-fuchsia-300 font-mono break-words mt-0.5">
+                            {item.serials.join(", ")}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
+
+              {activeItems.length > 0 && (
+                <div className="mb-4">
+                  {choosingMode ? (
+                    <div className="border border-amber-500/40 bg-amber-500/5 rounded-lg p-3 space-y-2">
+                      <p className="text-xs text-slate-300 mb-1">What's transferring?</p>
+                      <button
+                        onClick={() => {
+                          setChoosingMode(false);
+                          setConfirmFull(true);
+                        }}
+                        className="w-full text-left border border-slate-700 rounded-md p-2.5 hover:border-amber-500/50 hover:bg-amber-500/5"
+                      >
+                        <p className="text-sm font-medium text-slate-100">Full transfer</p>
+                        <p className="text-xs text-slate-500">
+                          All {activeItems.length} item{activeItems.length === 1 ? "" : "s"} above
+                        </p>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setChoosingMode(false);
+                          setPartialSelect(new Set());
+                        }}
+                        className="w-full text-left border border-slate-700 rounded-md p-2.5 hover:border-amber-500/50 hover:bg-amber-500/5"
+                      >
+                        <p className="text-sm font-medium text-slate-100">Partial transfer</p>
+                        <p className="text-xs text-slate-500">Pick specific containers/items</p>
+                      </button>
+                      <button
+                        onClick={() => setChoosingMode(false)}
+                        className="w-full text-xs text-slate-500 hover:text-slate-300 py-1"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setChoosingMode(true)}
+                      className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 border border-slate-700 text-slate-200 hover:bg-slate-800"
+                    >
+                      <Lock className="w-3.5 h-3.5" />
+                      Start transfer
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {lockedItems.length > 0 && (
+                <div className="mb-4">
+                  <p className="text-xs font-medium text-emerald-500 mb-2 flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Already transferred
+                  </p>
+                  <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden">
+                    {lockedItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className="px-3 py-2 bg-slate-800/20 flex items-center justify-between gap-2"
+                      >
+                        <p className="text-sm text-slate-400">
+                          {item.name}{" "}
+                          <span className="text-slate-600">x{item.qtyHave}</span>
+                        </p>
+                        <button
+                          onClick={() => onUnlockItem(item.id)}
+                          className="text-xs text-slate-500 hover:text-amber-400 shrink-0"
+                        >
+                          Undo
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {requisitions.length > 0 && (
                 <div>
                   <p className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-1.5">
@@ -1633,7 +1858,7 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
           )}
         </div>
 
-        {(transferItems.length > 0 || requisitions.length > 0) && (
+        {(activeItems.length > 0 || requisitions.length > 0) && (
           <div className="px-5 py-4 border-t border-slate-800">
             <button
               onClick={copyList}
@@ -1659,6 +1884,16 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
           </div>
         )}
       </div>
+
+      {confirmFull && (
+        <ConfirmDelete
+          title="Mark everything as transferred?"
+          message={`All ${activeItems.length} item${activeItems.length === 1 ? "" : "s"} on this list will be locked as already transferred.`}
+          confirmLabel="Confirm transfer"
+          onConfirm={confirmFullTransfer}
+          onCancel={() => setConfirmFull(false)}
+        />
+      )}
     </div>
   );
 }
@@ -7196,6 +7431,33 @@ function JobInventory({
     bulkUpdate((i) => ({ ...i, storage }), `Storage set to ${storage}`);
     setBulkStoragePicker(false);
   };
+  const lockTransferItems = (ids) => {
+    playSaveChime();
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      items: (prevJob.items || []).map((i) =>
+        ids.includes(i.id) ? { ...i, transferLocked: true } : i
+      ),
+      activityLog: [
+        {
+          id: Date.now(),
+          time: timeStamp(),
+          message: `Marked ${ids.length} item${ids.length === 1 ? "" : "s"} as transferred`,
+        },
+        ...prevJob.activityLog,
+      ].slice(0, 50),
+    }));
+  };
+
+  const unlockTransferItem = (id) => {
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      items: (prevJob.items || []).map((i) =>
+        i.id === id ? { ...i, transferLocked: false } : i
+      ),
+    }));
+  };
+
   const bulkSetContainer = (container) => {
     bulkUpdate(
       (i) => {
@@ -8163,6 +8425,8 @@ function JobInventory({
           items={items}
           requisitions={job.requisitions || []}
           catalog={catalog}
+          onLockItems={lockTransferItems}
+          onUnlockItem={unlockTransferItem}
           onClose={() => setTransferListOpen(false)}
         />
       )}
