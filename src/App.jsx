@@ -1498,6 +1498,8 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
   const [justTransferred, setJustTransferred] = useState(null); // items from the batch just locked, for the copy screen
   const [justCopied, setJustCopied] = useState(false);
   const [confirmFull, setConfirmFull] = useState(false);
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const [transferDate, setTransferDate] = useState(todayStr);
 
   // Pinned items (set from the catalog screen) always sort to the top,
   // ahead of everything else — determined by the item's actual catalog
@@ -1593,14 +1595,14 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
 
   const confirmPartialTransfer = () => {
     const selectedItems = activeItems.filter((i) => partialSelect.has(i.id));
-    onLockItems([...partialSelect]);
+    onLockItems([...partialSelect], transferDate);
     setPartialSelect(null);
     setJustTransferred(selectedItems);
   };
 
   const confirmFullTransfer = () => {
     const selectedItems = activeItems;
-    onLockItems(activeItems.map((i) => i.id));
+    onLockItems(activeItems.map((i) => i.id), transferDate);
     setConfirmFull(false);
     setJustTransferred(selectedItems);
   };
@@ -1752,6 +1754,25 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
             )}
           </div>
           <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+            <p className="text-xs text-slate-500 mb-1.5">Transfer date</p>
+            <div className="flex gap-2 mb-3">
+              <button
+                onClick={() => setTransferDate(todayStr)}
+                className={`flex-1 text-sm rounded-md py-2 border transition-colors ${
+                  transferDate === todayStr
+                    ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
+                    : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Today
+              </button>
+              <input
+                type="date"
+                value={transferDate}
+                onChange={(e) => setTransferDate(e.target.value)}
+                className="flex-1 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
             <button
               onClick={confirmPartialTransfer}
               disabled={selectedCount === 0}
@@ -1877,10 +1898,15 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
                         key={item.id}
                         className="px-3 py-2 bg-slate-800/20 flex items-center justify-between gap-2"
                       >
-                        <p className="text-sm text-slate-400">
-                          {item.name}{" "}
-                          <span className="text-slate-600">x{item.qtyHave}</span>
-                        </p>
+                        <div className="min-w-0">
+                          <p className="text-sm text-slate-400">
+                            {item.name}{" "}
+                            <span className="text-slate-600">x{item.qtyHave}</span>
+                          </p>
+                          {item.transferredDate && (
+                            <p className="text-xs text-slate-600">{item.transferredDate}</p>
+                          )}
+                        </div>
                         <button
                           onClick={() => onUnlockItem(item.id)}
                           className="text-xs text-slate-500 hover:text-amber-400 shrink-0"
@@ -1956,13 +1982,50 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
       </div>
 
       {confirmFull && (
-        <ConfirmDelete
-          title="Mark everything as transferred?"
-          message={`All ${activeItems.length} item${activeItems.length === 1 ? "" : "s"} on this list will be locked as already transferred.`}
-          confirmLabel="Confirm transfer"
-          onConfirm={confirmFullTransfer}
-          onCancel={() => setConfirmFull(false)}
-        />
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-1.5">
+              Mark everything as transferred?
+            </h3>
+            <p className="text-slate-400 text-sm mb-4">
+              All {activeItems.length} item{activeItems.length === 1 ? "" : "s"} on this list
+              will be locked as already transferred.
+            </p>
+            <p className="text-xs text-slate-500 mb-1.5">Transfer date</p>
+            <div className="flex gap-2 mb-5">
+              <button
+                onClick={() => setTransferDate(todayStr)}
+                className={`flex-1 text-sm rounded-md py-2 border transition-colors ${
+                  transferDate === todayStr
+                    ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
+                    : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Today
+              </button>
+              <input
+                type="date"
+                value={transferDate}
+                onChange={(e) => setTransferDate(e.target.value)}
+                className="flex-1 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmFull(false)}
+                className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmFullTransfer}
+                className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Confirm transfer
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -5896,6 +5959,8 @@ function ItemCard({ item, selectMode, selected, isEditor, onToggleSelect, onEdit
       } ${
         selected
           ? "border-amber-500/70 bg-amber-500/5"
+          : item.transferLocked
+          ? "border-purple-500/40 bg-purple-500/5"
           : item.gang === "Unassigned" || item.storage === "Unassigned"
           ? "border-amber-700/50 hover:border-amber-600/60"
           : "border-slate-800 hover:border-slate-700"
@@ -5966,6 +6031,12 @@ function ItemCard({ item, selectMode, selected, isEditor, onToggleSelect, onEdit
       </div>
 
       <div className="flex flex-wrap gap-1.5 mt-3">
+        {item.transferLocked && (
+          <span className="text-xs rounded-full px-2.5 py-1 border border-purple-500/40 bg-purple-500/10 text-purple-300 flex items-center gap-1">
+            <Lock className="w-3 h-3" />
+            Transferred
+          </span>
+        )}
         <span className={`text-xs rounded-full px-2.5 py-1 border ${GANG_COLOR[item.gang]}`}>
           {item.gang}
         </span>
@@ -7501,18 +7572,18 @@ function JobInventory({
     bulkUpdate((i) => ({ ...i, storage }), `Storage set to ${storage}`);
     setBulkStoragePicker(false);
   };
-  const lockTransferItems = (ids) => {
+  const lockTransferItems = (ids, date) => {
     playSaveChime();
     onUpdateJob((prevJob) => ({
       ...prevJob,
       items: (prevJob.items || []).map((i) =>
-        ids.includes(i.id) ? { ...i, transferLocked: true } : i
+        ids.includes(i.id) ? { ...i, transferLocked: true, transferredDate: date } : i
       ),
       activityLog: [
         {
           id: Date.now(),
           time: timeStamp(),
-          message: `Marked ${ids.length} item${ids.length === 1 ? "" : "s"} as transferred`,
+          message: `Marked ${ids.length} item${ids.length === 1 ? "" : "s"} as transferred (${date})`,
         },
         ...prevJob.activityLog,
       ].slice(0, 50),
@@ -7526,6 +7597,34 @@ function JobInventory({
         i.id === id ? { ...i, transferLocked: false } : i
       ),
     }));
+  };
+
+  const [unlockConfirmTarget, setUnlockConfirmTarget] = useState(null); // { item, action: "edit" | "delete" }
+
+  const requestEditItem = (item) => {
+    if (item.transferLocked) {
+      setUnlockConfirmTarget({ item, action: "edit" });
+    } else {
+      setFormState(item);
+    }
+  };
+
+  const requestDeleteItem = (item) => {
+    if (item.transferLocked) {
+      setUnlockConfirmTarget({ item, action: "delete" });
+    } else {
+      setDeleteTarget(item);
+    }
+  };
+
+  const confirmUnlockAndProceed = () => {
+    if (!unlockConfirmTarget) return;
+    const { item, action } = unlockConfirmTarget;
+    unlockTransferItem(item.id);
+    const unlockedItem = { ...item, transferLocked: false };
+    if (action === "edit") setFormState(unlockedItem);
+    else setDeleteTarget(unlockedItem);
+    setUnlockConfirmTarget(null);
   };
 
   const bulkSetContainer = (container) => {
@@ -8391,8 +8490,8 @@ function JobInventory({
                             selected={!!selectedIds[item.id]}
                             isEditor={isEditor}
                             onToggleSelect={toggleItemSelect}
-                            onEdit={setFormState}
-                            onDelete={setDeleteTarget}
+                            onEdit={requestEditItem}
+                            onDelete={requestDeleteItem}
                             onViewSerials={setSerialsView}
                             onSuggestEdit={setSuggestEditTarget}
                             onOpenContainer={openContainerFromItem}
@@ -8414,8 +8513,8 @@ function JobInventory({
                 selected={!!selectedIds[item.id]}
                 isEditor={isEditor}
                 onToggleSelect={toggleItemSelect}
-                onEdit={setFormState}
-                onDelete={setDeleteTarget}
+                onEdit={requestEditItem}
+                onDelete={requestDeleteItem}
                 onViewSerials={setSerialsView}
                 onSuggestEdit={setSuggestEditTarget}
                 onOpenContainer={openContainerFromItem}
@@ -8478,6 +8577,18 @@ function JobInventory({
             setDeleteTarget(null);
           }}
           onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+
+      {unlockConfirmTarget && (
+        <ConfirmDelete
+          title="This item has been transferred"
+          message={`"${unlockConfirmTarget.item.name}" is locked since it's already marked as transferred. Unlock it to ${
+            unlockConfirmTarget.action === "delete" ? "delete it" : "make changes"
+          }?`}
+          confirmLabel="Unlock"
+          onConfirm={confirmUnlockAndProceed}
+          onCancel={() => setUnlockConfirmTarget(null)}
         />
       )}
 
