@@ -10016,20 +10016,39 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
       if (g === "Bolt-up") return "Bolt Up";
       return g;
     };
+    // Items created before the collision-proof id generator existed could
+    // genuinely share the same id (e.g. two items saved in the same
+    // millisecond) — this shows up as selecting one item in things like
+    // the transfer screen also selecting an unrelated item that happens
+    // to share its id. Give any duplicate a fresh, real unique id.
+    const dedupeItemIds = (jobItems) => {
+      const seenIds = new Set();
+      return jobItems.map((i) => {
+        if (seenIds.has(i.id)) {
+          const freshId = uniqueId();
+          seenIds.add(freshId);
+          return { ...i, id: freshId };
+        }
+        seenIds.add(i.id);
+        return i;
+      });
+    };
     const migrateGang = (job) => ({
       ...job,
-      items: (job.items || []).map((i) => {
-        let needsTransfer = i.needsTransfer;
-        if (job.isQuickTransfer) {
-          const match = getCachedCatalogMatch(i, loadedCatalog);
-          needsTransfer = !!(match && match.needsTransfer);
-        }
-        return migrateItemContainers({
-          ...i,
-          gang: normalizeGangName(i.gang),
-          needsTransfer,
-        });
-      }),
+      items: dedupeItemIds(
+        (job.items || []).map((i) => {
+          let needsTransfer = i.needsTransfer;
+          if (job.isQuickTransfer) {
+            const match = getCachedCatalogMatch(i, loadedCatalog);
+            needsTransfer = !!(match && match.needsTransfer);
+          }
+          return migrateItemContainers({
+            ...i,
+            gang: normalizeGangName(i.gang),
+            needsTransfer,
+          });
+        })
+      ),
     });
     const finalJobs =
       loadedJobs && loadedJobs.length > 0 ? loadedJobs.map(migrateGang) : [seedJob()];
