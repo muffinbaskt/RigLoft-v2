@@ -95,6 +95,19 @@ const JOB_COLOR_BORDER = {
   pink: "border-l-pink-500",
 };
 
+// Date.now() alone only has millisecond resolution — two items created in
+// the same millisecond (a fast double-tap, or several rows created in a
+// tight loop) would get the exact same id, and since ids are used as Set
+// keys for things like transfer selection, that makes two genuinely
+// different items behave as if they were the same one. This guarantees
+// every id is strictly unique and still roughly time-ordered.
+let __lastGeneratedId = 0;
+function uniqueId() {
+  const id = Math.max(Date.now(), __lastGeneratedId + 1);
+  __lastGeneratedId = id;
+  return id;
+}
+
 function timeStamp() {
   return new Date().toLocaleString([], {
     month: "short",
@@ -165,7 +178,7 @@ function seedJob() {
 
 function newReturn(jobId, jobName, date) {
   return {
-    id: Date.now(),
+    id: uniqueId(),
     jobId,
     jobName,
     date,
@@ -176,7 +189,7 @@ function newReturn(jobId, jobName, date) {
 
 function newJob(name, parentId = null, color = null, isQuickTransfer = false) {
   return {
-    id: Date.now(),
+    id: uniqueId(),
     name,
     createdAt: timeStamp(),
     parentId,
@@ -187,7 +200,7 @@ function newJob(name, parentId = null, color = null, isQuickTransfer = false) {
     containerOptions: [],
     categoryOptions: [],
     todos: [],
-    activityLog: [{ id: Date.now(), time: timeStamp(), message: `Job "${name}" created.` }],
+    activityLog: [{ id: uniqueId(), time: timeStamp(), message: `Job "${name}" created.` }],
   };
 }
 
@@ -240,7 +253,7 @@ function parseSerials(text) {
 function emptyItem(defaultStorage) {
   return {
     id: null,
-    _formKey: `new-${Date.now()}-${Math.random()}`,
+    _formKey: `new-${uniqueId()}-${Math.random()}`,
     name: "",
     qtyNeeded: "",
     qtyUnit: "",
@@ -1343,7 +1356,7 @@ function ItemForm({
 
               if (addToCatalog && onSaveCatalogItem) {
                 onSaveCatalogItem({
-                  id: effectiveCatalogMatch ? effectiveCatalogMatch.id : Date.now(),
+                  id: effectiveCatalogMatch ? effectiveCatalogMatch.id : uniqueId(),
                   name: item.name.trim(),
                   gang: item.gang,
                   storage: item.storage,
@@ -2370,7 +2383,7 @@ function CatalogItemForm({ initial, existingCategories = [], existingVendors = [
             Cancel
           </button>
           <button
-            onClick={() => canSave && onSave({ ...item, id: item.id || Date.now() })}
+            onClick={() => canSave && onSave({ ...item, id: item.id || uniqueId() })}
             disabled={!canSave}
             className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
           >
@@ -2517,7 +2530,7 @@ function CatalogBulkAddModal({ onImport, onCancel }) {
 
   const handleImport = () => {
     const items = preview.map((p, idx) => ({
-      id: Date.now() + idx,
+      id: uniqueId() + idx,
       name: p.name,
       gang: p.gang,
       storage: p.storage,
@@ -3838,7 +3851,7 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
       referenceDocuments: [
         ...(prevJob.referenceDocuments || []),
         {
-          id: Date.now(),
+          id: uniqueId(),
           name: result.name,
           url: result.url,
           path: result.path,
@@ -3847,7 +3860,7 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
       ],
       activityLog: [
         {
-          id: Date.now(),
+          id: uniqueId(),
           time: timeStamp(),
           message: `Uploaded reference document "${result.name}"`,
         },
@@ -3965,7 +3978,7 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
     if (!name.trim()) return;
     playSaveChime();
     const newItem = {
-      id: Date.now(),
+      id: uniqueId(),
       name: name.trim(),
       qty: qty.trim() === "" ? 0 : Number(qty) || 0,
       sme: parseSerials(smeText),
@@ -4248,7 +4261,7 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
     if (!trimmed) return;
     const template = REQUISITION_TEMPLATES[trimmed];
     const templateEntries = template
-      ? template.map((spec, idx) => ({ id: Date.now() + idx, category: trimmed, spec, qty: 0 }))
+      ? template.map((spec, idx) => ({ id: uniqueId() + idx, category: trimmed, spec, qty: 0 }))
       : [];
     onUpdateJob((prevJob) => ({
       ...prevJob,
@@ -4278,7 +4291,7 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
       ...prevJob,
       requisitions: [
         ...(prevJob.requisitions || []),
-        { id: Date.now(), category, spec, qty },
+        { id: uniqueId(), category, spec, qty },
       ],
     }));
     setNewSpec("");
@@ -7260,7 +7273,7 @@ function JobInventory({
     onUpdateJob((prevJob) => ({
       ...prevJob,
       ...extra,
-      activityLog: [{ id: Date.now(), time: timeStamp(), message }, ...prevJob.activityLog].slice(
+      activityLog: [{ id: uniqueId(), time: timeStamp(), message }, ...prevJob.activityLog].slice(
         0,
         50
       ),
@@ -7274,7 +7287,7 @@ function JobInventory({
         ? prevJob.containerOptions
         : [...prevJob.containerOptions, name],
       activityLog: [
-        { id: Date.now(), time: timeStamp(), message: `Added container "${name}"` },
+        { id: uniqueId(), time: timeStamp(), message: `Added container "${name}"` },
         ...prevJob.activityLog,
       ].slice(0, 50),
     }));
@@ -7343,7 +7356,7 @@ function JobInventory({
       ],
       activityLog: [
         {
-          id: Date.now(),
+          id: uniqueId(),
           time: timeStamp(),
           message: `Synced gang/storage/category/transfer from catalog for ${preview.length} item${
             preview.length === 1 ? "" : "s"
@@ -7366,7 +7379,7 @@ function JobInventory({
       })),
       activityLog: [
         {
-          id: Date.now(),
+          id: uniqueId(),
           time: timeStamp(),
           message: `Renamed container "${oldName}" → "${newName}"`,
         },
@@ -7385,7 +7398,7 @@ function JobInventory({
       }),
       activityLog: [
         {
-          id: Date.now(),
+          id: uniqueId(),
           time: timeStamp(),
           message: `Removed container "${name}" (items unassigned, not deleted)`,
         },
@@ -7410,7 +7423,7 @@ function JobInventory({
       }),
       activityLog: [
         {
-          id: Date.now(),
+          id: uniqueId(),
           time: timeStamp(),
           message: `Pulled ${itemIds.length} item${
             itemIds.length === 1 ? "" : "s"
@@ -7488,7 +7501,7 @@ function JobInventory({
         items: prevJob.items.map((i) => (i.id === item.id ? item : i)),
         activityLog: [
           {
-            id: Date.now(),
+            id: uniqueId(),
             time: timeStamp(),
             message:
               changes.length > 0
@@ -7499,13 +7512,13 @@ function JobInventory({
         ].slice(0, 50),
       }));
     } else {
-      const newItem = { ...item, id: Date.now() };
+      const newItem = { ...item, id: uniqueId() };
       onUpdateJob((prevJob) => ({
         ...prevJob,
         items: [...prevJob.items, newItem],
         activityLog: [
           {
-            id: Date.now(),
+            id: uniqueId(),
             time: timeStamp(),
             message: `Added "${item.name}" (needed ${item.qtyNeeded}, ${item.gang})`,
           },
@@ -7521,7 +7534,7 @@ function JobInventory({
       ...prevJob,
       items: prevJob.items.filter((i) => i.id !== item.id),
       activityLog: [
-        { id: Date.now(), time: timeStamp(), message: `Deleted "${item.name}"` },
+        { id: uniqueId(), time: timeStamp(), message: `Deleted "${item.name}"` },
         ...prevJob.activityLog,
       ].slice(0, 50),
     }));
@@ -7548,7 +7561,7 @@ function JobInventory({
       items: prevJob.items.map((i) => (selectedItemIds.includes(i.id) ? updater(i) : i)),
       activityLog: [
         {
-          id: Date.now(),
+          id: uniqueId(),
           time: timeStamp(),
           message: `${label} for ${selectedItemIds.length} item${
             selectedItemIds.length === 1 ? "" : "s"
@@ -7581,7 +7594,7 @@ function JobInventory({
       ),
       activityLog: [
         {
-          id: Date.now(),
+          id: uniqueId(),
           time: timeStamp(),
           message: `Marked ${ids.length} item${ids.length === 1 ? "" : "s"} as transferred (${date})`,
         },
@@ -7663,7 +7676,7 @@ function JobInventory({
       ...prevJob,
       todos: [
         ...(prevJob.todos || []),
-        { id: Date.now(), text, done: false, itemId: null },
+        { id: uniqueId(), text, done: false, itemId: null },
       ],
     }));
   };
@@ -7675,14 +7688,14 @@ function JobInventory({
       const text = `${item.name} — ${item.qtyHave} out of ${item.qtyNeeded}${
         item.qtyUnit ? ` ${item.qtyUnit}` : ""
       }`;
-      return { id: Date.now() + idx, text, done: false, itemId: id };
+      return { id: uniqueId() + idx, text, done: false, itemId: id };
     });
     onUpdateJob((prevJob) => ({
       ...prevJob,
       todos: [...(prevJob.todos || []), ...newTodos],
       activityLog: [
         {
-          id: Date.now(),
+          id: uniqueId(),
           time: timeStamp(),
           message: `Added ${newTodos.length} item${
             newTodos.length === 1 ? "" : "s"
@@ -7726,7 +7739,7 @@ function JobInventory({
       items: prevJob.items.filter((i) => !selectedItemIds.includes(i.id)),
       activityLog: [
         {
-          id: Date.now(),
+          id: uniqueId(),
           time: timeStamp(),
           message: `Deleted ${selectedItemIds.length} item${
             selectedItemIds.length === 1 ? "" : "s"
@@ -7746,7 +7759,7 @@ function JobInventory({
       const containers = containerName ? [{ name: containerName, qty: qtyNum(p) }] : [];
       return {
         ...emptyItem(p.storage),
-        id: Date.now() + idx,
+        id: uniqueId() + idx,
         name: p.name,
         qtyNeeded: qtyNum(p),
         qtyUnit: p.qtyUnit || "",
@@ -7784,7 +7797,7 @@ function JobInventory({
       ],
       activityLog: [
         {
-          id: Date.now(),
+          id: uniqueId(),
           time: timeStamp(),
           message: `Imported ${newItems.length} item${
             newItems.length === 1 ? "" : "s"
@@ -9058,7 +9071,7 @@ async function fetchResolvedSuggestions() {
 async function uploadReferenceDocument(jobId, file) {
   try {
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const path = `${jobId}/${Date.now()}-${safeName}`;
+    const path = `${jobId}/${uniqueId()}-${safeName}`;
     const { error } = await supabase.storage.from("job-documents").upload(path, file);
     if (error) return { ok: false, error: error.message };
     const { data } = supabase.storage.from("job-documents").getPublicUrl(path);
@@ -10314,7 +10327,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
             : prevJob.containerOptions,
         activityLog: [
           {
-            id: Date.now(),
+            id: uniqueId(),
             time: timeStamp(),
             message: `Approved suggested change to "${s.payload.itemName}"${
               s.note ? ` — note: ${s.note}` : ""
@@ -10329,7 +10342,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         previous_state: previousState,
       });
     } else if (s.suggestion_type === "new_item") {
-      const newItemId = Date.now();
+      const newItemId = uniqueId();
       updateJobById(s.job_id, (prevJob) => {
         const containers = s.payload.container
           ? [{ name: s.payload.container, qty: s.payload.qtyNeeded }]
@@ -10351,7 +10364,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
             : prevJob.containerOptions,
           activityLog: [
             {
-              id: Date.now(),
+              id: uniqueId(),
               time: timeStamp(),
               message: `Approved suggested new item "${s.payload.name}"${
                 s.note ? ` — note: ${s.note}` : ""
@@ -10374,7 +10387,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         ),
         activityLog: [
           {
-            id: Date.now(),
+            id: uniqueId(),
             time: timeStamp(),
             message: `Approved To Do completion: "${s.payload.todoText}"`,
           },
@@ -10386,7 +10399,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         resolved_at: new Date().toISOString(),
       });
     } else if (s.suggestion_type === "add_todo") {
-      const newTodoId = Date.now();
+      const newTodoId = uniqueId();
       updateJobById(s.job_id, (prevJob) => ({
         ...prevJob,
         todos: [
@@ -10395,7 +10408,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         ],
         activityLog: [
           {
-            id: Date.now(),
+            id: uniqueId(),
             time: timeStamp(),
             message: `Approved suggested To Do: "${s.payload.text}"`,
           },
@@ -10435,7 +10448,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         ),
         activityLog: [
           {
-            id: Date.now(),
+            id: uniqueId(),
             time: timeStamp(),
             message: `Reverted approved change to "${s.payload.itemName}"`,
           },
@@ -10448,7 +10461,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         items: prevJob.items.filter((i) => String(i.id) !== String(s.created_item_id)),
         activityLog: [
           {
-            id: Date.now(),
+            id: uniqueId(),
             time: timeStamp(),
             message: `Reverted approved new item "${s.payload.name}"`,
           },
@@ -10463,7 +10476,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         ),
         activityLog: [
           {
-            id: Date.now(),
+            id: uniqueId(),
             time: timeStamp(),
             message: `Reverted To Do completion: "${s.payload.todoText}"`,
           },
@@ -10478,7 +10491,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
         ),
         activityLog: [
           {
-            id: Date.now(),
+            id: uniqueId(),
             time: timeStamp(),
             message: `Reverted approved To Do: "${s.payload.text}"`,
           },
@@ -10569,7 +10582,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
               color: newColor,
               activityLog: [
                 {
-                  id: Date.now(),
+                  id: uniqueId(),
                   time: timeStamp(),
                   message: `Job renamed to "${newName}"`,
                 },
@@ -10632,7 +10645,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
     if (!text.trim()) return;
     playSaveChime();
     updateGeneralTodos((prev) => [
-      { id: Date.now(), text: text.trim(), done: false },
+      { id: uniqueId(), text: text.trim(), done: false },
       ...prev,
     ]);
   };
