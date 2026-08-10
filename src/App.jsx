@@ -1495,6 +1495,8 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
   const [copyFailed, setCopyFailed] = useState(false);
   const [choosingMode, setChoosingMode] = useState(false);
   const [partialSelect, setPartialSelect] = useState(null); // Set of item ids, or null when not in partial mode
+  const [justTransferred, setJustTransferred] = useState(null); // items from the batch just locked, for the copy screen
+  const [justCopied, setJustCopied] = useState(false);
   const [confirmFull, setConfirmFull] = useState(false);
 
   // Pinned items (set from the catalog screen) always sort to the top,
@@ -1590,14 +1592,82 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
   };
 
   const confirmPartialTransfer = () => {
+    const selectedItems = activeItems.filter((i) => partialSelect.has(i.id));
     onLockItems([...partialSelect]);
     setPartialSelect(null);
+    setJustTransferred(selectedItems);
   };
 
   const confirmFullTransfer = () => {
+    const selectedItems = activeItems;
     onLockItems(activeItems.map((i) => i.id));
     setConfirmFull(false);
+    setJustTransferred(selectedItems);
   };
+
+  // Shown right after confirming either kind of transfer — a focused,
+  // copy-ready list of exactly what just moved, for printing/pasting
+  // somewhere without needing to re-open the full transfer list.
+  if (justTransferred) {
+    const text = justTransferred.map(lineFor).join("\n");
+    const copyJustTransferred = async () => {
+      const ok = await copyToClipboard(`Transferred — ${jobName}\n\n${text}`);
+      if (ok) {
+        setJustCopied(true);
+        setTimeout(() => setJustCopied(false), 1500);
+      }
+    };
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+        <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col">
+          <div className="flex items-center gap-2 px-5 py-4 border-b border-slate-800 shrink-0">
+            <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+            <div>
+              <h2 className="text-slate-100 font-semibold text-base">Marked as transferred</h2>
+              <p className="text-xs text-slate-500">
+                {justTransferred.length} item{justTransferred.length === 1 ? "" : "s"} — copy the
+                list below to print or paste it
+              </p>
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden">
+              {justTransferred.map((item) => (
+                <div key={item.id} className="px-3 py-2 bg-slate-800/40">
+                  <p className="text-sm text-slate-100">
+                    {item.name}{" "}
+                    {!(item.serials && item.serials.length > 0) && (
+                      <span className="text-slate-500">x{item.qtyHave}</span>
+                    )}
+                  </p>
+                  {item.serials && item.serials.length > 0 && (
+                    <p className="text-xs text-fuchsia-300 font-mono break-words mt-0.5">
+                      {item.serials.join(", ")}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="px-5 py-4 border-t border-slate-800 shrink-0 space-y-2">
+            <button
+              onClick={copyJustTransferred}
+              className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+            >
+              <Copy className="w-3.5 h-3.5" />
+              {justCopied ? "Copied!" : "Copy this list"}
+            </button>
+            <button
+              onClick={() => setJustTransferred(null)}
+              className="w-full text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Partial-selection screen replaces the normal view while active.
   if (partialSelect) {
@@ -1728,29 +1798,6 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
             <>
               {activeItems.length > 0 && (
                 <div className="mb-4">
-                  <p className="text-xs font-medium text-slate-500 mb-2">Ready to transfer</p>
-                  <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden">
-                    {activeItems.map((item) => (
-                      <div key={item.id} className="px-3 py-2 bg-slate-800/40">
-                        <p className="text-sm text-slate-100">
-                          {item.name}{" "}
-                          {!(item.serials && item.serials.length > 0) && (
-                            <span className="text-slate-500">x{item.qtyHave}</span>
-                          )}
-                        </p>
-                        {item.serials && item.serials.length > 0 && (
-                          <p className="text-xs text-fuchsia-300 font-mono break-words mt-0.5">
-                            {item.serials.join(", ")}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {activeItems.length > 0 && (
-                <div className="mb-4">
                   {choosingMode ? (
                     <div className="border border-amber-500/40 bg-amber-500/5 rounded-lg p-3 space-y-2">
                       <p className="text-xs text-slate-300 mb-1">What's transferring?</p>
@@ -1763,7 +1810,7 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
                       >
                         <p className="text-sm font-medium text-slate-100">Full transfer</p>
                         <p className="text-xs text-slate-500">
-                          All {activeItems.length} item{activeItems.length === 1 ? "" : "s"} above
+                          All {activeItems.length} item{activeItems.length === 1 ? "" : "s"} below
                         </p>
                       </button>
                       <button
@@ -1792,6 +1839,29 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
                       Start transfer
                     </button>
                   )}
+                </div>
+              )}
+
+              {activeItems.length > 0 && (
+                <div className="mb-4">
+                  <p className="text-xs font-medium text-slate-500 mb-2">Ready to transfer</p>
+                  <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden">
+                    {activeItems.map((item) => (
+                      <div key={item.id} className="px-3 py-2 bg-slate-800/40">
+                        <p className="text-sm text-slate-100">
+                          {item.name}{" "}
+                          {!(item.serials && item.serials.length > 0) && (
+                            <span className="text-slate-500">x{item.qtyHave}</span>
+                          )}
+                        </p>
+                        {item.serials && item.serials.length > 0 && (
+                          <p className="text-xs text-fuchsia-300 font-mono break-words mt-0.5">
+                            {item.serials.join(", ")}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 
