@@ -1606,8 +1606,12 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
     )
     .join("\n\n");
 
+  // Only items with an SME# tracked make it into the copied/printed
+  // record — bulk untracked items don't need a paper trail the same way.
+  const smeTransferItems = transferItems.filter((i) => i.serials && i.serials.length > 0);
+
   const asText = [
-    transferItems.map(lineFor).join("\n"),
+    smeTransferItems.map(lineFor).join("\n"),
     requisitions.length > 0 ? `\nRequisitions:\n${reqCategoriesText}` : "",
   ]
     .filter(Boolean)
@@ -1686,7 +1690,8 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
   // copy-ready list of exactly what just moved, for printing/pasting
   // somewhere without needing to re-open the full transfer list.
   if (justTransferred) {
-    const text = justTransferred.map(lineFor).join("\n");
+    const smeJustTransferred = justTransferred.filter((i) => i.serials && i.serials.length > 0);
+    const text = smeJustTransferred.map(lineFor).join("\n");
     const copyJustTransferred = async () => {
       const ok = await copyToClipboard(`Transferred — ${jobName}\n\n${text}`);
       if (ok) {
@@ -1727,13 +1732,15 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
             </div>
           </div>
           <div className="px-5 py-4 border-t border-slate-800 shrink-0 space-y-2">
-            <button
-              onClick={copyJustTransferred}
-              className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
-            >
-              <Copy className="w-3.5 h-3.5" />
-              {justCopied ? "Copied!" : "Copy this list"}
-            </button>
+            {smeJustTransferred.length > 0 && (
+              <button
+                onClick={copyJustTransferred}
+                className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                {justCopied ? "Copied!" : "Copy this list"}
+              </button>
+            )}
             <button
               onClick={() => setJustTransferred(null)}
               className="w-full text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
