@@ -1572,8 +1572,23 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
   const unassignedActiveItems = activeItems.filter((i) =>
     remainingPortions(i).includes(NO_CONTAINER)
   );
-  const itemsInContainer = (name) =>
-    activeItems.filter((i) => remainingPortions(i).includes(name));
+  const itemsInContainer = (name) => {
+    const flagged = activeItems.filter((i) => remainingPortions(i).includes(name));
+    const flaggedIds = new Set(flagged.map((i) => i.id));
+    // Bulk/generic items with no SME# tracked sweep in automatically when
+    // the whole container they're sitting in gets selected — even if they
+    // were never individually flagged "needs transfer". If the container's
+    // going, untracked items in it should go with it without needing to be
+    // flagged one by one first.
+    const swept = items.filter(
+      (i) =>
+        !flaggedIds.has(i.id) &&
+        (!i.serials || i.serials.length === 0) &&
+        (i.containers || []).some((c) => c.name === name) &&
+        !isPortionTransferred(i, name)
+    );
+    return [...flagged, ...swept];
+  };
 
   const lineFor = (item) =>
     item.serials && item.serials.length > 0
@@ -1632,7 +1647,7 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
   const confirmPartialTransfer = () => {
     const pairs = [...partialSelect].map(parsePortionKey);
     const selectedItemIds = [...new Set(pairs.map((p) => p.itemId))];
-    const selectedItems = activeItems.filter((i) => selectedItemIds.includes(i.id));
+    const selectedItems = items.filter((i) => selectedItemIds.includes(i.id));
     onLockItems(pairs, transferDate);
     setPartialSelect(null);
     setJustTransferred(selectedItems);
