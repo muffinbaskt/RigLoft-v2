@@ -1572,23 +1572,22 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
   const unassignedActiveItems = activeItems.filter((i) =>
     remainingPortions(i).includes(NO_CONTAINER)
   );
-  const itemsInContainer = (name) => {
-    const flagged = activeItems.filter((i) => remainingPortions(i).includes(name));
-    const flaggedIds = new Set(flagged.map((i) => i.id));
-    // Bulk/generic items with no SME# tracked sweep in automatically when
-    // the whole container they're sitting in gets selected — even if they
-    // were never individually flagged "needs transfer". If the container's
-    // going, untracked items in it should go with it without needing to be
-    // flagged one by one first.
-    const swept = items.filter(
+  // What actually shows on the selection screen — SME-tracked items only.
+  const itemsInContainer = (name) =>
+    activeItems.filter((i) => remainingPortions(i).includes(name));
+
+  // Not shown individually, but swept in silently at confirm time whenever
+  // the whole container gets checked off — untracked bulk items in the
+  // same container should go with it without cluttering the selection
+  // list one by one.
+  const nonSmeItemsInContainer = (name) =>
+    items.filter(
       (i) =>
-        !flaggedIds.has(i.id) &&
         (!i.serials || i.serials.length === 0) &&
         (i.containers || []).some((c) => c.name === name) &&
         !isPortionTransferred(i, name)
     );
-    return [...flagged, ...swept];
-  };
+
 
   const lineFor = (item) =>
     item.serials && item.serials.length > 0
@@ -1646,19 +1645,39 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
 
   const confirmPartialTransfer = () => {
     const pairs = [...partialSelect].map(parsePortionKey);
-    const selectedItemIds = [...new Set(pairs.map((p) => p.itemId))];
+
+    // Any container where every SME-tracked item shown got checked counts
+    // as "the whole container" — sweep its untracked items in too, silently.
+    const fullySelectedContainers = containerGroups.filter((name) => {
+      const smeItems = itemsInContainer(name);
+      return smeItems.length > 0 && smeItems.every((i) => partialSelect.has(portionKey(i.id, name)));
+    });
+    const sweptPairs = fullySelectedContainers.flatMap((name) =>
+      nonSmeItemsInContainer(name).map((i) => ({ itemId: i.id, containerName: name }))
+    );
+
+    const allPairs = [...pairs, ...sweptPairs];
+    const selectedItemIds = [...new Set(allPairs.map((p) => p.itemId))];
     const selectedItems = items.filter((i) => selectedItemIds.includes(i.id));
-    onLockItems(pairs, transferDate);
+    onLockItems(allPairs, transferDate);
     setPartialSelect(null);
     setJustTransferred(selectedItems);
   };
 
   const confirmFullTransfer = () => {
-    const selectedItems = activeItems;
     const pairs = activeItems.flatMap((i) =>
       remainingPortions(i).map((containerName) => ({ itemId: i.id, containerName }))
     );
-    onLockItems(pairs, transferDate);
+    const touchedContainers = [...new Set(pairs.map((p) => p.containerName))].filter(
+      (n) => n !== NO_CONTAINER
+    );
+    const sweptPairs = touchedContainers.flatMap((name) =>
+      nonSmeItemsInContainer(name).map((i) => ({ itemId: i.id, containerName: name }))
+    );
+    const allPairs = [...pairs, ...sweptPairs];
+    const selectedItemIds = [...new Set(allPairs.map((p) => p.itemId))];
+    const selectedItems = items.filter((i) => selectedItemIds.includes(i.id));
+    onLockItems(allPairs, transferDate);
     setConfirmFull(false);
     setJustTransferred(selectedItems);
   };
