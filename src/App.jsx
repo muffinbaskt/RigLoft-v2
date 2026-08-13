@@ -11881,6 +11881,8 @@ function LoveListScanModal({ catalog, onSave, onCancel }) {
   const [dateReceived, setDateReceived] = useState(todayStr);
   const [scanError, setScanError] = useState("");
   const [reviewItems, setReviewItems] = useState([]);
+  const [relinkingReviewItem, setRelinkingReviewItem] = useState(null);
+  const [catalogSearch, setCatalogSearch] = useState("");
   const fileInputRef = useRef(null);
 
   const runScan = async (file) => {
@@ -12083,11 +12085,19 @@ function LoveListScanModal({ catalog, onSave, onCancel }) {
                       </button>
                     </div>
                     {item.catalogId ? (
-                      <p className="text-xs text-emerald-400">
-                        🔗 {catalog.find((c) => c.id === item.catalogId)?.name}
-                      </p>
+                      <button
+                        onClick={() => setRelinkingReviewItem(item)}
+                        className="text-xs text-emerald-400 hover:underline decoration-dotted"
+                      >
+                        🔗 {catalog.find((c) => c.id === item.catalogId)?.name} · Change
+                      </button>
                     ) : (
-                      <p className="text-xs text-slate-600">No catalog match — link it after saving</p>
+                      <button
+                        onClick={() => setRelinkingReviewItem(item)}
+                        className="text-xs text-slate-500 hover:text-slate-300 hover:underline decoration-dotted"
+                      >
+                        No catalog match — 🔍 search manually
+                      </button>
                     )}
                   </div>
                 ))}
@@ -12110,6 +12120,78 @@ function LoveListScanModal({ catalog, onSave, onCancel }) {
           </>
         )}
       </div>
+
+      {relinkingReviewItem && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4 py-8">
+          <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold text-sm truncate">
+                Link "{relinkingReviewItem.name}" to...
+              </h3>
+              <button
+                onClick={() => {
+                  setRelinkingReviewItem(null);
+                  setCatalogSearch("");
+                }}
+                className="text-slate-400 hover:text-slate-200 shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-5 pt-4 shrink-0">
+              <input
+                autoFocus
+                value={catalogSearch}
+                onChange={(e) => setCatalogSearch(e.target.value)}
+                placeholder="Search catalog..."
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+              />
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {relinkingReviewItem.catalogId && (
+                <button
+                  onClick={() => {
+                    updateReviewItem(relinkingReviewItem.id, {
+                      catalogId: null,
+                      needsTransfer: false,
+                    });
+                    setRelinkingReviewItem(null);
+                    setCatalogSearch("");
+                  }}
+                  className="w-full text-left text-sm rounded-md px-3 py-2 border border-red-800/40 text-red-400 hover:bg-red-500/10 mb-2"
+                >
+                  Unlink from catalog
+                </button>
+              )}
+              {catalog
+                .filter((c) => c.name.toLowerCase().includes(catalogSearch.trim().toLowerCase()))
+                .slice(0, 50)
+                .map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => {
+                      updateReviewItem(relinkingReviewItem.id, {
+                        catalogId: c.id,
+                        storage: c.storage,
+                        storageDetail: c.storage === "Other" ? c.storageDetail || "" : "",
+                        needsTransfer: !!c.needsTransfer,
+                      });
+                      setRelinkingReviewItem(null);
+                      setCatalogSearch("");
+                    }}
+                    className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-800 hover:border-slate-700 mb-1.5"
+                  >
+                    <p className="text-slate-100">{c.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {c.storage}
+                      {c.needsTransfer ? " · 🚚 needs transfer" : ""}
+                    </p>
+                  </button>
+                ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -12246,6 +12328,8 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
   const [editingSmeFor, setEditingSmeFor] = useState(null); // item, while editing its SME#s
   const [relinkingItem, setRelinkingItem] = useState(null); // item, while relinking its catalog match
+  const [renamingItem, setRenamingItem] = useState(null); // item, while renaming it
+  const [renameDraft, setRenameDraft] = useState("");
   const [catalogSearch, setCatalogSearch] = useState("");
   const [smeDraft, setSmeDraft] = useState("");
   const [showArchived, setShowArchived] = useState(false);
@@ -12285,6 +12369,18 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
       ),
     });
     setEditingSmeFor(null);
+  };
+
+  const saveRename = () => {
+    if (!renamingItem || !renameDraft.trim()) return;
+    playSaveChime();
+    onUpdateList({
+      ...list,
+      items: list.items.map((i) =>
+        i.id === renamingItem.id ? { ...i, name: renameDraft.trim() } : i
+      ),
+    });
+    setRenamingItem(null);
   };
 
   const relinkCatalog = (catalogItem) => {
@@ -12433,9 +12529,27 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
               <div key={item.id} className="border border-slate-800 rounded-lg p-3 bg-slate-900">
                 <div className="flex items-center justify-between gap-2 mb-2">
                   <div className="min-w-0">
-                    <p className="text-sm text-slate-100 truncate">
-                      {item.name} <span className="text-slate-500">x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}</span>
-                    </p>
+                    {isEditor ? (
+                      <button
+                        onClick={() => {
+                          setRenamingItem(item);
+                          setRenameDraft(item.name);
+                        }}
+                        className="text-sm text-slate-100 truncate text-left hover:underline decoration-dotted"
+                      >
+                        {item.name}{" "}
+                        <span className="text-slate-500">
+                          x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
+                        </span>
+                      </button>
+                    ) : (
+                      <p className="text-sm text-slate-100 truncate">
+                        {item.name}{" "}
+                        <span className="text-slate-500">
+                          x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
+                        </span>
+                      </p>
+                    )}
                     {subline && <p className="text-xs text-slate-500 truncate">{subline}</p>}
                   </div>
                   {isEditor && (
@@ -12615,6 +12729,36 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
           onConfirm={() => onDeleteList(list.id)}
           onCancel={() => setDeleteListConfirm(false)}
         />
+      )}
+
+      {renamingItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-3">Rename item</h3>
+            <input
+              autoFocus
+              value={renameDraft}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && saveRename()}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => setRenamingItem(null)}
+                className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveRename}
+                disabled={!renameDraft.trim()}
+                className="flex-1 text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400 disabled:opacity-40"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {editingSmeFor && (
