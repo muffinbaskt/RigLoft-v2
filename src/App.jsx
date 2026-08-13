@@ -11476,7 +11476,7 @@ const prevLoveStatus = (status) => {
 };
 const loveStatusMeta = (key) => LOVE_STATUSES.find((s) => s.key === key) || LOVE_STATUSES[0];
 
-function newLoveListItem(name, qty) {
+function newLoveListItem(name, qty, extra = {}) {
   const today = new Date().toISOString().slice(0, 10);
   return {
     id: uniqueId(),
@@ -11485,27 +11485,125 @@ function newLoveListItem(name, qty) {
     status: "requested",
     statusDates: { requested: today, ordered: null, received: null, sent: null },
     notes: "",
+    catalogId: extra.catalogId || null,
+    storage: extra.storage || "",
+    storageDetail: extra.storageDetail || "",
+    serials: extra.serials || [],
   };
 }
 
-function LoveListAddForm({ onSave, onCancel }) {
+function LoveListItemEntry({ catalog, onAdd }) {
+  const [name, setName] = useState("");
+  const [qty, setQty] = useState("");
+  const [storage, setStorage] = useState("");
+  const [storageDetail, setStorageDetail] = useState("");
+  const [smeText, setSmeText] = useState("");
+  const [manualCatalogId, setManualCatalogId] = useState(null);
+  const [storageTouched, setStorageTouched] = useState(false);
+
+  const autoMatch = name.trim() ? findCatalogMatch(name.trim(), catalog) : null;
+  const linkedCatalogItem = manualCatalogId
+    ? catalog.find((c) => c.id === manualCatalogId) || null
+    : autoMatch;
+
+  // Auto-fill storage from the catalog link, but only while the user
+  // hasn't manually touched the storage field themselves.
+  useEffect(() => {
+    if (linkedCatalogItem && !storageTouched) {
+      setStorage(linkedCatalogItem.storage || "");
+      setStorageDetail(linkedCatalogItem.storageDetail || "");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedCatalogItem?.id]);
+
+  const reset = () => {
+    setName("");
+    setQty("");
+    setStorage("");
+    setStorageDetail("");
+    setSmeText("");
+    setManualCatalogId(null);
+    setStorageTouched(false);
+  };
+
+  const handleAdd = () => {
+    if (!name.trim()) return;
+    onAdd(
+      newLoveListItem(name.trim(), qty.trim() === "" ? 1 : Number(qty) || 1, {
+        catalogId: linkedCatalogItem ? linkedCatalogItem.id : null,
+        storage,
+        storageDetail,
+        serials: parseSerials(smeText),
+      })
+    );
+    reset();
+  };
+
+  return (
+    <div className="border border-slate-800 rounded-lg p-3 bg-slate-900/60 space-y-2">
+      <div className="grid grid-cols-3 gap-2">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Item name"
+          className="col-span-2 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+        />
+        <input
+          type="number"
+          min="1"
+          value={qty}
+          onChange={(e) => setQty(e.target.value)}
+          placeholder="Qty"
+          className="bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+        />
+      </div>
+      {linkedCatalogItem && (
+        <p className="text-xs text-emerald-400 flex items-center gap-1">
+          🔗 Linked to catalog: {linkedCatalogItem.name}
+        </p>
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        <Select
+          value={storage}
+          onChange={(v) => {
+            setStorage(v);
+            setStorageTouched(true);
+          }}
+          options={["", ...STORAGE_OPTIONS]}
+          labels={{ "": "Storage (optional)" }}
+        />
+        {storage === "Other" && (
+          <input
+            value={storageDetail}
+            onChange={(e) => setStorageDetail(e.target.value)}
+            placeholder="Specify location..."
+            className="bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+          />
+        )}
+      </div>
+      <input
+        value={smeText}
+        onChange={(e) => setSmeText(e.target.value)}
+        placeholder="SME # (optional)"
+        className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+      />
+      <button
+        onClick={handleAdd}
+        disabled={!name.trim()}
+        className="w-full text-sm rounded-md py-2 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400 disabled:opacity-40"
+      >
+        + Add item
+      </button>
+    </div>
+  );
+}
+
+function LoveListAddForm({ catalog, onSave, onCancel }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const [jobLabel, setJobLabel] = useState("");
   const [submittedBy, setSubmittedBy] = useState("");
   const [dateReceived, setDateReceived] = useState(todayStr);
-  const [itemName, setItemName] = useState("");
-  const [itemQty, setItemQty] = useState("");
   const [items, setItems] = useState([]);
-
-  const addItem = () => {
-    if (!itemName.trim()) return;
-    setItems((prev) => [
-      ...prev,
-      newLoveListItem(itemName.trim(), itemQty.trim() === "" ? 1 : Number(itemQty) || 1),
-    ]);
-    setItemName("");
-    setItemQty("");
-  };
 
   const canSave = jobLabel.trim() && items.length > 0;
 
@@ -11569,31 +11667,12 @@ function LoveListAddForm({ onSave, onCancel }) {
           </div>
 
           <label className="block text-xs font-medium text-slate-400 mb-1.5">Items</label>
-          <div className="grid grid-cols-3 gap-2 mb-2">
-            <input
-              value={itemName}
-              onChange={(e) => setItemName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && addItem()}
-              placeholder="Item name"
-              className="col-span-2 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
-            />
-            <input
-              type="number"
-              min="1"
-              value={itemQty}
-              onChange={(e) => setItemQty(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && addItem()}
-              placeholder="Qty"
-              className="bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+          <div className="mb-3">
+            <LoveListItemEntry
+              catalog={catalog}
+              onAdd={(item) => setItems((prev) => [...prev, item])}
             />
           </div>
-          <button
-            onClick={addItem}
-            disabled={!itemName.trim()}
-            className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-200 hover:bg-slate-800 disabled:opacity-40 mb-3"
-          >
-            + Add item
-          </button>
 
           {items.length > 0 && (
             <div className="space-y-1.5">
@@ -11602,12 +11681,23 @@ function LoveListAddForm({ onSave, onCancel }) {
                   key={it.id}
                   className="flex items-center justify-between gap-2 bg-slate-800/40 border border-slate-800 rounded-md px-3 py-2"
                 >
-                  <p className="text-sm text-slate-100">
-                    {it.name} <span className="text-slate-500">x{it.qty}</span>
-                  </p>
+                  <div className="min-w-0">
+                    <p className="text-sm text-slate-100">
+                      {it.name} <span className="text-slate-500">x{it.qty}</span>
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {[
+                        it.catalogId && "🔗 linked",
+                        it.storage,
+                        it.serials.length > 0 && `SME# ${it.serials.join(", ")}`,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </p>
+                  </div>
                   <button
                     onClick={() => setItems((prev) => prev.filter((i) => i.id !== it.id))}
-                    className="text-slate-600 hover:text-red-400"
+                    className="text-slate-600 hover:text-red-400 shrink-0"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -11630,14 +11720,13 @@ function LoveListAddForm({ onSave, onCancel }) {
   );
 }
 
-function LoveListDetailPage({ list, onUpdateList, onDeleteList, onBack, onGoHome }) {
+function LoveListDetailPage({ list, catalog, isEditor, onUpdateList, onDeleteList, onBack, onGoHome }) {
   const [addingItem, setAddingItem] = useState(false);
-  const [itemName, setItemName] = useState("");
-  const [itemQty, setItemQty] = useState("");
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
 
   const advanceStatus = (itemId, direction) => {
+    if (!isEditor) return;
     playSoftTap();
     onUpdateList({
       ...list,
@@ -11658,18 +11747,9 @@ function LoveListDetailPage({ list, onUpdateList, onDeleteList, onBack, onGoHome
     });
   };
 
-  const addItem = () => {
-    if (!itemName.trim()) return;
+  const addItem = (item) => {
     playSaveChime();
-    onUpdateList({
-      ...list,
-      items: [
-        ...list.items,
-        newLoveListItem(itemName.trim(), itemQty.trim() === "" ? 1 : Number(itemQty) || 1),
-      ],
-    });
-    setItemName("");
-    setItemQty("");
+    onUpdateList({ ...list, items: [...list.items, item] });
     setAddingItem(false);
   };
 
@@ -11705,12 +11785,14 @@ function LoveListDetailPage({ list, onUpdateList, onDeleteList, onBack, onGoHome
               </p>
             </div>
           </div>
-          <button
-            onClick={() => setDeleteListConfirm(true)}
-            className="text-slate-500 hover:text-red-400 p-2 shrink-0"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+          {isEditor && (
+            <button
+              onClick={() => setDeleteListConfirm(true)}
+              className="text-slate-500 hover:text-red-400 p-2 shrink-0"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </header>
 
@@ -11729,23 +11811,35 @@ function LoveListDetailPage({ list, onUpdateList, onDeleteList, onBack, onGoHome
         <div className="space-y-2 mb-4">
           {list.items.map((item) => {
             const meta = loveStatusMeta(item.status);
+            const subline = [
+              item.catalogId && "🔗 linked",
+              item.storage === "Other" && item.storageDetail ? item.storageDetail : item.storage,
+              item.serials && item.serials.length > 0 && `SME# ${item.serials.join(", ")}`,
+            ]
+              .filter(Boolean)
+              .join(" · ");
             return (
               <div key={item.id} className="border border-slate-800 rounded-lg p-3 bg-slate-900">
                 <div className="flex items-center justify-between gap-2 mb-2">
-                  <p className="text-sm text-slate-100 min-w-0 truncate">
-                    {item.name} <span className="text-slate-500">x{item.qty}</span>
-                  </p>
-                  <button
-                    onClick={() => setDeleteItemTarget(item)}
-                    className="text-slate-600 hover:text-red-400 shrink-0"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
+                  <div className="min-w-0">
+                    <p className="text-sm text-slate-100 truncate">
+                      {item.name} <span className="text-slate-500">x{item.qty}</span>
+                    </p>
+                    {subline && <p className="text-xs text-slate-500 truncate">{subline}</p>}
+                  </div>
+                  {isEditor && (
+                    <button
+                      onClick={() => setDeleteItemTarget(item)}
+                      className="text-slate-600 hover:text-red-400 shrink-0"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => advanceStatus(item.id, "back")}
-                    disabled={!prevLoveStatus(item.status)}
+                    disabled={!isEditor || !prevLoveStatus(item.status)}
                     className="text-slate-500 hover:text-slate-300 disabled:opacity-20 disabled:hover:text-slate-500 p-1"
                   >
                     <ChevronLeft className="w-4 h-4" />
@@ -11756,7 +11850,7 @@ function LoveListDetailPage({ list, onUpdateList, onDeleteList, onBack, onGoHome
                   </span>
                   <button
                     onClick={() => advanceStatus(item.id, "forward")}
-                    disabled={!nextLoveStatus(item.status)}
+                    disabled={!isEditor || !nextLoveStatus(item.status)}
                     className="text-slate-500 hover:text-slate-300 disabled:opacity-20 disabled:hover:text-slate-500 p-1"
                   >
                     <ChevronRight className="w-4 h-4" />
@@ -11767,52 +11861,32 @@ function LoveListDetailPage({ list, onUpdateList, onDeleteList, onBack, onGoHome
           })}
         </div>
 
-        {addingItem ? (
-          <div className="border border-slate-800 rounded-lg p-3 bg-slate-900">
-            <div className="grid grid-cols-3 gap-2 mb-2">
-              <input
-                autoFocus
-                value={itemName}
-                onChange={(e) => setItemName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && addItem()}
-                placeholder="Item name"
-                className="col-span-2 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
-              />
-              <input
-                type="number"
-                min="1"
-                value={itemQty}
-                onChange={(e) => setItemQty(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && addItem()}
-                placeholder="Qty"
-                className="bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
-              />
-            </div>
-            <div className="flex gap-2">
+        {!isEditor && (
+          <p className="text-xs text-slate-600 text-center mb-2">
+            View only — sign in to make changes.
+          </p>
+        )}
+
+        {isEditor &&
+          (addingItem ? (
+            <div>
+              <LoveListItemEntry catalog={catalog} onAdd={addItem} />
               <button
                 onClick={() => setAddingItem(false)}
-                className="flex-1 text-sm rounded-md py-2 border border-slate-700 text-slate-300"
+                className="w-full text-xs text-slate-500 hover:text-slate-300 mt-2"
               >
-                Cancel
-              </button>
-              <button
-                onClick={addItem}
-                disabled={!itemName.trim()}
-                className="flex-1 text-sm rounded-md py-2 bg-rose-500 text-slate-950 font-semibold disabled:opacity-40"
-              >
-                Add
+                Done adding items
               </button>
             </div>
-          </div>
-        ) : (
-          <button
-            onClick={() => setAddingItem(true)}
-            className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 border border-slate-700 text-slate-200 hover:bg-slate-800"
-          >
-            <Plus className="w-4 h-4" />
-            Add item
-          </button>
-        )}
+          ) : (
+            <button
+              onClick={() => setAddingItem(true)}
+              className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 border border-slate-700 text-slate-200 hover:bg-slate-800"
+            >
+              <Plus className="w-4 h-4" />
+              Add item
+            </button>
+          ))}
       </main>
 
       {deleteItemTarget && (
@@ -11835,7 +11909,7 @@ function LoveListDetailPage({ list, onUpdateList, onDeleteList, onBack, onGoHome
   );
 }
 
-function LoveListsDashboard({ lists, onOpenList, onAddList, onGoHome }) {
+function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onGoHome }) {
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("active"); // "active" | "ready"
 
@@ -11870,15 +11944,22 @@ function LoveListsDashboard({ lists, onOpenList, onAddList, onGoHome }) {
             <p className="font-semibold text-slate-100 flex items-center gap-1.5">
               <Heart className="w-4 h-4 text-rose-400" />
               Love Lists
+              {!isEditor && (
+                <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-400 rounded-full px-2 py-0.5">
+                  View only
+                </span>
+              )}
             </p>
           </div>
-          <button
-            onClick={onAddList}
-            className="flex items-center gap-1.5 bg-rose-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-rose-400"
-          >
-            <Plus className="w-4 h-4" />
-            New list
-          </button>
+          {isEditor && (
+            <button
+              onClick={onAddList}
+              className="flex items-center gap-1.5 bg-rose-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-rose-400"
+            >
+              <Plus className="w-4 h-4" />
+              New list
+            </button>
+          )}
         </div>
         <div className="max-w-2xl mx-auto px-4 pb-3">
           <div className="relative">
@@ -11963,7 +12044,9 @@ function LoveListsDashboard({ lists, onOpenList, onAddList, onGoHome }) {
             {tab === "active" ? (
               jobGroups.length === 0 ? (
                 <p className="text-sm text-slate-500 text-center py-10">
-                  No Love Lists yet — tap "New list" to log one in.
+                  {isEditor
+                    ? 'No Love Lists yet — tap "New list" to log one in.'
+                    : "No Love Lists yet."}
                 </p>
               ) : (
                 <div className="space-y-5">
@@ -12049,8 +12132,9 @@ function LoveListsDashboard({ lists, onOpenList, onAddList, onGoHome }) {
 
 const LOVE_LISTS_KEY = "warehub-love-lists";
 
-function LoveListsApp({ onGoHome }) {
+function LoveListsApp({ isEditor, onGoHome }) {
   const [lists, setLists] = useState([]);
+  const [catalog, setCatalog] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeListId, setActiveListId] = useState(null);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -12063,11 +12147,18 @@ function LoveListsApp({ onGoHome }) {
       } catch {
         // corrupted stored data — start empty
       }
+      try {
+        const catalogResult = await getWithRetry(CATALOG_KEY);
+        if (catalogResult.ok && catalogResult.value) setCatalog(JSON.parse(catalogResult.value));
+      } catch {
+        // catalog linking just won't be available this session
+      }
       setLoading(false);
     })();
   }, []);
 
   const updateLists = (updater) => {
+    if (!isEditor) return;
     setLists((prev) => {
       const next = updater(prev);
       saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(next)).catch(() => {});
@@ -12078,6 +12169,7 @@ function LoveListsApp({ onGoHome }) {
   const activeList = lists.find((l) => l.id === activeListId) || null;
 
   const handleSaveNewList = ({ jobLabel, submittedBy, dateReceived, items }) => {
+    if (!isEditor) return;
     const list = {
       id: uniqueId(),
       jobLabel,
@@ -12092,10 +12184,12 @@ function LoveListsApp({ onGoHome }) {
   };
 
   const handleUpdateList = (updated) => {
+    if (!isEditor) return;
     updateLists((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
   };
 
   const handleDeleteList = (id) => {
+    if (!isEditor) return;
     updateLists((prev) => prev.filter((l) => l.id !== id));
     setActiveListId(null);
   };
@@ -12112,6 +12206,8 @@ function LoveListsApp({ onGoHome }) {
     return (
       <LoveListDetailPage
         list={activeList}
+        catalog={catalog}
+        isEditor={isEditor}
         onUpdateList={handleUpdateList}
         onDeleteList={handleDeleteList}
         onBack={() => setActiveListId(null)}
@@ -12124,12 +12220,13 @@ function LoveListsApp({ onGoHome }) {
     <>
       <LoveListsDashboard
         lists={lists}
+        isEditor={isEditor}
         onOpenList={(l) => setActiveListId(l.id)}
         onAddList={() => setShowAddForm(true)}
         onGoHome={onGoHome}
       />
-      {showAddForm && (
-        <LoveListAddForm onSave={handleSaveNewList} onCancel={() => setShowAddForm(false)} />
+      {showAddForm && isEditor && (
+        <LoveListAddForm catalog={catalog} onSave={handleSaveNewList} onCancel={() => setShowAddForm(false)} />
       )}
     </>
   );
@@ -12242,7 +12339,7 @@ export default function AuthGate() {
           onSelectJobs={() => setAppSection("jobs")}
         />
       ) : appSection === "love" ? (
-        <LoveListsApp onGoHome={() => setAppSection(null)} />
+        <LoveListsApp isEditor={!!session} onGoHome={() => setAppSection(null)} />
       ) : (
         <WareHub
           isEditor={!!session}
