@@ -10487,6 +10487,10 @@ function WareHub({ isEditor, onSignOut, onRequestLogin, onGoToLanding, initialAc
   useEffect(() => {
     if (loading || !initialAction || initialActionDone.current) return;
     initialActionDone.current = true;
+    if (initialAction === "checkUpdate") {
+      checkForUpdateNow();
+      return;
+    }
     if (!isEditor) return;
     switch (initialAction) {
       case "suggestions":
@@ -11559,9 +11563,13 @@ function AppLandingScreen({ isEditor, onSelectLove, onSelectJobs, onRequestLogin
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
         <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-md bg-amber-500 flex items-center justify-center">
+            <button
+              onClick={() => onSelectJobs("checkUpdate")}
+              title="Check for updates"
+              className="w-8 h-8 rounded-md bg-amber-500 flex items-center justify-center active:scale-90 transition-transform"
+            >
               <Package className="w-4.5 h-4.5 text-slate-950" strokeWidth={2.5} />
-            </div>
+            </button>
             <div>
               <h1 className="font-bold text-slate-100 leading-tight flex items-center gap-2">
                 Riggy
