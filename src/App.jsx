@@ -17,6 +17,8 @@ import {
   Filter,
   Briefcase,
   Heart,
+  ScanLine,
+  Camera,
   Truck,
   Copy,
   Search,
@@ -394,8 +396,15 @@ function tokenSet(str) {
 function findCatalogMatch(name, catalog) {
   const normName = normalizeText(name);
   if (!normName) return null;
+  // Learned aliases take priority over any name-based guessing — if this
+  // exact phrase has been manually linked before, trust that over a fuzzy
+  // guess every time.
+  let match = catalog.find((c) =>
+    (c.aliases || []).some((a) => normalizeText(a) === normName)
+  );
+  if (match) return match;
   // Exact normalized match first
-  let match = catalog.find((c) => normalizeText(c.name) === normName);
+  match = catalog.find((c) => normalizeText(c.name) === normName);
   if (match) return match;
   // Space-insensitive match: catches "Tagline" vs "Tag line" style differences
   const squashName = normName.replace(/\s+/g, "");
@@ -2312,6 +2321,7 @@ function emptyCatalogItem() {
     vendor: "",
     needsTransfer: false,
     pinned: false,
+    aliases: [],
   };
 }
 
@@ -11539,15 +11549,45 @@ const LOVE_STATUSES = [
   { key: "staged", label: "Staged to send", color: "bg-violet-500/15 text-violet-300 border-violet-500/40" },
   { key: "sent", label: "Sent to job", color: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40" },
 ];
-const nextLoveStatus = (status) => {
-  const idx = LOVE_STATUSES.findIndex((s) => s.key === status);
-  return idx >= 0 && idx < LOVE_STATUSES.length - 1 ? LOVE_STATUSES[idx + 1].key : null;
+// Items pulled from inventory never actually get an "Ordered" step — real
+// purchases do. Skipping straight from Requested to Received for an
+// inventory item would leave a fake "Ordered" date sitting in the history
+// forever, which is exactly the misleading-later-record problem this
+// exists to avoid.
+const nextLoveStatus = (item) => {
+  const idx = LOVE_STATUSES.findIndex((s) => s.key === item.status);
+  let next = idx + 1;
+  if (LOVE_STATUSES[next]?.key === "ordered" && item.needsOrdering === false) next += 1;
+  return next >= 0 && next < LOVE_STATUSES.length ? LOVE_STATUSES[next].key : null;
 };
-const prevLoveStatus = (status) => {
-  const idx = LOVE_STATUSES.findIndex((s) => s.key === status);
-  return idx > 0 ? LOVE_STATUSES[idx - 1].key : null;
+const prevLoveStatus = (item) => {
+  const idx = LOVE_STATUSES.findIndex((s) => s.key === item.status);
+  let prev = idx - 1;
+  if (LOVE_STATUSES[prev]?.key === "ordered" && item.needsOrdering === false) prev -= 1;
+  return prev >= 0 ? LOVE_STATUSES[prev].key : null;
 };
 const loveStatusMeta = (key) => LOVE_STATUSES.find((s) => s.key === key) || LOVE_STATUSES[0];
+
+// How many days an item can sit in a given status before it counts as
+// stuck and worth flagging — the actual fix for "we lose track of what's
+// been sitting around too long." Ordered gets a longer leash since that
+// delay is usually out of our hands; Requested and Staged are the two
+// spots where something sitting still usually means it just got missed.
+const STALE_THRESHOLD_DAYS = { requested: 3, ordered: 7, received: 7, staged: 3, sent: null };
+
+function daysInCurrentStatus(item) {
+  const since = item.statusDates && item.statusDates[item.status];
+  if (!since) return 0;
+  const ms = Date.now() - new Date(since + "T00:00:00").getTime();
+  return Math.floor(ms / (24 * 60 * 60 * 1000));
+}
+
+function isStale(item) {
+  if (item.archived) return false;
+  const threshold = STALE_THRESHOLD_DAYS[item.status];
+  if (threshold == null) return false;
+  return daysInCurrentStatus(item) >= threshold;
+}
 
 // Finds other still-pending items (not yet sent, not archived) across every
 // Love List with a matching name — the actual fix for the "job never got
@@ -11574,6 +11614,7 @@ function newLoveListItem(name, qty, extra = {}) {
     id: uniqueId(),
     name,
     qty,
+    qtyUnit: extra.qtyUnit || "",
     status: "requested",
     statusDates: { requested: today, ordered: null, received: null, staged: null, sent: null },
     notes: "",
@@ -11582,18 +11623,25 @@ function newLoveListItem(name, qty, extra = {}) {
     storageDetail: extra.storageDetail || "",
     serials: extra.serials || [],
     needsTransfer: !!extra.needsTransfer,
+    // Defaults to true (assume it needs ordering) unless explicitly
+    // marked as already in inventory.
+    needsOrdering: extra.needsOrdering !== false,
     archived: false,
     duplicateOf: extra.duplicateOf || null,
   };
 }
 
-function LoveListItemEntry({ catalog, allLists = [], currentListId, onAdd }) {
+function LoveListItemEntry({ catalog, allLists = [], currentListId, onLearnAlias, onAdd }) {
   const [name, setName] = useState("");
   const [qty, setQty] = useState("");
+  const [qtyUnit, setQtyUnit] = useState("");
   const [storage, setStorage] = useState("");
   const [storageDetail, setStorageDetail] = useState("");
   const [manualCatalogId, setManualCatalogId] = useState(null);
   const [storageTouched, setStorageTouched] = useState(false);
+  const [needsOrdering, setNeedsOrdering] = useState(true);
+  const [showCatalogPicker, setShowCatalogPicker] = useState(false);
+  const [catalogSearch, setCatalogSearch] = useState("");
 
   const autoMatch = name.trim() ? findCatalogMatch(name.trim(), catalog) : null;
   const duplicates = name.trim()
@@ -11616,20 +11664,24 @@ function LoveListItemEntry({ catalog, allLists = [], currentListId, onAdd }) {
   const reset = () => {
     setName("");
     setQty("");
+    setQtyUnit("");
     setStorage("");
     setStorageDetail("");
     setManualCatalogId(null);
     setStorageTouched(false);
+    setNeedsOrdering(true);
   };
 
   const handleAdd = () => {
     if (!name.trim()) return;
     onAdd(
       newLoveListItem(name.trim(), qty.trim() === "" ? 1 : Number(qty) || 1, {
+        qtyUnit: qtyUnit.trim(),
         catalogId: linkedCatalogItem ? linkedCatalogItem.id : null,
         storage,
         storageDetail,
         needsTransfer: linkedCatalogItem ? !!linkedCatalogItem.needsTransfer : false,
+        needsOrdering,
         duplicateOf:
           duplicates.length > 0
             ? {
@@ -11661,11 +11713,42 @@ function LoveListItemEntry({ catalog, allLists = [], currentListId, onAdd }) {
           className="bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
         />
       </div>
-      {linkedCatalogItem && (
-        <p className="text-xs text-emerald-400 flex items-center gap-1">
-          🔗 Linked to catalog: {linkedCatalogItem.name}
-          {linkedCatalogItem.needsTransfer && " · 🚚 needs transfer"}
-        </p>
+      <input
+        value={qtyUnit}
+        onChange={(e) => setQtyUnit(e.target.value)}
+        placeholder="each (default), case, box, custom..."
+        className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+      />
+      {linkedCatalogItem ? (
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <p className="text-emerald-400 flex items-center gap-1 min-w-0 truncate">
+            🔗 Linked to catalog: {linkedCatalogItem.name}
+            {linkedCatalogItem.needsTransfer && " · 🚚 needs transfer"}
+          </p>
+          <div className="flex gap-2 shrink-0">
+            <button
+              onClick={() => setShowCatalogPicker(true)}
+              className="text-slate-400 hover:text-slate-200"
+            >
+              Change
+            </button>
+            <button
+              onClick={() => setManualCatalogId("__none__")}
+              className="text-slate-500 hover:text-red-400"
+            >
+              Unlink
+            </button>
+          </div>
+        </div>
+      ) : (
+        name.trim() && (
+          <button
+            onClick={() => setShowCatalogPicker(true)}
+            className="text-xs text-slate-500 hover:text-slate-300"
+          >
+            No catalog match found — 🔍 search manually
+          </button>
+        )
       )}
       {duplicates.length > 0 && (
         <div className="border border-amber-600/40 bg-amber-500/10 rounded-md p-2.5 space-y-1">
@@ -11680,6 +11763,33 @@ function LoveListItemEntry({ catalog, allLists = [], currentListId, onAdd }) {
           ))}
         </div>
       )}
+      <div>
+        <label className="block text-xs font-medium text-slate-400 mb-1.5">
+          Does this need to be ordered?
+        </label>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setNeedsOrdering(true)}
+            className={`flex-1 text-sm rounded-md py-2 border transition-colors ${
+              needsOrdering
+                ? "bg-rose-500/15 border-rose-500/50 text-rose-300"
+                : "bg-slate-800 border-slate-700 text-slate-400"
+            }`}
+          >
+            Needs ordering
+          </button>
+          <button
+            onClick={() => setNeedsOrdering(false)}
+            className={`flex-1 text-sm rounded-md py-2 border transition-colors ${
+              !needsOrdering
+                ? "bg-sky-500/15 border-sky-500/50 text-sky-300"
+                : "bg-slate-800 border-slate-700 text-slate-400"
+            }`}
+          >
+            📦 In inventory
+          </button>
+        </div>
+      </div>
       <div className="grid grid-cols-2 gap-2">
         <Select
           value={storage}
@@ -11706,11 +11816,305 @@ function LoveListItemEntry({ catalog, allLists = [], currentListId, onAdd }) {
       >
         + Add item
       </button>
+
+      {showCatalogPicker && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4 py-8">
+          <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold text-sm">Link to catalog item</h3>
+              <button
+                onClick={() => setShowCatalogPicker(false)}
+                className="text-slate-400 hover:text-slate-200"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-5 pt-4 shrink-0">
+              <input
+                autoFocus
+                value={catalogSearch}
+                onChange={(e) => setCatalogSearch(e.target.value)}
+                placeholder="Search catalog..."
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+              />
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {catalog
+                .filter((c) => c.name.toLowerCase().includes(catalogSearch.trim().toLowerCase()))
+                .slice(0, 50)
+                .map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => {
+                      setManualCatalogId(c.id);
+                      onLearnAlias && onLearnAlias(c.id, name);
+                      setShowCatalogPicker(false);
+                      setCatalogSearch("");
+                    }}
+                    className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-800 hover:border-slate-700 mb-1.5"
+                  >
+                    <p className="text-slate-100">{c.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {c.storage}
+                      {c.needsTransfer ? " · 🚚 needs transfer" : ""}
+                    </p>
+                  </button>
+                ))}
+              {catalog.filter((c) =>
+                c.name.toLowerCase().includes(catalogSearch.trim().toLowerCase())
+              ).length === 0 && (
+                <p className="text-sm text-slate-500 text-center py-6">No matches.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function LoveListAddForm({ catalog, allLists, onSave, onCancel }) {
+function LoveListScanModal({ catalog, onSave, onCancel }) {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const [step, setStep] = useState("details"); // "details" | "scanning" | "review" | "error"
+  const [jobLabel, setJobLabel] = useState("");
+  const [submittedBy, setSubmittedBy] = useState("");
+  const [dateReceived, setDateReceived] = useState(todayStr);
+  const [scanError, setScanError] = useState("");
+  const [reviewItems, setReviewItems] = useState([]);
+  const fileInputRef = useRef(null);
+
+  const runScan = async (file) => {
+    setStep("scanning");
+    setScanError("");
+    try {
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(",")[1]);
+        reader.onerror = () => reject(new Error("Couldn't read that image."));
+        reader.readAsDataURL(file);
+      });
+
+      const res = await fetch(
+        "https://vwvppivdpxjvmaazcmmg.supabase.co/functions/v1/scan-love-list",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageBase64: base64, mediaType: file.type || "image/jpeg" }),
+        }
+      );
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Scan failed.");
+
+      const items = (data.items || []).map((it) => {
+        const match = findCatalogMatch(it.name || "", catalog);
+        return {
+          id: uniqueId(),
+          name: it.name || "",
+          qty: Number(it.qty) > 0 ? Number(it.qty) : 1,
+          catalogId: match ? match.id : null,
+          storage: match ? match.storage : "",
+          storageDetail: match && match.storage === "Other" ? match.storageDetail || "" : "",
+          needsTransfer: match ? !!match.needsTransfer : false,
+        };
+      });
+      setReviewItems(items);
+      setStep("review");
+    } catch (err) {
+      setScanError(err.message || String(err));
+      setStep("error");
+    }
+  };
+
+  const updateReviewItem = (id, changes) => {
+    setReviewItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...changes } : i)));
+  };
+
+  const removeReviewItem = (id) => {
+    setReviewItems((prev) => prev.filter((i) => i.id !== id));
+  };
+
+  const confirmSave = () => {
+    const finalItems = reviewItems
+      .filter((i) => i.name.trim())
+      .map((i) =>
+        newLoveListItem(i.name.trim(), i.qty, {
+          catalogId: i.catalogId,
+          storage: i.storage,
+          storageDetail: i.storageDetail,
+          needsTransfer: i.needsTransfer,
+        })
+      );
+    onSave({ jobLabel: jobLabel.trim(), submittedBy: submittedBy.trim(), dateReceived, items: finalItems });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-md rounded-lg max-h-full flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <h2 className="text-slate-100 font-semibold text-base flex items-center gap-2">
+            <ScanLine className="w-4 h-4 text-rose-400" />
+            Scan a Love List
+          </h2>
+          <button onClick={onCancel} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {step === "details" && (
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            <div className="grid grid-cols-2 gap-2 mb-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                  Job # / name
+                </label>
+                <input
+                  autoFocus
+                  value={jobLabel}
+                  onChange={(e) => setJobLabel(e.target.value)}
+                  placeholder="e.g. 3052"
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                  Submitted by
+                </label>
+                <input
+                  value={submittedBy}
+                  onChange={(e) => setSubmittedBy(e.target.value)}
+                  placeholder="optional"
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+                />
+              </div>
+            </div>
+            <div className="mb-5">
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                Date received
+              </label>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setDateReceived(todayStr)}
+                  className={`flex-1 text-sm rounded-md py-2 border transition-colors ${
+                    dateReceived === todayStr
+                      ? "bg-rose-500/15 border-rose-500/50 text-rose-300"
+                      : "bg-slate-800 border-slate-700 text-slate-400"
+                  }`}
+                >
+                  Today
+                </button>
+                <input
+                  type="date"
+                  value={dateReceived}
+                  onChange={(e) => setDateReceived(e.target.value)}
+                  className="flex-1 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+                />
+              </div>
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={(e) => e.target.files[0] && runScan(e.target.files[0])}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={!jobLabel.trim()}
+              className="w-full flex items-center justify-center gap-2 text-sm rounded-md py-3 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400 disabled:opacity-40"
+            >
+              <Camera className="w-4 h-4" />
+              Take or choose a photo
+            </button>
+            {!jobLabel.trim() && (
+              <p className="text-xs text-slate-600 text-center mt-2">
+                Enter a job first, then scan.
+              </p>
+            )}
+          </div>
+        )}
+
+        {step === "scanning" && (
+          <div className="flex-1 flex flex-col items-center justify-center py-16">
+            <div className="w-6 h-6 border-2 border-slate-700 border-t-rose-500 rounded-full animate-spin mb-3" />
+            <p className="text-sm text-slate-400">Reading the list...</p>
+          </div>
+        )}
+
+        {step === "error" && (
+          <div className="flex-1 px-5 py-8 text-center">
+            <p className="text-sm text-red-400 mb-4">{scanError}</p>
+            <button
+              onClick={() => setStep("details")}
+              className="text-sm rounded-md py-2 px-4 border border-slate-700 text-slate-200 hover:bg-slate-800"
+            >
+              Try again
+            </button>
+          </div>
+        )}
+
+        {step === "review" && (
+          <>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              <p className="text-xs text-slate-500 mb-3">
+                Check every line before saving — nothing's committed yet.
+              </p>
+              <div className="space-y-2">
+                {reviewItems.map((item) => (
+                  <div key={item.id} className="border border-slate-800 rounded-lg p-2.5 bg-slate-900/60">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <input
+                        value={item.name}
+                        onChange={(e) => updateReviewItem(item.id, { name: e.target.value })}
+                        className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+                      />
+                      <input
+                        type="number"
+                        min="1"
+                        value={item.qty}
+                        onChange={(e) => updateReviewItem(item.id, { qty: Number(e.target.value) || 1 })}
+                        className="w-14 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+                      />
+                      <button
+                        onClick={() => removeReviewItem(item.id)}
+                        className="text-slate-600 hover:text-red-400 shrink-0"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    {item.catalogId ? (
+                      <p className="text-xs text-emerald-400">
+                        🔗 {catalog.find((c) => c.id === item.catalogId)?.name}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-slate-600">No catalog match — link it after saving</p>
+                    )}
+                  </div>
+                ))}
+                {reviewItems.length === 0 && (
+                  <p className="text-sm text-slate-500 text-center py-6">
+                    Nothing left to add — every line was removed.
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+              <button
+                onClick={confirmSave}
+                disabled={reviewItems.length === 0}
+                className="w-full text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400 disabled:opacity-40"
+              >
+                Save Love List ({reviewItems.length} item{reviewItems.length === 1 ? "" : "s"})
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LoveListAddForm({ catalog, allLists, onLearnAlias, onSave, onCancel }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const [jobLabel, setJobLabel] = useState("");
   const [submittedBy, setSubmittedBy] = useState("");
@@ -11784,6 +12188,7 @@ function LoveListAddForm({ catalog, allLists, onSave, onCancel }) {
               catalog={catalog}
               allLists={allLists}
               currentListId={null}
+              onLearnAlias={onLearnAlias}
               onAdd={(item) => setItems((prev) => [...prev, item])}
             />
           </div>
@@ -11797,7 +12202,7 @@ function LoveListAddForm({ catalog, allLists, onSave, onCancel }) {
                 >
                   <div className="min-w-0">
                     <p className="text-sm text-slate-100">
-                      {it.name} <span className="text-slate-500">x{it.qty}</span>
+                      {it.name} <span className="text-slate-500">x{it.qty}{it.qtyUnit ? ` ${it.qtyUnit}` : ""}</span>
                     </p>
                     <p className="text-xs text-slate-500">
                       {[
@@ -11835,11 +12240,13 @@ function LoveListAddForm({ catalog, allLists, onSave, onCancel }) {
   );
 }
 
-function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateList, onDeleteList, onBack, onGoHome }) {
+function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateList, onDeleteList, onLearnAlias, onBack, onGoHome }) {
   const [addingItem, setAddingItem] = useState(false);
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
   const [editingSmeFor, setEditingSmeFor] = useState(null); // item, while editing its SME#s
+  const [relinkingItem, setRelinkingItem] = useState(null); // item, while relinking its catalog match
+  const [catalogSearch, setCatalogSearch] = useState("");
   const [smeDraft, setSmeDraft] = useState("");
   const [showArchived, setShowArchived] = useState(false);
 
@@ -11880,6 +12287,26 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
     setEditingSmeFor(null);
   };
 
+  const relinkCatalog = (catalogItem) => {
+    if (!relinkingItem) return;
+    playSaveChime();
+    if (catalogItem) onLearnAlias && onLearnAlias(catalogItem.id, relinkingItem.name);
+    onUpdateList({
+      ...list,
+      items: list.items.map((i) =>
+        i.id === relinkingItem.id
+          ? {
+              ...i,
+              catalogId: catalogItem ? catalogItem.id : null,
+              needsTransfer: catalogItem ? !!catalogItem.needsTransfer : i.needsTransfer,
+            }
+          : i
+      ),
+    });
+    setRelinkingItem(null);
+    setCatalogSearch("");
+  };
+
   const advanceStatus = (itemId, direction) => {
     if (!isEditor) return;
     playSoftTap();
@@ -11887,7 +12314,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
       ...list,
       items: list.items.map((i) => {
         if (i.id !== itemId) return i;
-        const newStatus = direction === "forward" ? nextLoveStatus(i.status) : prevLoveStatus(i.status);
+        const newStatus = direction === "forward" ? nextLoveStatus(i) : prevLoveStatus(i);
         if (!newStatus) return i;
         const today = new Date().toISOString().slice(0, 10);
         return {
@@ -11992,10 +12419,13 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
               excludeListId: list.id,
               excludeItemId: item.id,
             });
+            const linkedCatalogItem = item.catalogId
+              ? catalog.find((c) => c.id === item.catalogId) || null
+              : null;
             const subline = [
-              item.catalogId && "🔗 linked",
               item.storage === "Other" && item.storageDetail ? item.storageDetail : item.storage,
               item.needsTransfer && "🚚 transfer",
+              item.needsOrdering === false && "📦 in inventory",
             ]
               .filter(Boolean)
               .join(" · ");
@@ -12004,7 +12434,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
                 <div className="flex items-center justify-between gap-2 mb-2">
                   <div className="min-w-0">
                     <p className="text-sm text-slate-100 truncate">
-                      {item.name} <span className="text-slate-500">x{item.qty}</span>
+                      {item.name} <span className="text-slate-500">x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}</span>
                     </p>
                     {subline && <p className="text-xs text-slate-500 truncate">{subline}</p>}
                   </div>
@@ -12017,6 +12447,24 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
                     </button>
                   )}
                 </div>
+                {isEditor ? (
+                  <button
+                    onClick={() => setRelinkingItem(item)}
+                    className="text-xs mb-2 block"
+                  >
+                    {linkedCatalogItem ? (
+                      <span className="text-emerald-400">🔗 {linkedCatalogItem.name}</span>
+                    ) : (
+                      <span className="text-slate-600 hover:text-slate-400">
+                        + Link to catalog item
+                      </span>
+                    )}
+                  </button>
+                ) : (
+                  linkedCatalogItem && (
+                    <p className="text-xs text-emerald-400 mb-2">🔗 {linkedCatalogItem.name}</p>
+                  )
+                )}
                 {item.duplicateOf && (
                   <p className="text-xs text-amber-400 mb-2">
                     ⚠ Duplicate of "{item.duplicateOf.itemName}" requested for{" "}
@@ -12027,6 +12475,27 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
                   <p className="text-xs text-amber-400 mb-2">
                     ⚠ Also currently pending on: {liveDuplicates.map((d) => d.list.jobLabel).join(", ")}
                   </p>
+                )}
+                {isStale(item) && (
+                  <p className="text-xs text-amber-400 mb-2">
+                    ⚠ {daysInCurrentStatus(item)} day{daysInCurrentStatus(item) === 1 ? "" : "s"}{" "}
+                    with no movement
+                  </p>
+                )}
+                {isEditor && item.status === "requested" && (
+                  <button
+                    onClick={() =>
+                      onUpdateList({
+                        ...list,
+                        items: list.items.map((i) =>
+                          i.id === item.id ? { ...i, needsOrdering: !i.needsOrdering } : i
+                        ),
+                      })
+                    }
+                    className="text-xs mb-2 block text-slate-500 hover:text-slate-300"
+                  >
+                    {item.needsOrdering ? "Needs ordering — tap to mark in inventory" : "📦 In inventory — tap to mark needs ordering"}
+                  </button>
                 )}
                 {isEditor ? (
                   <button
@@ -12055,7 +12524,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => advanceStatus(item.id, "back")}
-                    disabled={!isEditor || !prevLoveStatus(item.status)}
+                    disabled={!isEditor || !prevLoveStatus(item)}
                     className="text-slate-500 hover:text-slate-300 disabled:opacity-20 disabled:hover:text-slate-500 p-1"
                   >
                     <ChevronLeft className="w-4 h-4" />
@@ -12066,7 +12535,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
                   </span>
                   <button
                     onClick={() => advanceStatus(item.id, "forward")}
-                    disabled={!isEditor || !nextLoveStatus(item.status)}
+                    disabled={!isEditor || !nextLoveStatus(item)}
                     className="text-slate-500 hover:text-slate-300 disabled:opacity-20 disabled:hover:text-slate-500 p-1"
                   >
                     <ChevronRight className="w-4 h-4" />
@@ -12110,6 +12579,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
                 catalog={catalog}
                 allLists={allLists}
                 currentListId={list.id}
+                onLearnAlias={onLearnAlias}
                 onAdd={addItem}
               />
               <button
@@ -12179,11 +12649,67 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
           </div>
         </div>
       )}
+
+      {relinkingItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
+          <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold text-sm truncate">
+                Link "{relinkingItem.name}" to...
+              </h3>
+              <button
+                onClick={() => {
+                  setRelinkingItem(null);
+                  setCatalogSearch("");
+                }}
+                className="text-slate-400 hover:text-slate-200 shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-5 pt-4 shrink-0">
+              <input
+                autoFocus
+                value={catalogSearch}
+                onChange={(e) => setCatalogSearch(e.target.value)}
+                placeholder="Search catalog..."
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+              />
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {relinkingItem.catalogId && (
+                <button
+                  onClick={() => relinkCatalog(null)}
+                  className="w-full text-left text-sm rounded-md px-3 py-2 border border-red-800/40 text-red-400 hover:bg-red-500/10 mb-2"
+                >
+                  Unlink from catalog
+                </button>
+              )}
+              {catalog
+                .filter((c) => c.name.toLowerCase().includes(catalogSearch.trim().toLowerCase()))
+                .slice(0, 50)
+                .map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => relinkCatalog(c)}
+                    className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-800 hover:border-slate-700 mb-1.5"
+                  >
+                    <p className="text-slate-100">{c.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {c.storage}
+                      {c.needsTransfer ? " · 🚚 needs transfer" : ""}
+                    </p>
+                  </button>
+                ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onGoHome }) {
+function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onScanList, onGoHome }) {
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("active"); // "active" | "ready"
 
@@ -12207,6 +12733,13 @@ function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onGoHome }
     (a, b) => a.localeCompare(b)
   );
 
+  const staleItems = lists.flatMap((l) =>
+    l.items.filter((i) => isStale(i)).map((i) => ({ list: l, item: i }))
+  );
+  const staleByJob = [...new Map(staleItems.map((r) => [r.list.jobLabel, r.list.jobLabel])).keys()].sort(
+    (a, b) => a.localeCompare(b)
+  );
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
@@ -12226,13 +12759,22 @@ function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onGoHome }
             </p>
           </div>
           {isEditor && (
-            <button
-              onClick={onAddList}
-              className="flex items-center gap-1.5 bg-rose-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-rose-400"
-            >
-              <Plus className="w-4 h-4" />
-              New list
-            </button>
+            <div className="flex gap-2 shrink-0">
+              <button
+                onClick={onScanList}
+                title="Scan a list"
+                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+              >
+                <ScanLine className="w-4 h-4" />
+              </button>
+              <button
+                onClick={onAddList}
+                className="flex items-center gap-1.5 bg-rose-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-rose-400"
+              >
+                <Plus className="w-4 h-4" />
+                New list
+              </button>
+            </div>
           )}
         </div>
         <div className="max-w-2xl mx-auto px-4 pb-3">
@@ -12270,7 +12812,7 @@ function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onGoHome }
                     >
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-sm text-slate-100">
-                          {item.name} <span className="text-slate-500">x{item.qty}</span>
+                          {item.name} <span className="text-slate-500">x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}</span>
                         </p>
                         <span className={`text-xs rounded-full px-2 py-0.5 border shrink-0 ${meta.color}`}>
                           {meta.label}
@@ -12310,6 +12852,21 @@ function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onGoHome }
                 {readyToSend.length > 0 && (
                   <span className="ml-1.5 bg-emerald-500 text-slate-950 text-[10px] font-bold rounded-full px-1.5 py-0.5">
                     {readyToSend.length}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => setTab("stale")}
+                className={`flex-1 text-sm rounded-md py-2 border relative ${
+                  tab === "stale"
+                    ? "bg-rose-500/15 border-rose-500/50 text-rose-300"
+                    : "bg-slate-800 border-slate-700 text-slate-400"
+                }`}
+              >
+                Needs attention
+                {staleItems.length > 0 && (
+                  <span className="ml-1.5 bg-amber-500 text-slate-950 text-[10px] font-bold rounded-full px-1.5 py-0.5">
+                    {staleItems.length}
                   </span>
                 )}
               </button>
@@ -12366,32 +12923,73 @@ function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onGoHome }
                   ))}
                 </div>
               )
-            ) : readyByJob.length === 0 ? (
+            ) : tab === "ready" ? (
+              readyByJob.length === 0 ? (
+                <p className="text-sm text-slate-500 text-center py-10">
+                  Nothing's staged and ready to go out right now.
+                </p>
+              ) : (
+                <div className="space-y-5">
+                  {readyByJob.map((jobLabel) => (
+                    <div key={jobLabel}>
+                      <p className="font-semibold text-slate-100 mb-2">{jobLabel}</p>
+                      <div className="space-y-2">
+                        {readyToSend
+                          .filter((r) => r.list.jobLabel === jobLabel)
+                          .map(({ list, item }) => (
+                            <button
+                              key={item.id}
+                              onClick={() => onOpenList(list)}
+                              className="w-full text-left bg-slate-900 border border-sky-500/30 rounded-lg p-3 hover:border-sky-500/50"
+                            >
+                              <p className="text-sm text-slate-100">
+                                {item.name} <span className="text-slate-500">x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}</span>
+                              </p>
+                              <p className="text-xs text-slate-500 mt-0.5">
+                                Staged {item.statusDates.staged}
+                              </p>
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : staleByJob.length === 0 ? (
               <p className="text-sm text-slate-500 text-center py-10">
-                Nothing's sitting received-but-not-sent right now.
+                Nothing's stuck — everything's moving.
               </p>
             ) : (
               <div className="space-y-5">
-                {readyByJob.map((jobLabel) => (
+                {staleByJob.map((jobLabel) => (
                   <div key={jobLabel}>
                     <p className="font-semibold text-slate-100 mb-2">{jobLabel}</p>
                     <div className="space-y-2">
-                      {readyToSend
+                      {staleItems
                         .filter((r) => r.list.jobLabel === jobLabel)
-                        .map(({ list, item }) => (
-                          <button
-                            key={item.id}
-                            onClick={() => onOpenList(list)}
-                            className="w-full text-left bg-slate-900 border border-sky-500/30 rounded-lg p-3 hover:border-sky-500/50"
-                          >
-                            <p className="text-sm text-slate-100">
-                              {item.name} <span className="text-slate-500">x{item.qty}</span>
-                            </p>
-                            <p className="text-xs text-slate-500 mt-0.5">
-                              Staged {item.statusDates.staged}
-                            </p>
-                          </button>
-                        ))}
+                        .map(({ list, item }) => {
+                          const meta = loveStatusMeta(item.status);
+                          const days = daysInCurrentStatus(item);
+                          return (
+                            <button
+                              key={item.id}
+                              onClick={() => onOpenList(list)}
+                              className="w-full text-left bg-slate-900 border border-amber-500/30 rounded-lg p-3 hover:border-amber-500/50"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-sm text-slate-100">
+                                  {item.name} <span className="text-slate-500">x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}</span>
+                                </p>
+                                <span className={`text-xs rounded-full px-2 py-0.5 border shrink-0 ${meta.color}`}>
+                                  {meta.label}
+                                </span>
+                              </div>
+                              <p className="text-xs text-amber-400 mt-1">
+                                ⚠ {days} day{days === 1 ? "" : "s"} with no movement
+                              </p>
+                            </button>
+                          );
+                        })}
                     </div>
                   </div>
                 ))}
@@ -12412,6 +13010,7 @@ function LoveListsApp({ isEditor, onGoHome }) {
   const [loading, setLoading] = useState(true);
   const [activeListId, setActiveListId] = useState(null);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showScanModal, setShowScanModal] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -12445,6 +13044,26 @@ function LoveListsApp({ isEditor, onGoHome }) {
     });
   };
 
+  // Every manual catalog link is a real signal: "when someone writes this
+  // phrase, they mean this item." Remembering it means next time OCR or
+  // auto-match sees the same inconsistent phrasing, it can suggest the
+  // right item with real confidence instead of guessing from scratch.
+  const learnCatalogAlias = (catalogId, aliasText) => {
+    if (!isEditor || !catalogId || !aliasText || !aliasText.trim()) return;
+    const normAlias = normalizeText(aliasText.trim());
+    setCatalog((prev) => {
+      const next = prev.map((c) => {
+        if (c.id !== catalogId) return c;
+        if (normalizeText(c.name) === normAlias) return c; // matches the real name already
+        const existing = c.aliases || [];
+        if (existing.some((a) => normalizeText(a) === normAlias)) return c; // already known
+        return { ...c, aliases: [...existing, aliasText.trim()] };
+      });
+      saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
   const activeList = lists.find((l) => l.id === activeListId) || null;
 
   const handleSaveNewList = ({ jobLabel, submittedBy, dateReceived, items }) => {
@@ -12460,6 +13079,7 @@ function LoveListsApp({ isEditor, onGoHome }) {
     playSaveChime();
     updateLists((prev) => [...prev, list]);
     setShowAddForm(false);
+    setShowScanModal(false);
   };
 
   const handleUpdateList = (updated) => {
@@ -12490,6 +13110,7 @@ function LoveListsApp({ isEditor, onGoHome }) {
         isEditor={isEditor}
         onUpdateList={handleUpdateList}
         onDeleteList={handleDeleteList}
+        onLearnAlias={learnCatalogAlias}
         onBack={() => setActiveListId(null)}
         onGoHome={onGoHome}
       />
@@ -12503,10 +13124,18 @@ function LoveListsApp({ isEditor, onGoHome }) {
         isEditor={isEditor}
         onOpenList={(l) => setActiveListId(l.id)}
         onAddList={() => setShowAddForm(true)}
+        onScanList={() => setShowScanModal(true)}
         onGoHome={onGoHome}
       />
       {showAddForm && isEditor && (
-        <LoveListAddForm catalog={catalog} allLists={lists} onSave={handleSaveNewList} onCancel={() => setShowAddForm(false)} />
+        <LoveListAddForm catalog={catalog} allLists={lists} onLearnAlias={learnCatalogAlias} onSave={handleSaveNewList} onCancel={() => setShowAddForm(false)} />
+      )}
+      {showScanModal && isEditor && (
+        <LoveListScanModal
+          catalog={catalog}
+          onSave={handleSaveNewList}
+          onCancel={() => setShowScanModal(false)}
+        />
       )}
     </>
   );
