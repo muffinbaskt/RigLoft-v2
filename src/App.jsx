@@ -9672,6 +9672,78 @@ async function maybeAutoBackup(jobs, catalog) {
   }
 }
 
+// Same idea, same chosen folder, as its own separate file — Love Lists
+// data is structurally different enough from jobs/catalog that it doesn't
+// belong jammed into the same backup payload.
+let lastLoveListsBackupDownloadAt = 0;
+const AUTO_BACKUP_LOVE_LISTS_KEY = "warehub-last-auto-backup-lovelists";
+let loveListsAutoBackupInFlight = false;
+
+async function downloadLoveListsBackupFile(loveLists, { force = false } = {}) {
+  if (!force && Date.now() - lastLoveListsBackupDownloadAt < 10000) return false;
+  const now = new Date();
+  const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `riggy-love-lists-${stamp}.json`;
+  const payload = {
+    exportedFrom: "Riggy (Love Lists)",
+    exportedAt: now.toISOString(),
+    loveLists,
+  };
+  const jsonText = JSON.stringify(payload, null, 2);
+
+  if (FS_ACCESS_SUPPORTED) {
+    try {
+      const dirHandle = await loadBackupDirectoryHandle();
+      if (dirHandle) {
+        const permission = await dirHandle.queryPermission({ mode: "readwrite" });
+        if (permission === "granted") {
+          const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
+          const writable = await fileHandle.createWritable();
+          await writable.write(jsonText);
+          await writable.close();
+          lastLoveListsBackupDownloadAt = Date.now();
+          return true;
+        }
+      }
+    } catch {
+      // Folder no longer accessible — fall back below rather than losing it
+    }
+  }
+
+  try {
+    lastLoveListsBackupDownloadAt = Date.now();
+    const blob = new Blob([jsonText], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function maybeAutoBackupLoveLists(loveLists) {
+  if (!loveLists || loveLists.length === 0) return;
+  if (loveListsAutoBackupInFlight) return;
+  try {
+    const last = localStorage.getItem(AUTO_BACKUP_LOVE_LISTS_KEY);
+    const lastTime = last ? new Date(last).getTime() : 0;
+    if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
+    loveListsAutoBackupInFlight = true;
+    localStorage.setItem(AUTO_BACKUP_LOVE_LISTS_KEY, new Date().toISOString());
+    await downloadLoveListsBackupFile(loveLists);
+  } catch {
+    // best effort only
+  } finally {
+    loveListsAutoBackupInFlight = false;
+  }
+}
+
 function WareHub({ isEditor, onSignOut, onRequestLogin, onGoToLanding }) {
   const [jobs, setJobs] = useState([]);
   const [activeJobId, setActiveJobId] = useState(null);
@@ -11464,6 +11536,7 @@ const LOVE_STATUSES = [
   { key: "requested", label: "Requested", color: "bg-slate-700 text-slate-200 border-slate-600" },
   { key: "ordered", label: "Ordered", color: "bg-amber-500/15 text-amber-300 border-amber-500/40" },
   { key: "received", label: "Received", color: "bg-sky-500/15 text-sky-300 border-sky-500/40" },
+  { key: "staged", label: "Staged to send", color: "bg-violet-500/15 text-violet-300 border-violet-500/40" },
   { key: "sent", label: "Sent to job", color: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40" },
 ];
 const nextLoveStatus = (status) => {
@@ -11476,6 +11549,25 @@ const prevLoveStatus = (status) => {
 };
 const loveStatusMeta = (key) => LOVE_STATUSES.find((s) => s.key === key) || LOVE_STATUSES[0];
 
+// Finds other still-pending items (not yet sent, not archived) across every
+// Love List with a matching name — the actual fix for the "job never got
+// told this was already coming, so they re-requested it" problem.
+function findPossibleDuplicates(name, allLists = [], { excludeListId, excludeItemId } = {}) {
+  const normName = normalizeText(name).replace(/\s+/g, "");
+  if (!normName) return [];
+  const matches = [];
+  allLists.forEach((l) => {
+    l.items.forEach((i) => {
+      if (i.id === excludeItemId) return;
+      if (i.archived) return;
+      if (i.status === "sent") return;
+      const normOther = normalizeText(i.name).replace(/\s+/g, "");
+      if (normOther === normName) matches.push({ list: l, item: i });
+    });
+  });
+  return matches;
+}
+
 function newLoveListItem(name, qty, extra = {}) {
   const today = new Date().toISOString().slice(0, 10);
   return {
@@ -11483,25 +11575,30 @@ function newLoveListItem(name, qty, extra = {}) {
     name,
     qty,
     status: "requested",
-    statusDates: { requested: today, ordered: null, received: null, sent: null },
+    statusDates: { requested: today, ordered: null, received: null, staged: null, sent: null },
     notes: "",
     catalogId: extra.catalogId || null,
     storage: extra.storage || "",
     storageDetail: extra.storageDetail || "",
     serials: extra.serials || [],
+    needsTransfer: !!extra.needsTransfer,
+    archived: false,
+    duplicateOf: extra.duplicateOf || null,
   };
 }
 
-function LoveListItemEntry({ catalog, onAdd }) {
+function LoveListItemEntry({ catalog, allLists = [], currentListId, onAdd }) {
   const [name, setName] = useState("");
   const [qty, setQty] = useState("");
   const [storage, setStorage] = useState("");
   const [storageDetail, setStorageDetail] = useState("");
-  const [smeText, setSmeText] = useState("");
   const [manualCatalogId, setManualCatalogId] = useState(null);
   const [storageTouched, setStorageTouched] = useState(false);
 
   const autoMatch = name.trim() ? findCatalogMatch(name.trim(), catalog) : null;
+  const duplicates = name.trim()
+    ? findPossibleDuplicates(name.trim(), allLists, { excludeListId: currentListId })
+    : [];
   const linkedCatalogItem = manualCatalogId
     ? catalog.find((c) => c.id === manualCatalogId) || null
     : autoMatch;
@@ -11521,7 +11618,6 @@ function LoveListItemEntry({ catalog, onAdd }) {
     setQty("");
     setStorage("");
     setStorageDetail("");
-    setSmeText("");
     setManualCatalogId(null);
     setStorageTouched(false);
   };
@@ -11533,7 +11629,15 @@ function LoveListItemEntry({ catalog, onAdd }) {
         catalogId: linkedCatalogItem ? linkedCatalogItem.id : null,
         storage,
         storageDetail,
-        serials: parseSerials(smeText),
+        needsTransfer: linkedCatalogItem ? !!linkedCatalogItem.needsTransfer : false,
+        duplicateOf:
+          duplicates.length > 0
+            ? {
+                itemName: duplicates[0].item.name,
+                jobLabel: duplicates[0].list.jobLabel,
+                dateReceived: duplicates[0].list.dateReceived,
+              }
+            : null,
       })
     );
     reset();
@@ -11560,7 +11664,21 @@ function LoveListItemEntry({ catalog, onAdd }) {
       {linkedCatalogItem && (
         <p className="text-xs text-emerald-400 flex items-center gap-1">
           🔗 Linked to catalog: {linkedCatalogItem.name}
+          {linkedCatalogItem.needsTransfer && " · 🚚 needs transfer"}
         </p>
+      )}
+      {duplicates.length > 0 && (
+        <div className="border border-amber-600/40 bg-amber-500/10 rounded-md p-2.5 space-y-1">
+          <p className="text-xs font-semibold text-amber-300">
+            ⚠ Already requested — check before adding another
+          </p>
+          {duplicates.map(({ list, item }) => (
+            <p key={item.id} className="text-xs text-amber-200/80">
+              "{item.name}" for {list.jobLabel} on {list.dateReceived} —{" "}
+              {loveStatusMeta(item.status).label}
+            </p>
+          ))}
+        </div>
       )}
       <div className="grid grid-cols-2 gap-2">
         <Select
@@ -11581,12 +11699,6 @@ function LoveListItemEntry({ catalog, onAdd }) {
           />
         )}
       </div>
-      <input
-        value={smeText}
-        onChange={(e) => setSmeText(e.target.value)}
-        placeholder="SME # (optional)"
-        className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
-      />
       <button
         onClick={handleAdd}
         disabled={!name.trim()}
@@ -11598,7 +11710,7 @@ function LoveListItemEntry({ catalog, onAdd }) {
   );
 }
 
-function LoveListAddForm({ catalog, onSave, onCancel }) {
+function LoveListAddForm({ catalog, allLists, onSave, onCancel }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const [jobLabel, setJobLabel] = useState("");
   const [submittedBy, setSubmittedBy] = useState("");
@@ -11670,6 +11782,8 @@ function LoveListAddForm({ catalog, onSave, onCancel }) {
           <div className="mb-3">
             <LoveListItemEntry
               catalog={catalog}
+              allLists={allLists}
+              currentListId={null}
               onAdd={(item) => setItems((prev) => [...prev, item])}
             />
           </div>
@@ -11689,6 +11803,7 @@ function LoveListAddForm({ catalog, onSave, onCancel }) {
                       {[
                         it.catalogId && "🔗 linked",
                         it.storage,
+                        it.needsTransfer && "🚚 transfer",
                         it.serials.length > 0 && `SME# ${it.serials.join(", ")}`,
                       ]
                         .filter(Boolean)
@@ -11720,10 +11835,50 @@ function LoveListAddForm({ catalog, onSave, onCancel }) {
   );
 }
 
-function LoveListDetailPage({ list, catalog, isEditor, onUpdateList, onDeleteList, onBack, onGoHome }) {
+function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateList, onDeleteList, onBack, onGoHome }) {
   const [addingItem, setAddingItem] = useState(false);
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
+  const [editingSmeFor, setEditingSmeFor] = useState(null); // item, while editing its SME#s
+  const [smeDraft, setSmeDraft] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+
+  const archiveItem = (id) => {
+    onUpdateList({
+      ...list,
+      items: list.items.map((i) => (i.id === id ? { ...i, archived: true } : i)),
+    });
+  };
+
+  const unarchiveItem = (id) => {
+    onUpdateList({
+      ...list,
+      items: list.items.map((i) => (i.id === id ? { ...i, archived: false } : i)),
+    });
+  };
+
+  const archiveAllSent = () => {
+    onUpdateList({
+      ...list,
+      items: list.items.map((i) => (i.status === "sent" && !i.archived ? { ...i, archived: true } : i)),
+    });
+  };
+
+  const visibleItems = list.items.filter((i) => showArchived || !i.archived);
+  const archivedCount = list.items.filter((i) => i.archived).length;
+  const sentUnarchivedCount = list.items.filter((i) => i.status === "sent" && !i.archived).length;
+
+  const saveSme = () => {
+    if (!editingSmeFor) return;
+    playSaveChime();
+    onUpdateList({
+      ...list,
+      items: list.items.map((i) =>
+        i.id === editingSmeFor.id ? { ...i, serials: parseSerials(smeDraft) } : i
+      ),
+    });
+    setEditingSmeFor(null);
+  };
 
   const advanceStatus = (itemId, direction) => {
     if (!isEditor) return;
@@ -11759,7 +11914,7 @@ function LoveListDetailPage({ list, catalog, isEditor, onUpdateList, onDeleteLis
   };
 
   const counts = LOVE_STATUSES.reduce((acc, s) => {
-    acc[s.key] = list.items.filter((i) => i.status === s.key).length;
+    acc[s.key] = list.items.filter((i) => i.status === s.key && !i.archived).length;
     return acc;
   }, {});
 
@@ -11808,13 +11963,39 @@ function LoveListDetailPage({ list, catalog, isEditor, onUpdateList, onDeleteLis
           ))}
         </div>
 
+        {isEditor && (sentUnarchivedCount > 0 || archivedCount > 0) && (
+          <div className="flex items-center gap-3 mb-4">
+            {sentUnarchivedCount > 0 && (
+              <button
+                onClick={archiveAllSent}
+                className="text-xs flex items-center gap-1 text-slate-400 hover:text-slate-200 border border-slate-700 rounded-md px-2.5 py-1.5"
+              >
+                <Archive className="w-3.5 h-3.5" />
+                Archive {sentUnarchivedCount} sent item{sentUnarchivedCount === 1 ? "" : "s"}
+              </button>
+            )}
+            {archivedCount > 0 && (
+              <button
+                onClick={() => setShowArchived((v) => !v)}
+                className="text-xs text-slate-500 hover:text-slate-300"
+              >
+                {showArchived ? "Hide" : "Show"} {archivedCount} archived
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="space-y-2 mb-4">
-          {list.items.map((item) => {
+          {visibleItems.map((item) => {
             const meta = loveStatusMeta(item.status);
+            const liveDuplicates = findPossibleDuplicates(item.name, allLists, {
+              excludeListId: list.id,
+              excludeItemId: item.id,
+            });
             const subline = [
               item.catalogId && "🔗 linked",
               item.storage === "Other" && item.storageDetail ? item.storageDetail : item.storage,
-              item.serials && item.serials.length > 0 && `SME# ${item.serials.join(", ")}`,
+              item.needsTransfer && "🚚 transfer",
             ]
               .filter(Boolean)
               .join(" · ");
@@ -11836,6 +12017,41 @@ function LoveListDetailPage({ list, catalog, isEditor, onUpdateList, onDeleteLis
                     </button>
                   )}
                 </div>
+                {item.duplicateOf && (
+                  <p className="text-xs text-amber-400 mb-2">
+                    ⚠ Duplicate of "{item.duplicateOf.itemName}" requested for{" "}
+                    {item.duplicateOf.jobLabel} on {item.duplicateOf.dateReceived}
+                  </p>
+                )}
+                {liveDuplicates.length > 0 && (
+                  <p className="text-xs text-amber-400 mb-2">
+                    ⚠ Also currently pending on: {liveDuplicates.map((d) => d.list.jobLabel).join(", ")}
+                  </p>
+                )}
+                {isEditor ? (
+                  <button
+                    onClick={() => {
+                      setEditingSmeFor(item);
+                      setSmeDraft((item.serials || []).join(", "));
+                    }}
+                    className="text-xs mb-2 block"
+                  >
+                    {item.serials && item.serials.length > 0 ? (
+                      <span className="text-fuchsia-300 font-mono">
+                        SME# {item.serials.join(", ")}
+                      </span>
+                    ) : (
+                      <span className="text-slate-600 hover:text-slate-400">+ Add SME #</span>
+                    )}
+                  </button>
+                ) : (
+                  item.serials &&
+                  item.serials.length > 0 && (
+                    <p className="text-xs text-fuchsia-300 font-mono mb-2">
+                      SME# {item.serials.join(", ")}
+                    </p>
+                  )
+                )}
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => advanceStatus(item.id, "back")}
@@ -11856,6 +12072,26 @@ function LoveListDetailPage({ list, catalog, isEditor, onUpdateList, onDeleteLis
                     <ChevronRight className="w-4 h-4" />
                   </button>
                 </div>
+                {isEditor && item.archived ? (
+                  <button
+                    onClick={() => unarchiveItem(item.id)}
+                    className="text-xs text-slate-500 hover:text-slate-300 mt-2 flex items-center gap-1"
+                  >
+                    <Archive className="w-3 h-3" />
+                    Archived — tap to restore
+                  </button>
+                ) : (
+                  isEditor &&
+                  item.status === "sent" && (
+                    <button
+                      onClick={() => archiveItem(item.id)}
+                      className="text-xs text-slate-500 hover:text-slate-300 mt-2 flex items-center gap-1"
+                    >
+                      <Archive className="w-3 h-3" />
+                      Archive
+                    </button>
+                  )
+                )}
               </div>
             );
           })}
@@ -11870,7 +12106,12 @@ function LoveListDetailPage({ list, catalog, isEditor, onUpdateList, onDeleteLis
         {isEditor &&
           (addingItem ? (
             <div>
-              <LoveListItemEntry catalog={catalog} onAdd={addItem} />
+              <LoveListItemEntry
+                catalog={catalog}
+                allLists={allLists}
+                currentListId={list.id}
+                onAdd={addItem}
+              />
               <button
                 onClick={() => setAddingItem(false)}
                 className="w-full text-xs text-slate-500 hover:text-slate-300 mt-2"
@@ -11905,6 +12146,39 @@ function LoveListDetailPage({ list, catalog, isEditor, onUpdateList, onDeleteLis
           onCancel={() => setDeleteListConfirm(false)}
         />
       )}
+
+      {editingSmeFor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-1">SME # for "{editingSmeFor.name}"</h3>
+            <p className="text-xs text-slate-500 mb-3">
+              Now that you actually have it in hand — separate multiple numbers with commas.
+            </p>
+            <input
+              autoFocus
+              value={smeDraft}
+              onChange={(e) => setSmeDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && saveSme()}
+              placeholder="e.g. 12345, 12346"
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => setEditingSmeFor(null)}
+                className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveSme}
+                className="flex-1 text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -11927,7 +12201,7 @@ function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onGoHome }
     .sort((a, b) => a.localeCompare(b));
 
   const readyToSend = lists.flatMap((l) =>
-    l.items.filter((i) => i.status === "received").map((i) => ({ list: l, item: i }))
+    l.items.filter((i) => i.status === "staged").map((i) => ({ list: l, item: i }))
   );
   const readyByJob = [...new Map(readyToSend.map((r) => [r.list.jobLabel, r.list.jobLabel])).keys()].sort(
     (a, b) => a.localeCompare(b)
@@ -12114,7 +12388,7 @@ function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onGoHome }
                               {item.name} <span className="text-slate-500">x{item.qty}</span>
                             </p>
                             <p className="text-xs text-slate-500 mt-0.5">
-                              Received {item.statusDates.received}
+                              Staged {item.statusDates.staged}
                             </p>
                           </button>
                         ))}
@@ -12141,9 +12415,11 @@ function LoveListsApp({ isEditor, onGoHome }) {
 
   useEffect(() => {
     (async () => {
+      let loadedLists = [];
       try {
         const result = await getWithRetry(LOVE_LISTS_KEY);
-        if (result.ok && result.value) setLists(JSON.parse(result.value));
+        if (result.ok && result.value) loadedLists = JSON.parse(result.value);
+        setLists(loadedLists);
       } catch {
         // corrupted stored data — start empty
       }
@@ -12154,7 +12430,9 @@ function LoveListsApp({ isEditor, onGoHome }) {
         // catalog linking just won't be available this session
       }
       setLoading(false);
+      if (isEditor) maybeAutoBackupLoveLists(loadedLists);
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const updateLists = (updater) => {
@@ -12162,6 +12440,7 @@ function LoveListsApp({ isEditor, onGoHome }) {
     setLists((prev) => {
       const next = updater(prev);
       saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(next)).catch(() => {});
+      maybeAutoBackupLoveLists(next);
       return next;
     });
   };
@@ -12207,6 +12486,7 @@ function LoveListsApp({ isEditor, onGoHome }) {
       <LoveListDetailPage
         list={activeList}
         catalog={catalog}
+        allLists={lists}
         isEditor={isEditor}
         onUpdateList={handleUpdateList}
         onDeleteList={handleDeleteList}
@@ -12226,7 +12506,7 @@ function LoveListsApp({ isEditor, onGoHome }) {
         onGoHome={onGoHome}
       />
       {showAddForm && isEditor && (
-        <LoveListAddForm catalog={catalog} onSave={handleSaveNewList} onCancel={() => setShowAddForm(false)} />
+        <LoveListAddForm catalog={catalog} allLists={lists} onSave={handleSaveNewList} onCancel={() => setShowAddForm(false)} />
       )}
     </>
   );
