@@ -489,6 +489,7 @@ function parseImportText(text, catalog) {
         qtyUnit,
         qtyDefaulted,
         matched: !!match,
+        matchedCatalogName: match ? match.name : null,
         gang: match ? match.gang : "Unassigned",
         storage: match ? match.storage : "Unassigned",
         storageDetail: match && match.storage === "Other" ? match.storageDetail || "" : "",
@@ -5533,6 +5534,7 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
           ...p,
           name: newName,
           matched: !!match,
+          matchedCatalogName: match ? match.name : null,
           gang: match ? match.gang : "Unassigned",
           storage: match ? match.storage : "Unassigned",
           storageDetail: match && match.storage === "Other" ? match.storageDetail || "" : "",
@@ -5665,7 +5667,7 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
                   <div className="flex items-center justify-between gap-2 mt-2">
                     <p className="text-xs text-slate-500">
                       {p.matched
-                        ? `${p.gang} · ${p.storage}${p.needsTransfer ? " · 🚚 transfer" : ""}`
+                        ? `→ ${p.matchedCatalogName} · ${p.gang} · ${p.storage}${p.needsTransfer ? " · 🚚 transfer" : ""}`
                         : "No catalog match — will be added as Unassigned"}
                     </p>
                     <label className="flex items-center gap-1.5 text-xs text-slate-300 shrink-0 cursor-pointer select-none">
