@@ -9754,7 +9754,7 @@ async function maybeAutoBackupLoveLists(loveLists) {
   }
 }
 
-function WareHub({ isEditor, onSignOut, onRequestLogin, onGoToLanding }) {
+function WareHub({ isEditor, onSignOut, onRequestLogin, onGoToLanding, initialAction }) {
   const [jobs, setJobs] = useState([]);
   const [activeJobId, setActiveJobId] = useState(null);
   const [showPicker, setShowPicker] = useState(true);
@@ -10478,6 +10478,46 @@ function WareHub({ isEditor, onSignOut, onRequestLogin, onGoToLanding }) {
       refreshFieldRequestCount();
     }
   }, [isEditor]);
+
+  // Lets the landing screen's icons jump straight into a specific action
+  // (open Suggestions, start a Quick Transfer, etc.) instead of just
+  // dropping you on the plain job picker — runs once, after real data has
+  // loaded.
+  const initialActionDone = useRef(false);
+  useEffect(() => {
+    if (loading || !initialAction || initialActionDone.current) return;
+    initialActionDone.current = true;
+    if (!isEditor) return;
+    switch (initialAction) {
+      case "suggestions":
+        setSuggestionsOpen(true);
+        refreshSuggestions();
+        refreshResolvedSuggestions();
+        break;
+      case "fieldRequests":
+        setFieldRequestsOpen(true);
+        refreshFieldRequestCount();
+        break;
+      case "returns":
+        setShowReturnsListPage(true);
+        break;
+      case "todo":
+        setShowGeneralTodo(true);
+        break;
+      case "catalog":
+        setCatalogModalOpen(true);
+        break;
+      case "quickTransfer":
+        setShowTransferOrReturnChoice(true);
+        break;
+      case "newJob":
+        setShowNewJobModal(true);
+        break;
+      default:
+        break;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, initialAction, isEditor]);
 
   const approveSuggestion = async (s) => {
     const job = jobs.find((j) => String(j.id) === String(s.job_id));
@@ -11513,12 +11553,110 @@ function WareHub({ isEditor, onSignOut, onRequestLogin, onGoToLanding }) {
   );
 }
 
-function AppLandingScreen({ onSelectLove, onSelectJobs }) {
+function AppLandingScreen({ isEditor, onSelectLove, onSelectJobs, onRequestLogin, onSignOut }) {
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center px-4">
-      <div className="w-full max-w-md">
-        <h1 className="text-2xl font-bold text-center mb-1">Riggy</h1>
-        <p className="text-sm text-slate-500 text-center mb-8">What are you working on?</p>
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
+        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-md bg-amber-500 flex items-center justify-center">
+              <Package className="w-4.5 h-4.5 text-slate-950" strokeWidth={2.5} />
+            </div>
+            <div>
+              <h1 className="font-bold text-slate-100 leading-tight flex items-center gap-2">
+                Riggy
+                {!isEditor && (
+                  <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-400 rounded-full px-2 py-0.5">
+                    View only
+                  </span>
+                )}
+              </h1>
+              <p className="text-xs text-slate-500 leading-tight">What are you working on?</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {isEditor && (
+              <button
+                onClick={() => onSelectJobs("suggestions")}
+                title="Suggestions"
+                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+              >
+                <Inbox className="w-4 h-4" />
+              </button>
+            )}
+            {isEditor && (
+              <button
+                onClick={() => onSelectJobs("fieldRequests")}
+                title="Field requests"
+                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+              >
+                <QrCode className="w-4 h-4" />
+              </button>
+            )}
+            {isEditor && (
+              <button
+                onClick={() => onSelectJobs("returns")}
+                title="Returns"
+                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </button>
+            )}
+            {isEditor && (
+              <button
+                onClick={() => onSelectJobs("todo")}
+                title="Shop To Do"
+                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+              >
+                <ClipboardList className="w-4 h-4" />
+              </button>
+            )}
+            <button
+              onClick={() => onSelectJobs("catalog")}
+              title="Item catalog"
+              className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+            >
+              <BookOpen className="w-4 h-4" />
+            </button>
+            {isEditor ? (
+              <button
+                onClick={onSignOut}
+                title="Log out"
+                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            ) : (
+              <button
+                onClick={onRequestLogin}
+                className="text-xs text-slate-400 hover:text-slate-200 underline underline-offset-2 px-1"
+              >
+                Log in to edit
+              </button>
+            )}
+            {isEditor && (
+              <button
+                onClick={() => onSelectJobs("quickTransfer")}
+                className="flex items-center gap-1.5 bg-slate-800 border border-slate-700 text-slate-200 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-slate-700"
+              >
+                <Truck className="w-4 h-4" />
+                <span className="hidden sm:inline">Quick Transfer</span>
+              </button>
+            )}
+            {isEditor && (
+              <button
+                onClick={() => onSelectJobs("newJob")}
+                className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
+              >
+                <Plus className="w-4 h-4" />
+                <span className="hidden sm:inline">New job</span>
+              </button>
+            )}
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-md mx-auto px-4 py-16">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <button
             onClick={onSelectLove}
@@ -11529,7 +11667,7 @@ function AppLandingScreen({ onSelectLove, onSelectJobs }) {
             <p className="text-xs text-slate-500 mt-1">Daily field requests, across every job</p>
           </button>
           <button
-            onClick={onSelectJobs}
+            onClick={() => onSelectJobs()}
             className="bg-slate-900 border-2 border-slate-800 hover:border-amber-500/60 hover:bg-amber-500/5 rounded-xl p-8 text-center transition-colors"
           >
             <Briefcase className="w-9 h-9 text-amber-400 mx-auto mb-3" />
@@ -11537,7 +11675,7 @@ function AppLandingScreen({ onSelectLove, onSelectJobs }) {
             <p className="text-xs text-slate-500 mt-1">Full job inventory tracking</p>
           </button>
         </div>
-      </div>
+      </main>
     </div>
   );
 }
@@ -11847,6 +11985,9 @@ function LoveListItemEntry({ catalog, allLists = [], currentListId, onLearnAlias
                     key={c.id}
                     onClick={() => {
                       setManualCatalogId(c.id);
+                      setStorage(c.storage || "");
+                      setStorageDetail(c.storage === "Other" ? c.storageDetail || "" : "");
+                      setStorageTouched(false);
                       onLearnAlias && onLearnAlias(c.id, name);
                       setShowCatalogPicker(false);
                       setCatalogSearch("");
@@ -12394,6 +12535,12 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
           ? {
               ...i,
               catalogId: catalogItem ? catalogItem.id : null,
+              storage: catalogItem ? catalogItem.storage || "" : i.storage,
+              storageDetail: catalogItem
+                ? catalogItem.storage === "Other"
+                  ? catalogItem.storageDetail || ""
+                  : ""
+                : i.storageDetail,
               needsTransfer: catalogItem ? !!catalogItem.needsTransfer : i.needsTransfer,
             }
           : i
@@ -13365,6 +13512,7 @@ export default function AuthGate() {
   const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
   const [showLogin, setShowLogin] = useState(false);
   const [appSection, setAppSection] = useState(null); // null = landing, "jobs" | "love"
+  const [pendingJobAction, setPendingJobAction] = useState(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -13388,8 +13536,14 @@ export default function AuthGate() {
     <>
       {appSection === null ? (
         <AppLandingScreen
+          isEditor={!!session}
           onSelectLove={() => setAppSection("love")}
-          onSelectJobs={() => setAppSection("jobs")}
+          onSelectJobs={(action) => {
+            setPendingJobAction(action || null);
+            setAppSection("jobs");
+          }}
+          onRequestLogin={() => setShowLogin(true)}
+          onSignOut={() => supabase.auth.signOut()}
         />
       ) : appSection === "love" ? (
         <LoveListsApp isEditor={!!session} onGoHome={() => setAppSection(null)} />
@@ -13399,6 +13553,7 @@ export default function AuthGate() {
           onSignOut={() => supabase.auth.signOut()}
           onRequestLogin={() => setShowLogin(true)}
           onGoToLanding={() => setAppSection(null)}
+          initialAction={pendingJobAction}
         />
       )}
       {showLogin && !session && (
