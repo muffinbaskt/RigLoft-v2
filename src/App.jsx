@@ -13092,29 +13092,43 @@ function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onScanList
                 Nothing matching "{search}" on any active list.
               </p>
             ) : (
-              <div className="space-y-2">
-                {searchResults.map(({ list, item }) => {
-                  const meta = loveStatusMeta(item.status);
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() => onOpenList(list)}
-                      className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm text-slate-100">
-                          {item.name} <span className="text-slate-500">x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}</span>
-                        </p>
-                        <span className={`text-xs rounded-full px-2 py-0.5 border shrink-0 ${meta.color}`}>
-                          {meta.label}
-                        </span>
+              <div className="space-y-5">
+                {[...new Map(searchResults.map((r) => [r.list.jobLabel, r.list.jobLabel])).keys()]
+                  .sort((a, b) => a.localeCompare(b))
+                  .map((jobLabel) => (
+                    <div key={jobLabel}>
+                      <p className="font-semibold text-slate-100 mb-2">{jobLabel}</p>
+                      <div className="space-y-2">
+                        {searchResults
+                          .filter((r) => r.list.jobLabel === jobLabel)
+                          .map(({ list, item }) => {
+                            const meta = loveStatusMeta(item.status);
+                            return (
+                              <button
+                                key={item.id}
+                                onClick={() => onOpenList(list)}
+                                className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="text-sm text-slate-100">
+                                    {item.name}{" "}
+                                    <span className="text-slate-500">
+                                      x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
+                                    </span>
+                                  </p>
+                                  <span className={`text-xs rounded-full px-2 py-0.5 border shrink-0 ${meta.color}`}>
+                                    {meta.label}
+                                  </span>
+                                </div>
+                                <p className="text-xs text-slate-500 mt-1">
+                                  received {list.dateReceived}
+                                </p>
+                              </button>
+                            );
+                          })}
                       </div>
-                      <p className="text-xs text-slate-500 mt-1">
-                        Job {list.jobLabel} · received {list.dateReceived}
-                      </p>
-                    </button>
-                  );
-                })}
+                    </div>
+                  ))}
               </div>
             )}
           </div>
