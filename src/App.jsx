@@ -16,6 +16,7 @@ import {
   History,
   Filter,
   Briefcase,
+  Heart,
   Truck,
   Copy,
   Search,
@@ -6671,6 +6672,7 @@ function JobPicker({
   returnsCount,
   onOpenGeneralTodo,
   onCheckForUpdate,
+  onGoToLanding,
   updateCheckMessage,
 }) {
   const [collapsed, setCollapsed] = useState({});
@@ -6783,6 +6785,13 @@ function JobPicker({
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
         <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
+            <button
+              onClick={onGoToLanding}
+              title="Back to app home"
+              className="w-8 h-8 rounded-md bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 hover:bg-slate-700 active:scale-90 transition-transform"
+            >
+              <Home className="w-4 h-4" />
+            </button>
             <button
               onClick={onCheckForUpdate}
               title="Check for updates"
@@ -9663,7 +9672,7 @@ async function maybeAutoBackup(jobs, catalog) {
   }
 }
 
-function WareHub({ isEditor, onSignOut, onRequestLogin }) {
+function WareHub({ isEditor, onSignOut, onRequestLogin, onGoToLanding }) {
   const [jobs, setJobs] = useState([]);
   const [activeJobId, setActiveJobId] = useState(null);
   const [showPicker, setShowPicker] = useState(true);
@@ -11267,6 +11276,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
           returnsCount={returns.length}
           onOpenGeneralTodo={() => setShowGeneralTodo(true)}
           onCheckForUpdate={checkForUpdateNow}
+          onGoToLanding={onGoToLanding}
           updateCheckMessage={updateCheckMessage}
         />
       ) : (
@@ -11421,6 +11431,710 @@ function WareHub({ isEditor, onSignOut, onRequestLogin }) {
   );
 }
 
+function AppLandingScreen({ onSelectLove, onSelectJobs }) {
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center px-4">
+      <div className="w-full max-w-md">
+        <h1 className="text-2xl font-bold text-center mb-1">Riggy</h1>
+        <p className="text-sm text-slate-500 text-center mb-8">What are you working on?</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <button
+            onClick={onSelectLove}
+            className="bg-slate-900 border-2 border-slate-800 hover:border-rose-500/60 hover:bg-rose-500/5 rounded-xl p-8 text-center transition-colors"
+          >
+            <Heart className="w-9 h-9 text-rose-400 mx-auto mb-3" />
+            <p className="text-lg font-semibold text-slate-100">Love Lists</p>
+            <p className="text-xs text-slate-500 mt-1">Daily field requests, across every job</p>
+          </button>
+          <button
+            onClick={onSelectJobs}
+            className="bg-slate-900 border-2 border-slate-800 hover:border-amber-500/60 hover:bg-amber-500/5 rounded-xl p-8 text-center transition-colors"
+          >
+            <Briefcase className="w-9 h-9 text-amber-400 mx-auto mb-3" />
+            <p className="text-lg font-semibold text-slate-100">Job Lists</p>
+            <p className="text-xs text-slate-500 mt-1">Full job inventory tracking</p>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const LOVE_STATUSES = [
+  { key: "requested", label: "Requested", color: "bg-slate-700 text-slate-200 border-slate-600" },
+  { key: "ordered", label: "Ordered", color: "bg-amber-500/15 text-amber-300 border-amber-500/40" },
+  { key: "received", label: "Received", color: "bg-sky-500/15 text-sky-300 border-sky-500/40" },
+  { key: "sent", label: "Sent to job", color: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40" },
+];
+const nextLoveStatus = (status) => {
+  const idx = LOVE_STATUSES.findIndex((s) => s.key === status);
+  return idx >= 0 && idx < LOVE_STATUSES.length - 1 ? LOVE_STATUSES[idx + 1].key : null;
+};
+const prevLoveStatus = (status) => {
+  const idx = LOVE_STATUSES.findIndex((s) => s.key === status);
+  return idx > 0 ? LOVE_STATUSES[idx - 1].key : null;
+};
+const loveStatusMeta = (key) => LOVE_STATUSES.find((s) => s.key === key) || LOVE_STATUSES[0];
+
+function newLoveListItem(name, qty) {
+  const today = new Date().toISOString().slice(0, 10);
+  return {
+    id: uniqueId(),
+    name,
+    qty,
+    status: "requested",
+    statusDates: { requested: today, ordered: null, received: null, sent: null },
+    notes: "",
+  };
+}
+
+function LoveListAddForm({ onSave, onCancel }) {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const [jobLabel, setJobLabel] = useState("");
+  const [submittedBy, setSubmittedBy] = useState("");
+  const [dateReceived, setDateReceived] = useState(todayStr);
+  const [itemName, setItemName] = useState("");
+  const [itemQty, setItemQty] = useState("");
+  const [items, setItems] = useState([]);
+
+  const addItem = () => {
+    if (!itemName.trim()) return;
+    setItems((prev) => [
+      ...prev,
+      newLoveListItem(itemName.trim(), itemQty.trim() === "" ? 1 : Number(itemQty) || 1),
+    ]);
+    setItemName("");
+    setItemQty("");
+  };
+
+  const canSave = jobLabel.trim() && items.length > 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-md rounded-lg max-h-full flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <h2 className="text-slate-100 font-semibold text-base">New Love List</h2>
+          <button onClick={onCancel} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                Job # / name
+              </label>
+              <input
+                autoFocus
+                value={jobLabel}
+                onChange={(e) => setJobLabel(e.target.value)}
+                placeholder="e.g. 3052"
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                Submitted by
+              </label>
+              <input
+                value={submittedBy}
+                onChange={(e) => setSubmittedBy(e.target.value)}
+                placeholder="optional"
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+              />
+            </div>
+          </div>
+          <div className="mb-4">
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              Date received
+            </label>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setDateReceived(todayStr)}
+                className={`flex-1 text-sm rounded-md py-2 border transition-colors ${
+                  dateReceived === todayStr
+                    ? "bg-rose-500/15 border-rose-500/50 text-rose-300"
+                    : "bg-slate-800 border-slate-700 text-slate-400"
+                }`}
+              >
+                Today
+              </button>
+              <input
+                type="date"
+                value={dateReceived}
+                onChange={(e) => setDateReceived(e.target.value)}
+                className="flex-1 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+              />
+            </div>
+          </div>
+
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">Items</label>
+          <div className="grid grid-cols-3 gap-2 mb-2">
+            <input
+              value={itemName}
+              onChange={(e) => setItemName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addItem()}
+              placeholder="Item name"
+              className="col-span-2 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+            />
+            <input
+              type="number"
+              min="1"
+              value={itemQty}
+              onChange={(e) => setItemQty(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addItem()}
+              placeholder="Qty"
+              className="bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+            />
+          </div>
+          <button
+            onClick={addItem}
+            disabled={!itemName.trim()}
+            className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-200 hover:bg-slate-800 disabled:opacity-40 mb-3"
+          >
+            + Add item
+          </button>
+
+          {items.length > 0 && (
+            <div className="space-y-1.5">
+              {items.map((it) => (
+                <div
+                  key={it.id}
+                  className="flex items-center justify-between gap-2 bg-slate-800/40 border border-slate-800 rounded-md px-3 py-2"
+                >
+                  <p className="text-sm text-slate-100">
+                    {it.name} <span className="text-slate-500">x{it.qty}</span>
+                  </p>
+                  <button
+                    onClick={() => setItems((prev) => prev.filter((i) => i.id !== it.id))}
+                    className="text-slate-600 hover:text-red-400"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+          <button
+            onClick={() => onSave({ jobLabel: jobLabel.trim(), submittedBy: submittedBy.trim(), dateReceived, items })}
+            disabled={!canSave}
+            className="w-full text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400 disabled:opacity-40"
+          >
+            Save Love List
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LoveListDetailPage({ list, onUpdateList, onDeleteList, onBack, onGoHome }) {
+  const [addingItem, setAddingItem] = useState(false);
+  const [itemName, setItemName] = useState("");
+  const [itemQty, setItemQty] = useState("");
+  const [deleteItemTarget, setDeleteItemTarget] = useState(null);
+  const [deleteListConfirm, setDeleteListConfirm] = useState(false);
+
+  const advanceStatus = (itemId, direction) => {
+    playSoftTap();
+    onUpdateList({
+      ...list,
+      items: list.items.map((i) => {
+        if (i.id !== itemId) return i;
+        const newStatus = direction === "forward" ? nextLoveStatus(i.status) : prevLoveStatus(i.status);
+        if (!newStatus) return i;
+        const today = new Date().toISOString().slice(0, 10);
+        return {
+          ...i,
+          status: newStatus,
+          statusDates: {
+            ...i.statusDates,
+            [newStatus]: direction === "forward" ? today : i.statusDates[newStatus],
+          },
+        };
+      }),
+    });
+  };
+
+  const addItem = () => {
+    if (!itemName.trim()) return;
+    playSaveChime();
+    onUpdateList({
+      ...list,
+      items: [
+        ...list.items,
+        newLoveListItem(itemName.trim(), itemQty.trim() === "" ? 1 : Number(itemQty) || 1),
+      ],
+    });
+    setItemName("");
+    setItemQty("");
+    setAddingItem(false);
+  };
+
+  const deleteItem = (id) => {
+    onUpdateList({ ...list, items: list.items.filter((i) => i.id !== id) });
+    setDeleteItemTarget(null);
+  };
+
+  const counts = LOVE_STATUSES.reduce((acc, s) => {
+    acc[s.key] = list.items.filter((i) => i.status === s.key).length;
+    return acc;
+  }, {});
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
+        <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <button onClick={onBack} className="text-slate-400 hover:text-slate-200 shrink-0">
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <button onClick={onGoHome} className="text-slate-400 hover:text-slate-200 shrink-0">
+              <Home className="w-4 h-4" />
+            </button>
+            <div className="min-w-0">
+              <p className="font-semibold text-slate-100 truncate flex items-center gap-1.5">
+                <Heart className="w-4 h-4 text-rose-400 shrink-0" />
+                {list.jobLabel}
+              </p>
+              <p className="text-xs text-slate-500 truncate">
+                {list.dateReceived}
+                {list.submittedBy ? ` · ${list.submittedBy}` : ""}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setDeleteListConfirm(true)}
+            className="text-slate-500 hover:text-red-400 p-2 shrink-0"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      </header>
+
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        <div className="flex flex-wrap gap-2 mb-4">
+          {LOVE_STATUSES.map((s) => (
+            <span
+              key={s.key}
+              className={`text-xs rounded-full px-2.5 py-1 border ${s.color}`}
+            >
+              {counts[s.key]} {s.label}
+            </span>
+          ))}
+        </div>
+
+        <div className="space-y-2 mb-4">
+          {list.items.map((item) => {
+            const meta = loveStatusMeta(item.status);
+            return (
+              <div key={item.id} className="border border-slate-800 rounded-lg p-3 bg-slate-900">
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <p className="text-sm text-slate-100 min-w-0 truncate">
+                    {item.name} <span className="text-slate-500">x{item.qty}</span>
+                  </p>
+                  <button
+                    onClick={() => setDeleteItemTarget(item)}
+                    className="text-slate-600 hover:text-red-400 shrink-0"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => advanceStatus(item.id, "back")}
+                    disabled={!prevLoveStatus(item.status)}
+                    className="text-slate-500 hover:text-slate-300 disabled:opacity-20 disabled:hover:text-slate-500 p-1"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <span className={`flex-1 text-center text-xs font-medium rounded-full px-2.5 py-1.5 border ${meta.color}`}>
+                    {meta.label}
+                    {item.statusDates[item.status] && ` · ${item.statusDates[item.status]}`}
+                  </span>
+                  <button
+                    onClick={() => advanceStatus(item.id, "forward")}
+                    disabled={!nextLoveStatus(item.status)}
+                    className="text-slate-500 hover:text-slate-300 disabled:opacity-20 disabled:hover:text-slate-500 p-1"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {addingItem ? (
+          <div className="border border-slate-800 rounded-lg p-3 bg-slate-900">
+            <div className="grid grid-cols-3 gap-2 mb-2">
+              <input
+                autoFocus
+                value={itemName}
+                onChange={(e) => setItemName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addItem()}
+                placeholder="Item name"
+                className="col-span-2 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+              />
+              <input
+                type="number"
+                min="1"
+                value={itemQty}
+                onChange={(e) => setItemQty(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addItem()}
+                placeholder="Qty"
+                className="bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setAddingItem(false)}
+                className="flex-1 text-sm rounded-md py-2 border border-slate-700 text-slate-300"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={addItem}
+                disabled={!itemName.trim()}
+                className="flex-1 text-sm rounded-md py-2 bg-rose-500 text-slate-950 font-semibold disabled:opacity-40"
+              >
+                Add
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => setAddingItem(true)}
+            className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 border border-slate-700 text-slate-200 hover:bg-slate-800"
+          >
+            <Plus className="w-4 h-4" />
+            Add item
+          </button>
+        )}
+      </main>
+
+      {deleteItemTarget && (
+        <ConfirmDelete
+          title="Remove this item?"
+          message={`"${deleteItemTarget.name}" will be removed from this list.`}
+          onConfirm={() => deleteItem(deleteItemTarget.id)}
+          onCancel={() => setDeleteItemTarget(null)}
+        />
+      )}
+      {deleteListConfirm && (
+        <ConfirmDelete
+          title="Delete this whole Love List?"
+          message={`The list for "${list.jobLabel}" and all its items will be permanently removed.`}
+          onConfirm={() => onDeleteList(list.id)}
+          onCancel={() => setDeleteListConfirm(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function LoveListsDashboard({ lists, onOpenList, onAddList, onGoHome }) {
+  const [search, setSearch] = useState("");
+  const [tab, setTab] = useState("active"); // "active" | "ready"
+
+  const searchLower = search.trim().toLowerCase();
+  const searchResults = searchLower
+    ? lists.flatMap((l) =>
+        l.items
+          .filter((i) => i.name.toLowerCase().includes(searchLower))
+          .map((i) => ({ list: l, item: i }))
+      )
+    : [];
+
+  const jobGroups = [...new Map(lists.map((l) => [l.jobLabel, l.jobLabel])).entries()]
+    .map(([label]) => label)
+    .sort((a, b) => a.localeCompare(b));
+
+  const readyToSend = lists.flatMap((l) =>
+    l.items.filter((i) => i.status === "received").map((i) => ({ list: l, item: i }))
+  );
+  const readyByJob = [...new Map(readyToSend.map((r) => [r.list.jobLabel, r.list.jobLabel])).keys()].sort(
+    (a, b) => a.localeCompare(b)
+  );
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
+        <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <button onClick={onGoHome} className="text-slate-400 hover:text-slate-200">
+              <Home className="w-4 h-4" />
+            </button>
+            <p className="font-semibold text-slate-100 flex items-center gap-1.5">
+              <Heart className="w-4 h-4 text-rose-400" />
+              Love Lists
+            </p>
+          </div>
+          <button
+            onClick={onAddList}
+            className="flex items-center gap-1.5 bg-rose-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-rose-400"
+          >
+            <Plus className="w-4 h-4" />
+            New list
+          </button>
+        </div>
+        <div className="max-w-2xl mx-auto px-4 pb-3">
+          <div className="relative">
+            <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search an item — find out where it goes..."
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md pl-9 pr-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+            />
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        {searchLower ? (
+          <div>
+            <p className="text-xs text-slate-500 mb-3">
+              {searchResults.length} match{searchResults.length === 1 ? "" : "es"}
+            </p>
+            {searchResults.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-10">
+                Nothing matching "{search}" on any active list.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {searchResults.map(({ list, item }) => {
+                  const meta = loveStatusMeta(item.status);
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => onOpenList(list)}
+                      className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm text-slate-100">
+                          {item.name} <span className="text-slate-500">x{item.qty}</span>
+                        </p>
+                        <span className={`text-xs rounded-full px-2 py-0.5 border shrink-0 ${meta.color}`}>
+                          {meta.label}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Job {list.jobLabel} · received {list.dateReceived}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="flex gap-2 mb-4">
+              <button
+                onClick={() => setTab("active")}
+                className={`flex-1 text-sm rounded-md py-2 border ${
+                  tab === "active"
+                    ? "bg-rose-500/15 border-rose-500/50 text-rose-300"
+                    : "bg-slate-800 border-slate-700 text-slate-400"
+                }`}
+              >
+                All lists
+              </button>
+              <button
+                onClick={() => setTab("ready")}
+                className={`flex-1 text-sm rounded-md py-2 border relative ${
+                  tab === "ready"
+                    ? "bg-rose-500/15 border-rose-500/50 text-rose-300"
+                    : "bg-slate-800 border-slate-700 text-slate-400"
+                }`}
+              >
+                Ready to send
+                {readyToSend.length > 0 && (
+                  <span className="ml-1.5 bg-emerald-500 text-slate-950 text-[10px] font-bold rounded-full px-1.5 py-0.5">
+                    {readyToSend.length}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {tab === "active" ? (
+              jobGroups.length === 0 ? (
+                <p className="text-sm text-slate-500 text-center py-10">
+                  No Love Lists yet — tap "New list" to log one in.
+                </p>
+              ) : (
+                <div className="space-y-5">
+                  {jobGroups.map((jobLabel) => (
+                    <div key={jobLabel}>
+                      <p className="font-semibold text-slate-100 mb-2">{jobLabel}</p>
+                      <div className="space-y-2">
+                        {lists
+                          .filter((l) => l.jobLabel === jobLabel)
+                          .sort((a, b) => b.dateReceived.localeCompare(a.dateReceived))
+                          .map((list) => {
+                            const counts = LOVE_STATUSES.map((s) => ({
+                              ...s,
+                              n: list.items.filter((i) => i.status === s.key).length,
+                            })).filter((s) => s.n > 0);
+                            return (
+                              <button
+                                key={list.id}
+                                onClick={() => onOpenList(list)}
+                                className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700"
+                              >
+                                <div className="flex items-center justify-between gap-2 mb-1.5">
+                                  <p className="text-sm text-slate-100">
+                                    {list.items.length} item{list.items.length === 1 ? "" : "s"}
+                                  </p>
+                                  <p className="text-xs text-slate-500">{list.dateReceived}</p>
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {counts.map((s) => (
+                                    <span
+                                      key={s.key}
+                                      className={`text-[10px] rounded-full px-2 py-0.5 border ${s.color}`}
+                                    >
+                                      {s.n} {s.label}
+                                    </span>
+                                  ))}
+                                </div>
+                              </button>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : readyByJob.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-10">
+                Nothing's sitting received-but-not-sent right now.
+              </p>
+            ) : (
+              <div className="space-y-5">
+                {readyByJob.map((jobLabel) => (
+                  <div key={jobLabel}>
+                    <p className="font-semibold text-slate-100 mb-2">{jobLabel}</p>
+                    <div className="space-y-2">
+                      {readyToSend
+                        .filter((r) => r.list.jobLabel === jobLabel)
+                        .map(({ list, item }) => (
+                          <button
+                            key={item.id}
+                            onClick={() => onOpenList(list)}
+                            className="w-full text-left bg-slate-900 border border-sky-500/30 rounded-lg p-3 hover:border-sky-500/50"
+                          >
+                            <p className="text-sm text-slate-100">
+                              {item.name} <span className="text-slate-500">x{item.qty}</span>
+                            </p>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              Received {item.statusDates.received}
+                            </p>
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </main>
+    </div>
+  );
+}
+
+const LOVE_LISTS_KEY = "warehub-love-lists";
+
+function LoveListsApp({ onGoHome }) {
+  const [lists, setLists] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [activeListId, setActiveListId] = useState(null);
+  const [showAddForm, setShowAddForm] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const result = await getWithRetry(LOVE_LISTS_KEY);
+        if (result.ok && result.value) setLists(JSON.parse(result.value));
+      } catch {
+        // corrupted stored data — start empty
+      }
+      setLoading(false);
+    })();
+  }, []);
+
+  const updateLists = (updater) => {
+    setLists((prev) => {
+      const next = updater(prev);
+      saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
+  const activeList = lists.find((l) => l.id === activeListId) || null;
+
+  const handleSaveNewList = ({ jobLabel, submittedBy, dateReceived, items }) => {
+    const list = {
+      id: uniqueId(),
+      jobLabel,
+      submittedBy,
+      dateReceived,
+      items,
+      createdAt: timeStamp(),
+    };
+    playSaveChime();
+    updateLists((prev) => [...prev, list]);
+    setShowAddForm(false);
+  };
+
+  const handleUpdateList = (updated) => {
+    updateLists((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
+  };
+
+  const handleDeleteList = (id) => {
+    updateLists((prev) => prev.filter((l) => l.id !== id));
+    setActiveListId(null);
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="w-4 h-4 border-2 border-slate-700 border-t-rose-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (activeList) {
+    return (
+      <LoveListDetailPage
+        list={activeList}
+        onUpdateList={handleUpdateList}
+        onDeleteList={handleDeleteList}
+        onBack={() => setActiveListId(null)}
+        onGoHome={onGoHome}
+      />
+    );
+  }
+
+  return (
+    <>
+      <LoveListsDashboard
+        lists={lists}
+        onOpenList={(l) => setActiveListId(l.id)}
+        onAddList={() => setShowAddForm(true)}
+        onGoHome={onGoHome}
+      />
+      {showAddForm && (
+        <LoveListAddForm onSave={handleSaveNewList} onCancel={() => setShowAddForm(false)} />
+      )}
+    </>
+  );
+}
+
 function LoginScreen({ onSignedIn, embedded = false }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -11500,6 +12214,7 @@ function LoginScreen({ onSignedIn, embedded = false }) {
 export default function AuthGate() {
   const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
   const [showLogin, setShowLogin] = useState(false);
+  const [appSection, setAppSection] = useState(null); // null = landing, "jobs" | "love"
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -11521,11 +12236,21 @@ export default function AuthGate() {
 
   return (
     <>
-      <WareHub
-        isEditor={!!session}
-        onSignOut={() => supabase.auth.signOut()}
-        onRequestLogin={() => setShowLogin(true)}
-      />
+      {appSection === null ? (
+        <AppLandingScreen
+          onSelectLove={() => setAppSection("love")}
+          onSelectJobs={() => setAppSection("jobs")}
+        />
+      ) : appSection === "love" ? (
+        <LoveListsApp onGoHome={() => setAppSection(null)} />
+      ) : (
+        <WareHub
+          isEditor={!!session}
+          onSignOut={() => supabase.auth.signOut()}
+          onRequestLogin={() => setShowLogin(true)}
+          onGoToLanding={() => setAppSection(null)}
+        />
+      )}
       {showLogin && !session && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-4">
           <div className="relative w-full max-w-sm">
