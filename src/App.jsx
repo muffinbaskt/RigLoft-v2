@@ -12513,6 +12513,9 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
   const [renameDraft, setRenameDraft] = useState("");
   const [editingNoteFor, setEditingNoteFor] = useState(null); // item, while editing its note
   const [noteDraft, setNoteDraft] = useState("");
+  const [editingQtyFor, setEditingQtyFor] = useState(null); // item, while editing its qty
+  const [qtyDraft, setQtyDraft] = useState("");
+  const [qtyUnitDraft, setQtyUnitDraft] = useState("");
   const [catalogSearch, setCatalogSearch] = useState("");
   const [smeDraft, setSmeDraft] = useState("");
   const [showArchived, setShowArchived] = useState(false);
@@ -12591,6 +12594,20 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
       ),
     });
     setEditingNoteFor(null);
+  };
+
+  const saveQty = () => {
+    if (!editingQtyFor) return;
+    const num = Number(qtyDraft);
+    if (!num || num <= 0) return;
+    playSaveChime();
+    onUpdateList({
+      ...list,
+      items: list.items.map((i) =>
+        i.id === editingQtyFor.id ? { ...i, qty: num, qtyUnit: qtyUnitDraft.trim() } : i
+      ),
+    });
+    setEditingQtyFor(null);
   };
 
   const relinkCatalog = (catalogItem) => {
@@ -12792,18 +12809,27 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
                 <div className="flex items-center justify-between gap-2 mb-2">
                   <div className="min-w-0">
                     {isEditor ? (
-                      <button
-                        onClick={() => {
-                          setRenamingItem(item);
-                          setRenameDraft(item.name);
-                        }}
-                        className="text-sm text-slate-100 truncate text-left hover:underline decoration-dotted"
-                      >
-                        {item.name}{" "}
-                        <span className="text-slate-500">
+                      <p className="text-sm truncate">
+                        <button
+                          onClick={() => {
+                            setRenamingItem(item);
+                            setRenameDraft(item.name);
+                          }}
+                          className="text-slate-100 hover:underline decoration-dotted"
+                        >
+                          {item.name}
+                        </button>{" "}
+                        <button
+                          onClick={() => {
+                            setEditingQtyFor(item);
+                            setQtyDraft(String(item.qty));
+                            setQtyUnitDraft(item.qtyUnit || "");
+                          }}
+                          className="text-slate-500 hover:underline decoration-dotted"
+                        >
                           x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
-                        </span>
-                      </button>
+                        </button>
+                      </p>
                     ) : (
                       <p className="text-sm text-slate-100 truncate">
                         {item.name}{" "}
@@ -13111,6 +13137,47 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
               <button
                 onClick={saveNote}
                 className="flex-1 text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingQtyFor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-3">Qty for "{editingQtyFor.name}"</h3>
+            <div className="flex gap-2 mb-4">
+              <input
+                autoFocus
+                type="number"
+                min="1"
+                value={qtyDraft}
+                onChange={(e) => setQtyDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveQty()}
+                className="w-20 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+              />
+              <input
+                value={qtyUnitDraft}
+                onChange={(e) => setQtyUnitDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveQty()}
+                placeholder="each (default), case, box, custom..."
+                className="flex-1 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+              />
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setEditingQtyFor(null)}
+                className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveQty}
+                disabled={!Number(qtyDraft) || Number(qtyDraft) <= 0}
+                className="flex-1 text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400 disabled:opacity-40"
               >
                 Save
               </button>
