@@ -12538,7 +12538,22 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
 
   const visibleItems = list.items.filter((i) => showArchived || !i.archived);
   const archivedCount = list.items.filter((i) => i.archived).length;
-  const sentUnarchivedCount = list.items.filter((i) => i.status === "sent" && !i.archived).length;
+  const sentUnarchivedItems = list.items.filter((i) => i.status === "sent" && !i.archived);
+  const sentUnarchivedCount = sentUnarchivedItems.length;
+  const [showTransferList, setShowTransferList] = useState(false);
+  const [transferCopied, setTransferCopied] = useState(false);
+
+  const transferListText = sentUnarchivedItems
+    .map((i) => `${i.name} x${i.qty}${i.qtyUnit ? ` ${i.qtyUnit}` : ""}`)
+    .join("\n");
+
+  const copyTransferList = async () => {
+    const ok = await copyToClipboard(`Transfer list — ${list.jobLabel}\n\n${transferListText}`);
+    if (ok) {
+      setTransferCopied(true);
+      setTimeout(() => setTransferCopied(false), 1500);
+    }
+  };
 
   const saveSme = () => {
     if (!editingSmeFor) return;
@@ -12702,9 +12717,16 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
           ))}
         </div>
 
-        {isEditor && (sentUnarchivedCount > 0 || archivedCount > 0) && (
-          <div className="flex items-center gap-3 mb-4">
-            {sentUnarchivedCount > 0 && (
+        {sentUnarchivedCount > 0 && (
+          <div className="flex items-center gap-3 mb-4 flex-wrap">
+            <button
+              onClick={() => setShowTransferList(true)}
+              className="text-xs flex items-center gap-1 text-slate-400 hover:text-slate-200 border border-slate-700 rounded-md px-2.5 py-1.5"
+            >
+              <Truck className="w-3.5 h-3.5" />
+              Generate transfer list ({sentUnarchivedCount})
+            </button>
+            {isEditor && (
               <button
                 onClick={archiveAllSent}
                 className="text-xs flex items-center gap-1 text-slate-400 hover:text-slate-200 border border-slate-700 rounded-md px-2.5 py-1.5"
@@ -12721,6 +12743,16 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
                 {showArchived ? "Hide" : "Show"} {archivedCount} archived
               </button>
             )}
+          </div>
+        )}
+        {sentUnarchivedCount === 0 && archivedCount > 0 && isEditor && (
+          <div className="mb-4">
+            <button
+              onClick={() => setShowArchived((v) => !v)}
+              className="text-xs text-slate-500 hover:text-slate-300"
+            >
+              {showArchived ? "Hide" : "Show"} {archivedCount} archived
+            </button>
           </div>
         )}
 
@@ -12945,6 +12977,53 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
           onConfirm={() => onDeleteList(list.id)}
           onCancel={() => setDeleteListConfirm(false)}
         />
+      )}
+
+      {showTransferList && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
+          <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <div>
+                <h3 className="text-slate-100 font-semibold text-base flex items-center gap-2">
+                  <Truck className="w-4 h-4 text-purple-400" />
+                  Transfer list
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {list.jobLabel} · {sentUnarchivedCount} item{sentUnarchivedCount === 1 ? "" : "s"} sent
+                </p>
+              </div>
+              <button
+                onClick={() => setShowTransferList(false)}
+                className="text-slate-400 hover:text-slate-200 shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden">
+                {sentUnarchivedItems.map((item) => (
+                  <div key={item.id} className="px-3 py-2 bg-slate-800/40">
+                    <p className="text-sm text-slate-100">
+                      {item.name}{" "}
+                      <span className="text-slate-500">
+                        x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
+                      </span>
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+              <button
+                onClick={copyTransferList}
+                className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                {transferCopied ? "Copied!" : "Copy list"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {renamingItem && (
