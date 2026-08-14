@@ -12038,7 +12038,7 @@ function LoveListItemEntry({ catalog, allLists = [], currentListId, onLearnAlias
   );
 }
 
-function LoveListScanModal({ catalog, onSave, onCancel }) {
+function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const [step, setStep] = useState("details"); // "details" | "scanning" | "review" | "error"
   const [jobLabel, setJobLabel] = useState("");
@@ -12356,6 +12356,7 @@ function LoveListScanModal({ catalog, onSave, onCancel }) {
                         storageDetail: c.storage === "Other" ? c.storageDetail || "" : "",
                         needsTransfer: !!c.needsTransfer,
                       });
+                      onLearnAlias && onLearnAlias(c.id, relinkingReviewItem.name);
                       setRelinkingReviewItem(null);
                       setCatalogSearch("");
                     }}
@@ -13717,6 +13718,7 @@ function LoveListsApp({ isEditor, onGoHome }) {
       {showScanModal && isEditor && (
         <LoveListScanModal
           catalog={catalog}
+          onLearnAlias={learnCatalogAlias}
           onSave={handleSaveNewList}
           onCancel={() => setShowScanModal(false)}
         />
