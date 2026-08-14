@@ -6049,7 +6049,7 @@ function SuggestNewItemModal({ job, managerName, onClose }) {
   );
 }
 
-function ItemCard({ item, selectMode, selected, isEditor, onToggleSelect, onEdit, onDelete, onViewSerials, onSuggestEdit, onOpenContainer }) {
+function ItemCard({ item, selectMode, selected, isEditor, workerTasks = [], onToggleSelect, onEdit, onDelete, onViewSerials, onSuggestEdit, onOpenContainer, onAssignItem }) {
   const handleCardClick = () => {
     if (selectMode) {
       onToggleSelect(item.id);
@@ -6144,6 +6144,41 @@ function ItemCard({ item, selectMode, selected, isEditor, onToggleSelect, onEdit
             Transferred
           </span>
         )}
+        {(() => {
+          const assignedTask = item.assignedTaskId
+            ? workerTasks.find((t) => t.id === item.assignedTaskId)
+            : null;
+          const taskMeta = assignedTask ? workerTaskStatusMeta(assignedTask.status) : null;
+          if (assignedTask) {
+            return (
+              isEditor && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAssignItem(item);
+                  }}
+                  className={`text-xs rounded-full px-2.5 py-1 border ${taskMeta.color}`}
+                >
+                  👤 {assignedTask.workerName} · {taskMeta.label}
+                </button>
+              )
+            );
+          }
+          return (
+            isEditor &&
+            !selectMode && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAssignItem(item);
+                }}
+                className="text-xs rounded-full px-2.5 py-1 border border-slate-700 text-slate-500 hover:text-slate-300"
+              >
+                + Assign
+              </button>
+            )
+          );
+        })()}
         <span className={`text-xs rounded-full px-2.5 py-1 border ${GANG_COLOR[item.gang]}`}>
           {item.gang}
         </span>
@@ -7327,6 +7362,9 @@ function JobInventory({
   job,
   isEditor: rawIsEditor,
   managerName,
+  workers = [],
+  workerTasks = [],
+  onAssignToWorker,
   onRequestLogin,
   onUpdateJob,
   onBackToJobs,
@@ -7364,6 +7402,8 @@ function JobInventory({
   const [bulkStoragePicker, setBulkStoragePicker] = useState(false);
   const [bulkContainerPicker, setBulkContainerPicker] = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
+  const [bulkAssignPicker, setBulkAssignPicker] = useState(false);
+  const [assigningItem, setAssigningItem] = useState(null);
   const [logOpen, setLogOpen] = useState(false);
   const [referenceDocsOpen, setReferenceDocsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -7685,6 +7725,56 @@ function JobInventory({
       ].slice(0, 50),
     }));
     clearSelection();
+  };
+
+  // Not routed through bulkUpdate — creating a worker task per item is a
+  // real side effect (writing to Worker Tasks storage), not a pure data
+  // transform, so it needs its own path.
+  const bulkAssignToWorker = (worker) => {
+    if (!worker || !onAssignToWorker) return;
+    playSaveChime();
+    const targetItems = (job.items || []).filter((i) => selectedItemIds.includes(i.id));
+    const taskIdByItemId = {};
+    targetItems.forEach((item) => {
+      taskIdByItemId[item.id] = onAssignToWorker(
+        worker,
+        `${item.name} x${item.qtyHave}`,
+        job.name,
+        { type: "job_item", itemId: item.id, jobId: job.id }
+      );
+    });
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      items: prevJob.items.map((i) =>
+        taskIdByItemId[i.id] ? { ...i, assignedTaskId: taskIdByItemId[i.id] } : i
+      ),
+      activityLog: [
+        {
+          id: uniqueId(),
+          time: timeStamp(),
+          message: `Assigned ${targetItems.length} item${targetItems.length === 1 ? "" : "s"} to ${worker.name}`,
+        },
+        ...prevJob.activityLog,
+      ].slice(0, 50),
+    }));
+    setBulkAssignPicker(false);
+    clearSelection();
+  };
+
+  const confirmAssignSingle = (worker) => {
+    if (!assigningItem || !worker || !onAssignToWorker) return;
+    playSaveChime();
+    const taskId = onAssignToWorker(
+      worker,
+      `${assigningItem.name} x${assigningItem.qtyHave}`,
+      job.name,
+      { type: "job_item", itemId: assigningItem.id, jobId: job.id }
+    );
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      items: prevJob.items.map((i) => (i.id === assigningItem.id ? { ...i, assignedTaskId: taskId } : i)),
+    }));
+    setAssigningItem(null);
   };
 
   const bulkSetOrdered = (value) =>
@@ -8534,6 +8624,12 @@ function JobInventory({
                   Move to container
                 </button>
                 <button
+                  onClick={() => setBulkAssignPicker(true)}
+                  className="text-xs bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-2.5 py-1.5 hover:bg-slate-700"
+                >
+                  Assign to worker
+                </button>
+                <button
                   onClick={() => setBulkCatalogPicker(true)}
                   className="text-xs bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-2.5 py-1.5 hover:bg-slate-700"
                 >
@@ -8625,6 +8721,8 @@ function JobInventory({
                             onViewSerials={setSerialsView}
                             onSuggestEdit={setSuggestEditTarget}
                             onOpenContainer={openContainerFromItem}
+                            workerTasks={workerTasks}
+                            onAssignItem={setAssigningItem}
                           />
                         ))}
                       </div>
@@ -8648,6 +8746,8 @@ function JobInventory({
                 onViewSerials={setSerialsView}
                 onSuggestEdit={setSuggestEditTarget}
                 onOpenContainer={openContainerFromItem}
+                workerTasks={workerTasks}
+                onAssignItem={setAssigningItem}
               />
             ))}
           </div>
@@ -8870,6 +8970,24 @@ function JobInventory({
             </button>
           </div>
         </div>
+      )}
+
+      {bulkAssignPicker && (
+        <AssignToWorkerModal
+          workers={workers}
+          itemLabel={`${selectedItemIds.length} selected item${selectedItemIds.length === 1 ? "" : "s"}`}
+          onAssign={bulkAssignToWorker}
+          onCancel={() => setBulkAssignPicker(false)}
+        />
+      )}
+
+      {assigningItem && (
+        <AssignToWorkerModal
+          workers={workers}
+          itemLabel={`${assigningItem.name} x${assigningItem.qtyHave}`}
+          onAssign={confirmAssignSingle}
+          onCancel={() => setAssigningItem(null)}
+        />
       )}
 
       {bulkCatalogPicker && (
@@ -9826,6 +9944,8 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   const [catalog, setCatalog] = useState([]);
   const [returns, setReturns] = useState([]);
   const [generalTodos, setGeneralTodos] = useState([]);
+  const [workers, setWorkers] = useState([]);
+  const [workerTasks, setWorkerTasks] = useState([]);
   const [catalogModalOpen, setCatalogModalOpen] = useState(false);
   const catalogSaveTimer = useRef(null);
   const catalogRef = useRef([]);
@@ -10195,6 +10315,20 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
       }
     } catch {
       // corrupted stored data — just start with an empty list
+    }
+    try {
+      const workersResult = await getWithRetry(WORKERS_KEY);
+      if (workersResult.ok && workersResult.value) setWorkers(JSON.parse(workersResult.value));
+    } catch {
+      // corrupted stored data — just start with an empty roster
+    }
+    try {
+      const workerTasksResult = await getWithRetry(WORKER_TASKS_KEY);
+      if (workerTasksResult.ok && workerTasksResult.value) {
+        setWorkerTasks(JSON.parse(workerTasksResult.value));
+      }
+    } catch {
+      // corrupted stored data — just start empty
     }
 
     let loadedJobs = null;
@@ -10929,6 +11063,20 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
     });
   };
 
+  // Assigning an item creates a real task, not just a label — same
+  // behavior as the Love Lists side, so it shows up in Worker Tasks and
+  // counts toward that person's completion rate either way.
+  const assignItemToWorker = (worker, itemLabel, jobLabel, source) => {
+    if (!isEditor) return null;
+    const task = newWorkerTask(worker.id, worker.name, itemLabel, jobLabel, source);
+    setWorkerTasks((prev) => {
+      const next = [...prev, task];
+      saveWithRetry(WORKER_TASKS_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+    return task.id;
+  };
+
   const addGeneralTodo = (text) => {
     if (!text.trim()) return;
     playSaveChime();
@@ -11457,6 +11605,9 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           job={activeJob}
           isEditor={isEditor && !activeJob.sealed}
           managerName={managerName}
+          workers={workers}
+          workerTasks={workerTasks}
+          onAssignToWorker={assignItemToWorker}
           onRequestLogin={onRequestLogin}
           onUpdateJob={updateActiveJob}
           onBackToJobs={() => setShowPicker(true)}
@@ -11832,6 +11983,7 @@ function newLoveListItem(name, qty, extra = {}) {
     needsOrdering: extra.needsOrdering !== false,
     archived: false,
     duplicateOf: extra.duplicateOf || null,
+    assignedTaskId: null,
   };
 }
 
@@ -12545,11 +12697,14 @@ function LoveListAddForm({ catalog, allLists, onLearnAlias, onSave, onCancel }) 
   );
 }
 
-function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, onUpdateList, onDeleteList, onLearnAlias, onBack, onGoHome }) {
+function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], onAssignToWorker, onUpdateList, onDeleteList, onLearnAlias, onBack, onGoHome }) {
   const [addingItem, setAddingItem] = useState(false);
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
   const [showScanImage, setShowScanImage] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [assigningItem, setAssigningItem] = useState(null); // single item, or "bulk"
   const [editingSmeFor, setEditingSmeFor] = useState(null); // item, while editing its SME#s
   const [relinkingItem, setRelinkingItem] = useState(null); // item, while relinking its catalog match
   const [renamingItem, setRenamingItem] = useState(null); // item, while renaming it
@@ -12652,6 +12807,37 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, o
     });
     setEditingQtyFor(null);
   };
+
+  const confirmAssign = (worker) => {
+    if (!assigningItem || !worker || !onAssignToWorker) return;
+    playSaveChime();
+    const targetItems = assigningItem === "bulk" ? list.items.filter((i) => selectedIds.has(i.id)) : [assigningItem];
+    const updatedItems = list.items.map((i) => {
+      const target = targetItems.find((t) => t.id === i.id);
+      if (!target) return i;
+      const taskId = onAssignToWorker(
+        worker,
+        `${target.name} x${target.qty}${target.qtyUnit ? ` ${target.qtyUnit}` : ""}`,
+        list.jobLabel,
+        { type: "love_list_item", itemId: target.id, listId: list.id }
+      );
+      return { ...i, assignedTaskId: taskId };
+    });
+    onUpdateList({ ...list, items: updatedItems });
+    setAssigningItem(null);
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const toggleSelected = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
 
   const relinkCatalog = (catalogItem) => {
     if (!relinkingItem) return;
@@ -12791,6 +12977,29 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, o
           ))}
         </div>
 
+        {isEditor && visibleItems.length > 0 && (
+          <div className="flex items-center justify-between mb-4">
+            <button
+              onClick={() => {
+                setSelectMode((v) => !v);
+                setSelectedIds(new Set());
+              }}
+              className="text-xs flex items-center gap-1 text-slate-400 hover:text-slate-200 border border-slate-700 rounded-md px-2.5 py-1.5"
+            >
+              {selectMode ? "Cancel select" : "Select items"}
+            </button>
+            {selectMode && selectedIds.size > 0 && (
+              <button
+                onClick={() => setAssigningItem("bulk")}
+                className="text-xs flex items-center gap-1 bg-amber-500 text-slate-950 font-semibold rounded-md px-2.5 py-1.5 hover:bg-amber-400"
+              >
+                <Users className="w-3.5 h-3.5" />
+                Assign {selectedIds.size} selected
+              </button>
+            )}
+          </div>
+        )}
+
         {sentUnarchivedCount > 0 && (
           <div className="flex items-center gap-3 mb-4 flex-wrap">
             <button
@@ -12848,7 +13057,16 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, o
               .filter(Boolean)
               .join(" · ");
             return (
-              <div key={item.id} className="border border-slate-800 rounded-lg p-3 bg-slate-900">
+              <div key={item.id} className="border border-slate-800 rounded-lg p-3 bg-slate-900 flex gap-2.5">
+                {selectMode && (
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(item.id)}
+                    onChange={() => toggleSelected(item.id)}
+                    className="w-4 h-4 mt-1 rounded accent-amber-500 shrink-0"
+                  />
+                )}
+                <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2 mb-2">
                   <div className="min-w-0">
                     {isEditor ? (
@@ -12942,6 +13160,33 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, o
                     {item.needsOrdering ? "Needs ordering — tap to mark in inventory" : "📦 In inventory — tap to mark needs ordering"}
                   </button>
                 )}
+                {(() => {
+                  const assignedTask = item.assignedTaskId
+                    ? workerTasks.find((t) => t.id === item.assignedTaskId)
+                    : null;
+                  const taskMeta = assignedTask ? workerTaskStatusMeta(assignedTask.status) : null;
+                  if (assignedTask) {
+                    return (
+                      <button
+                        onClick={() => isEditor && setAssigningItem(item)}
+                        disabled={!isEditor}
+                        className={`text-xs rounded-full px-2 py-0.5 border mb-2 inline-block ${taskMeta.color}`}
+                      >
+                        👤 {assignedTask.workerName} · {taskMeta.label}
+                      </button>
+                    );
+                  }
+                  return (
+                    isEditor && (
+                      <button
+                        onClick={() => setAssigningItem(item)}
+                        className="text-xs mb-2 block text-slate-600 hover:text-slate-400"
+                      >
+                        + Assign to worker
+                      </button>
+                    )
+                  );
+                })()}
                 {isEditor ? (
                   <button
                     onClick={() => {
@@ -13025,6 +13270,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, o
                     </button>
                   )
                 )}
+                </div>
               </div>
             );
           })}
@@ -13126,6 +13372,19 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, o
             </div>
           </div>
         </div>
+      )}
+
+      {assigningItem && (
+        <AssignToWorkerModal
+          workers={workers}
+          itemLabel={
+            assigningItem === "bulk"
+              ? `${selectedIds.size} selected item${selectedIds.size === 1 ? "" : "s"}`
+              : `${assigningItem.name} x${assigningItem.qty}${assigningItem.qtyUnit ? ` ${assigningItem.qtyUnit}` : ""}`
+          }
+          onAssign={confirmAssign}
+          onCancel={() => setAssigningItem(null)}
+        />
       )}
 
       {renamingItem && (
@@ -13637,7 +13896,7 @@ const WORKER_TASK_STATUSES = [
 const workerTaskStatusMeta = (key) =>
   WORKER_TASK_STATUSES.find((s) => s.key === key) || WORKER_TASK_STATUSES[0];
 
-function newWorkerTask(workerId, workerName, title, jobLabel) {
+function newWorkerTask(workerId, workerName, title, jobLabel, source = null) {
   return {
     id: uniqueId(),
     workerId,
@@ -13649,6 +13908,9 @@ function newWorkerTask(workerId, workerName, title, jobLabel) {
     createdAt: new Date().toISOString().slice(0, 10),
     startedAt: null,
     resolvedAt: null, // set when it becomes Completed or Failed
+    // When assigned from an item card, links back so the item can show
+    // live status and so re-assigning doesn't create duplicate tasks.
+    source, // { type: "job_item" | "love_list_item", itemId, containerId? }
   };
 }
 
@@ -13705,6 +13967,49 @@ function WorkerRosterModal({ workers, onAddWorker, onRemoveWorker, onClose }) {
                 </div>
               ))}
             </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Shared between Love Lists and Job Lists item cards — assigning an item
+// creates a real tracked task for that worker, not just a label, so it
+// counts toward their completion rate in Worker Tasks.
+function AssignToWorkerModal({ workers, itemLabel, onAssign, onCancel }) {
+  const [workerId, setWorkerId] = useState(workers[0]?.id || "");
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 px-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+        <h3 className="text-slate-100 font-semibold mb-1">Assign to worker</h3>
+        <p className="text-xs text-slate-500 mb-4 truncate">{itemLabel}</p>
+        {workers.length === 0 ? (
+          <p className="text-sm text-slate-500 mb-4">
+            No workers on the roster yet — add one from Worker Tasks first.
+          </p>
+        ) : (
+          <Select
+            value={workerId}
+            onChange={setWorkerId}
+            options={workers.map((w) => w.id)}
+            labels={Object.fromEntries(workers.map((w) => [w.id, w.name]))}
+          />
+        )}
+        <div className="flex gap-3 mt-5">
+          <button
+            onClick={onCancel}
+            className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            Cancel
+          </button>
+          {workers.length > 0 && (
+            <button
+              onClick={() => onAssign(workers.find((w) => w.id === workerId))}
+              className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+            >
+              Assign
+            </button>
           )}
         </div>
       </div>
@@ -13826,7 +14131,7 @@ function WorkerDetailPage({ worker, tasks, onUpdateTask, onDeleteTask, onBack })
     resolvedCount > 0 ? Math.round((counts.completed / resolvedCount) * 100) : null;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
+    <div className="fixed inset-0 z-40 bg-slate-950 text-slate-100 overflow-y-auto">
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
         <div className="max-w-2xl mx-auto px-4 py-4 flex items-center gap-3">
           <button onClick={onBack} className="text-slate-400 hover:text-slate-200 shrink-0">
@@ -14146,6 +14451,8 @@ const LOVE_LISTS_KEY = "warehub-love-lists";
 function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   const [lists, setLists] = useState([]);
   const [catalog, setCatalog] = useState([]);
+  const [workers, setWorkers] = useState([]);
+  const [workerTasks, setWorkerTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeListId, setActiveListId] = useState(null);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -14167,11 +14474,32 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
       } catch {
         // catalog linking just won't be available this session
       }
+      try {
+        const workersResult = await getWithRetry(WORKERS_KEY);
+        if (workersResult.ok && workersResult.value) setWorkers(JSON.parse(workersResult.value));
+      } catch {}
+      try {
+        const tasksResult = await getWithRetry(WORKER_TASKS_KEY);
+        if (tasksResult.ok && tasksResult.value) setWorkerTasks(JSON.parse(tasksResult.value));
+      } catch {}
       setLoading(false);
       if (isEditor) maybeAutoBackupLoveLists(loadedLists);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Assigning an item creates a real task, not just a label — it shows up
+  // in Worker Tasks and counts toward that person's completion rate.
+  const assignItemToWorker = (worker, itemLabel, jobLabel, source) => {
+    if (!isEditor) return null;
+    const task = newWorkerTask(worker.id, worker.name, itemLabel, jobLabel, source);
+    setWorkerTasks((prev) => {
+      const next = [...prev, task];
+      saveWithRetry(WORKER_TASKS_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+    return task.id;
+  };
 
   const updateLists = (updater) => {
     if (!isEditor) return;
@@ -14249,6 +14577,9 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
         allLists={lists}
         isEditor={isEditor}
         isOwner={isOwner}
+        workers={workers}
+        workerTasks={workerTasks}
+        onAssignToWorker={assignItemToWorker}
         onUpdateList={handleUpdateList}
         onDeleteList={handleDeleteList}
         onLearnAlias={learnCatalogAlias}
