@@ -17,6 +17,7 @@ import {
   Filter,
   Briefcase,
   Heart,
+  Image as ImageIcon,
   ScanLine,
   Camera,
   Truck,
@@ -9176,6 +9177,21 @@ async function uploadReferenceDocument(jobId, file) {
   }
 }
 
+// Same bucket, same pattern, just its own path prefix so the original
+// photo of a scanned Love List can be pulled back up later for reference.
+async function uploadLoveListScan(file) {
+  try {
+    const safeName = (file.name || "scan.jpg").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const path = `love-list-scans/${uniqueId()}-${safeName}`;
+    const { error } = await supabase.storage.from("job-documents").upload(path, file);
+    if (error) return { ok: false, error: error.message };
+    const { data } = supabase.storage.from("job-documents").getPublicUrl(path);
+    return { ok: true, url: data.publicUrl, path };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
 async function deleteReferenceDocument(path) {
   try {
     const { error } = await supabase.storage.from("job-documents").remove([path]);
@@ -12032,6 +12048,7 @@ function LoveListScanModal({ catalog, onSave, onCancel }) {
   const [reviewItems, setReviewItems] = useState([]);
   const [relinkingReviewItem, setRelinkingReviewItem] = useState(null);
   const [catalogSearch, setCatalogSearch] = useState("");
+  const [scanImageUrl, setScanImageUrl] = useState(null);
   const fileInputRef = useRef(null);
 
   const runScan = async (file) => {
@@ -12043,6 +12060,14 @@ function LoveListScanModal({ catalog, onSave, onCancel }) {
         reader.onload = () => resolve(reader.result.split(",")[1]);
         reader.onerror = () => reject(new Error("Couldn't read that image."));
         reader.readAsDataURL(file);
+      });
+
+      // Upload the original photo alongside the OCR call — if this
+      // specific part fails, that's not worth blocking the actual scan
+      // result over, so it fails silently and just leaves the list
+      // without a saved photo.
+      uploadLoveListScan(file).then((res) => {
+        if (res.ok) setScanImageUrl(res.url);
       });
 
       const res = await fetch(
@@ -12095,7 +12120,13 @@ function LoveListScanModal({ catalog, onSave, onCancel }) {
           needsTransfer: i.needsTransfer,
         })
       );
-    onSave({ jobLabel: jobLabel.trim(), submittedBy: submittedBy.trim(), dateReceived, items: finalItems });
+    onSave({
+      jobLabel: jobLabel.trim(),
+      submittedBy: submittedBy.trim(),
+      dateReceived,
+      items: finalItems,
+      scanImageUrl,
+    });
   };
 
   return (
@@ -12475,6 +12506,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
   const [addingItem, setAddingItem] = useState(false);
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
+  const [showScanImage, setShowScanImage] = useState(false);
   const [editingSmeFor, setEditingSmeFor] = useState(null); // item, while editing its SME#s
   const [relinkingItem, setRelinkingItem] = useState(null); // item, while relinking its catalog match
   const [renamingItem, setRenamingItem] = useState(null); // item, while renaming it
@@ -12618,6 +12650,15 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
               </p>
             </div>
           </div>
+          {list.scanImageUrl && (
+            <button
+              onClick={() => setShowScanImage(true)}
+              title="View original scan"
+              className="text-slate-400 hover:text-slate-200 p-2 shrink-0"
+            >
+              <ImageIcon className="w-4 h-4" />
+            </button>
+          )}
           {isEditor && (
             <button
               onClick={() => setDeleteListConfirm(true)}
@@ -12628,6 +12669,26 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
           )}
         </div>
       </header>
+
+      {showScanImage && list.scanImageUrl && (
+        <div
+          className="fixed inset-0 z-[70] bg-black/90 flex items-center justify-center px-4 py-8"
+          onClick={() => setShowScanImage(false)}
+        >
+          <button
+            onClick={() => setShowScanImage(false)}
+            className="absolute top-4 right-4 text-slate-300 hover:text-white"
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <img
+            src={list.scanImageUrl}
+            alt="Original scanned list"
+            className="max-w-full max-h-full rounded-lg"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
 
       <main className="max-w-2xl mx-auto px-4 py-5">
         <div className="flex flex-wrap gap-2 mb-4">
@@ -13379,7 +13440,7 @@ function LoveListsApp({ isEditor, onGoHome }) {
 
   const activeList = lists.find((l) => l.id === activeListId) || null;
 
-  const handleSaveNewList = ({ jobLabel, submittedBy, dateReceived, items }) => {
+  const handleSaveNewList = ({ jobLabel, submittedBy, dateReceived, items, scanImageUrl }) => {
     if (!isEditor) return;
     const list = {
       id: uniqueId(),
@@ -13387,6 +13448,7 @@ function LoveListsApp({ isEditor, onGoHome }) {
       submittedBy,
       dateReceived,
       items,
+      scanImageUrl: scanImageUrl || null,
       createdAt: timeStamp(),
     };
     playSaveChime();
