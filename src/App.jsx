@@ -17,6 +17,7 @@ import {
   Filter,
   Briefcase,
   Heart,
+  Users,
   Image as ImageIcon,
   ScanLine,
   Camera,
@@ -6691,6 +6692,7 @@ function JobPicker({
   onOpenReturnsList,
   returnsCount,
   onOpenGeneralTodo,
+  onOpenWorkerTasks,
   onCheckForUpdate,
   onGoToLanding,
   updateCheckMessage,
@@ -6884,6 +6886,15 @@ function JobPicker({
                 className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
               >
                 <ClipboardList className="w-4 h-4" />
+              </button>
+            )}
+            {isEditor && (
+              <button
+                onClick={onOpenWorkerTasks}
+                title="Worker Tasks"
+                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+              >
+                <Users className="w-4 h-4" />
               </button>
             )}
             <button
@@ -10537,6 +10548,9 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
       case "todo":
         setShowGeneralTodo(true);
         break;
+      case "workerTasks":
+        setShowWorkerTasks(true);
+        break;
       case "catalog":
         setCatalogModalOpen(true);
         break;
@@ -10798,6 +10812,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   const [showNewReturnModal, setShowNewReturnModal] = useState(false);
   const [showReturnsListPage, setShowReturnsListPage] = useState(false);
   const [showGeneralTodo, setShowGeneralTodo] = useState(false);
+  const [showWorkerTasks, setShowWorkerTasks] = useState(false);
   const [activeReturnId, setActiveReturnId] = useState(null);
   const activeReturn = returns.find((r) => r.id === activeReturnId) || null;
 
@@ -11431,6 +11446,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           onOpenReturnsList={() => setShowReturnsListPage(true)}
           returnsCount={returns.length}
           onOpenGeneralTodo={() => setShowGeneralTodo(true)}
+          onOpenWorkerTasks={() => setShowWorkerTasks(true)}
           onCheckForUpdate={checkForUpdateNow}
           onGoToLanding={onGoToLanding}
           updateCheckMessage={updateCheckMessage}
@@ -11499,6 +11515,8 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           onClose={() => setShowGeneralTodo(false)}
         />
       )}
+
+      {showWorkerTasks && <WorkerTasksSection onClose={() => setShowWorkerTasks(false)} />}
 
       {showNewJobModal && (
         <JobNameModal
@@ -11648,6 +11666,15 @@ function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onR
                 className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
               >
                 <ClipboardList className="w-4 h-4" />
+              </button>
+            )}
+            {isEditor && (
+              <button
+                onClick={() => onSelectJobs("workerTasks")}
+                title="Worker Tasks"
+                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+              >
+                <Users className="w-4 h-4" />
               </button>
             )}
             <button
@@ -13598,6 +13625,519 @@ function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onScanList
         )}
       </main>
     </div>
+  );
+}
+
+const WORKER_TASK_STATUSES = [
+  { key: "not_started", label: "Not Started", color: "bg-slate-700 text-slate-200 border-slate-600" },
+  { key: "in_progress", label: "In Progress", color: "bg-amber-500/15 text-amber-300 border-amber-500/40" },
+  { key: "completed", label: "Completed", color: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40" },
+  { key: "failed", label: "Failed", color: "bg-red-500/15 text-red-300 border-red-500/40" },
+];
+const workerTaskStatusMeta = (key) =>
+  WORKER_TASK_STATUSES.find((s) => s.key === key) || WORKER_TASK_STATUSES[0];
+
+function newWorkerTask(workerId, workerName, title, jobLabel) {
+  return {
+    id: uniqueId(),
+    workerId,
+    workerName, // snapshot at creation time, survives a later worker rename
+    title,
+    jobLabel: jobLabel || "",
+    status: "not_started",
+    failReason: "",
+    createdAt: new Date().toISOString().slice(0, 10),
+    startedAt: null,
+    resolvedAt: null, // set when it becomes Completed or Failed
+  };
+}
+
+function WorkerRosterModal({ workers, onAddWorker, onRemoveWorker, onClose }) {
+  const [name, setName] = useState("");
+  const addWorker = () => {
+    if (!name.trim()) return;
+    onAddWorker(name.trim());
+    setName("");
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <h2 className="text-slate-100 font-semibold text-base">Worker roster</h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="px-5 pt-4 flex gap-2 shrink-0">
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addWorker()}
+            placeholder="Worker name"
+            className="flex-1 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+          />
+          <button
+            onClick={addWorker}
+            disabled={!name.trim()}
+            className="bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400 disabled:opacity-40"
+          >
+            Add
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {workers.length === 0 ? (
+            <p className="text-sm text-slate-500 text-center py-6">No workers added yet.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {workers.map((w) => (
+                <div
+                  key={w.id}
+                  className="flex items-center justify-between bg-slate-800/40 border border-slate-800 rounded-md px-3 py-2"
+                >
+                  <p className="text-sm text-slate-100">{w.name}</p>
+                  <button
+                    onClick={() => onRemoveWorker(w.id)}
+                    className="text-slate-600 hover:text-red-400"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkerTaskAddForm({ workers, onSave, onCancel }) {
+  const [workerId, setWorkerId] = useState(workers[0]?.id || "");
+  const [title, setTitle] = useState("");
+  const [jobLabel, setJobLabel] = useState("");
+
+  const canSave = workerId && title.trim();
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg p-5">
+        <h2 className="text-slate-100 font-semibold text-base mb-4">New task</h2>
+        {workers.length === 0 ? (
+          <p className="text-sm text-slate-500 mb-4">
+            Add a worker to the roster first before assigning a task.
+          </p>
+        ) : (
+          <>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              Assign to
+            </label>
+            <Select
+              value={workerId}
+              onChange={setWorkerId}
+              options={workers.map((w) => w.id)}
+              labels={Object.fromEntries(workers.map((w) => [w.id, w.name]))}
+            />
+            <label className="block text-xs font-medium text-slate-400 mb-1.5 mt-3">
+              Task
+            </label>
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="What needs to get done..."
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-3 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              Job (optional)
+            </label>
+            <input
+              value={jobLabel}
+              onChange={(e) => setJobLabel(e.target.value)}
+              placeholder="e.g. 3052"
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+          </>
+        )}
+        <div className="flex gap-3">
+          <button
+            onClick={onCancel}
+            className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            Cancel
+          </button>
+          {workers.length > 0 && (
+            <button
+              onClick={() => {
+                const w = workers.find((w) => w.id === workerId);
+                onSave(newWorkerTask(w.id, w.name, title.trim(), jobLabel.trim()));
+              }}
+              disabled={!canSave}
+              className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+            >
+              Add task
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkerDetailPage({ worker, tasks, onUpdateTask, onDeleteTask, onBack }) {
+  const [failingTask, setFailingTask] = useState(null);
+  const [failReasonDraft, setFailReasonDraft] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  const setStatus = (task, status) => {
+    if (status === "failed") {
+      setFailingTask(task);
+      setFailReasonDraft("");
+      return;
+    }
+    playSoftTap();
+    const today = new Date().toISOString().slice(0, 10);
+    onUpdateTask({
+      ...task,
+      status,
+      startedAt: status === "in_progress" && !task.startedAt ? today : task.startedAt,
+      resolvedAt: status === "completed" ? today : null,
+      failReason: status === "completed" ? "" : task.failReason,
+    });
+  };
+
+  const confirmFail = () => {
+    if (!failingTask || !failReasonDraft.trim()) return;
+    playSaveChime();
+    onUpdateTask({
+      ...failingTask,
+      status: "failed",
+      resolvedAt: new Date().toISOString().slice(0, 10),
+      failReason: failReasonDraft.trim(),
+    });
+    setFailingTask(null);
+  };
+
+  const counts = WORKER_TASK_STATUSES.reduce((acc, s) => {
+    acc[s.key] = tasks.filter((t) => t.status === s.key).length;
+    return acc;
+  }, {});
+  const resolvedCount = counts.completed + counts.failed;
+  const completionRate =
+    resolvedCount > 0 ? Math.round((counts.completed / resolvedCount) * 100) : null;
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
+        <div className="max-w-2xl mx-auto px-4 py-4 flex items-center gap-3">
+          <button onClick={onBack} className="text-slate-400 hover:text-slate-200 shrink-0">
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <div>
+            <p className="font-semibold text-slate-100">{worker.name}</p>
+            <p className="text-xs text-slate-500">
+              {tasks.length} task{tasks.length === 1 ? "" : "s"}
+              {completionRate !== null && ` · ${completionRate}% completion rate`}
+            </p>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        <div className="flex flex-wrap gap-2 mb-4">
+          {WORKER_TASK_STATUSES.map((s) => (
+            <span key={s.key} className={`text-xs rounded-full px-2.5 py-1 border ${s.color}`}>
+              {counts[s.key]} {s.label}
+            </span>
+          ))}
+        </div>
+
+        {tasks.length === 0 ? (
+          <p className="text-sm text-slate-500 text-center py-10">
+            Nothing assigned to {worker.name} yet.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {tasks.map((task) => {
+              const meta = workerTaskStatusMeta(task.status);
+              return (
+                <div key={task.id} className="border border-slate-800 rounded-lg p-3 bg-slate-900">
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <div className="min-w-0">
+                      <p className="text-sm text-slate-100 truncate">{task.title}</p>
+                      <p className="text-xs text-slate-500">
+                        {task.jobLabel && `Job ${task.jobLabel} · `}
+                        created {task.createdAt}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setDeleteTarget(task)}
+                      className="text-slate-600 hover:text-red-400 shrink-0"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  {task.status === "failed" && task.failReason && (
+                    <p className="text-xs text-red-400 mb-2">⚠ {task.failReason}</p>
+                  )}
+                  <div className="flex flex-wrap gap-1.5">
+                    {WORKER_TASK_STATUSES.map((s) => (
+                      <button
+                        key={s.key}
+                        onClick={() => setStatus(task, s.key)}
+                        className={`text-xs rounded-full px-2.5 py-1 border ${
+                          task.status === s.key
+                            ? s.color
+                            : "bg-slate-800 border-slate-700 text-slate-500 hover:text-slate-300"
+                        }`}
+                      >
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </main>
+
+      {failingTask && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-1">
+              Why did "{failingTask.title}" fail?
+            </h3>
+            <p className="text-xs text-slate-500 mb-3">
+              A quick reason keeps this useful instead of just a number.
+            </p>
+            <textarea
+              autoFocus
+              value={failReasonDraft}
+              onChange={(e) => setFailReasonDraft(e.target.value)}
+              placeholder="e.g. weather, waiting on parts, reassigned..."
+              rows={3}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-red-500/60 resize-none"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => setFailingTask(null)}
+                className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmFail}
+                disabled={!failReasonDraft.trim()}
+                className="flex-1 text-sm rounded-md py-2.5 bg-red-500 text-slate-950 font-semibold hover:bg-red-400 disabled:opacity-40"
+              >
+                Mark Failed
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <ConfirmDelete
+          title="Remove this task?"
+          message={`"${deleteTarget.title}" will be permanently removed.`}
+          onConfirm={() => {
+            onDeleteTask(deleteTarget.id);
+            setDeleteTarget(null);
+          }}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function WorkerTasksDashboard({ workers, tasks, onOpenWorker, onAddTask, onManageRoster, onClose }) {
+  const statsFor = (workerId) => {
+    const wTasks = tasks.filter((t) => t.workerId === workerId);
+    const completed = wTasks.filter((t) => t.status === "completed").length;
+    const failed = wTasks.filter((t) => t.status === "failed").length;
+    const resolved = completed + failed;
+    return {
+      total: wTasks.length,
+      completed,
+      failed,
+      rate: resolved > 0 ? Math.round((completed / resolved) * 100) : null,
+    };
+  };
+
+  return (
+    <div className="fixed inset-0 z-40 bg-slate-950 text-slate-100 overflow-y-auto">
+      <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
+        <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+              <X className="w-5 h-5" />
+            </button>
+            <p className="font-semibold text-slate-100 flex items-center gap-1.5">
+              <Users className="w-4 h-4 text-amber-400" />
+              Worker Tasks
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={onManageRoster}
+              className="text-xs flex items-center gap-1 bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-3 py-2 hover:bg-slate-700"
+            >
+              Roster
+            </button>
+            <button
+              onClick={onAddTask}
+              className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
+            >
+              <Plus className="w-4 h-4" />
+              New task
+            </button>
+          </div>
+        </div>
+      </header>
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        {workers.length === 0 ? (
+          <p className="text-sm text-slate-500 text-center py-10">
+            No workers on the roster yet — tap "Roster" to add one.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {workers.map((w) => {
+              const stats = statsFor(w.id);
+              return (
+                <button
+                  key={w.id}
+                  onClick={() => onOpenWorker(w)}
+                  className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-slate-100">{w.name}</p>
+                    {stats.rate !== null && (
+                      <span
+                        className={`text-xs rounded-full px-2 py-0.5 border ${
+                          stats.rate >= 80
+                            ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                            : stats.rate >= 50
+                            ? "bg-amber-500/15 text-amber-300 border-amber-500/40"
+                            : "bg-red-500/15 text-red-300 border-red-500/40"
+                        }`}
+                      >
+                        {stats.rate}% completion
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {stats.total} task{stats.total === 1 ? "" : "s"} · {stats.completed} completed ·{" "}
+                    {stats.failed} failed
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+const WORKER_TASKS_KEY = "warehub-worker-tasks";
+const WORKERS_KEY = "warehub-workers";
+
+function WorkerTasksSection({ onClose }) {
+  const [workers, setWorkers] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [activeWorkerId, setActiveWorkerId] = useState(null);
+  const [showAddTask, setShowAddTask] = useState(false);
+  const [showRoster, setShowRoster] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const wResult = await getWithRetry(WORKERS_KEY);
+        if (wResult.ok && wResult.value) setWorkers(JSON.parse(wResult.value));
+      } catch {}
+      try {
+        const tResult = await getWithRetry(WORKER_TASKS_KEY);
+        if (tResult.ok && tResult.value) setTasks(JSON.parse(tResult.value));
+      } catch {}
+      setLoading(false);
+    })();
+  }, []);
+
+  const saveWorkers = (next) => {
+    setWorkers(next);
+    saveWithRetry(WORKERS_KEY, JSON.stringify(next)).catch(() => {});
+  };
+  const saveTasks = (next) => {
+    setTasks(next);
+    saveWithRetry(WORKER_TASKS_KEY, JSON.stringify(next)).catch(() => {});
+  };
+
+  const addWorker = (name) => {
+    playSaveChime();
+    saveWorkers([...workers, { id: uniqueId(), name }]);
+  };
+  const removeWorker = (id) => {
+    saveWorkers(workers.filter((w) => w.id !== id));
+  };
+  const addTask = (task) => {
+    playSaveChime();
+    saveTasks([...tasks, task]);
+    setShowAddTask(false);
+  };
+  const updateTask = (updated) => {
+    saveTasks(tasks.map((t) => (t.id === updated.id ? updated : t)));
+  };
+  const deleteTask = (id) => {
+    saveTasks(tasks.filter((t) => t.id !== id));
+  };
+
+  if (loading) {
+    return (
+      <div className="fixed inset-0 z-40 bg-slate-950 flex items-center justify-center">
+        <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  const activeWorker = workers.find((w) => w.id === activeWorkerId) || null;
+
+  if (activeWorker) {
+    return (
+      <WorkerDetailPage
+        worker={activeWorker}
+        tasks={tasks.filter((t) => t.workerId === activeWorker.id)}
+        onUpdateTask={updateTask}
+        onDeleteTask={deleteTask}
+        onBack={() => setActiveWorkerId(null)}
+      />
+    );
+  }
+
+  return (
+    <>
+      <WorkerTasksDashboard
+        workers={workers}
+        tasks={tasks}
+        onOpenWorker={(w) => setActiveWorkerId(w.id)}
+        onAddTask={() => setShowAddTask(true)}
+        onManageRoster={() => setShowRoster(true)}
+        onClose={onClose}
+      />
+      {showAddTask && (
+        <WorkerTaskAddForm workers={workers} onSave={addTask} onCancel={() => setShowAddTask(false)} />
+      )}
+      {showRoster && (
+        <WorkerRosterModal
+          workers={workers}
+          onAddWorker={addWorker}
+          onRemoveWorker={removeWorker}
+          onClose={() => setShowRoster(false)}
+        />
+      )}
+    </>
   );
 }
 
