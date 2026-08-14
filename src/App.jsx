@@ -12511,6 +12511,8 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
   const [relinkingItem, setRelinkingItem] = useState(null); // item, while relinking its catalog match
   const [renamingItem, setRenamingItem] = useState(null); // item, while renaming it
   const [renameDraft, setRenameDraft] = useState("");
+  const [editingNoteFor, setEditingNoteFor] = useState(null); // item, while editing its note
+  const [noteDraft, setNoteDraft] = useState("");
   const [catalogSearch, setCatalogSearch] = useState("");
   const [smeDraft, setSmeDraft] = useState("");
   const [showArchived, setShowArchived] = useState(false);
@@ -12577,6 +12579,18 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
       ),
     });
     setRenamingItem(null);
+  };
+
+  const saveNote = () => {
+    if (!editingNoteFor) return;
+    playSaveChime();
+    onUpdateList({
+      ...list,
+      items: list.items.map((i) =>
+        i.id === editingNoteFor.id ? { ...i, notes: noteDraft.trim() } : i
+      ),
+    });
+    setEditingNoteFor(null);
   };
 
   const relinkCatalog = (catalogItem) => {
@@ -12862,6 +12876,25 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
                 {isEditor ? (
                   <button
                     onClick={() => {
+                      setEditingNoteFor(item);
+                      setNoteDraft(item.notes || "");
+                    }}
+                    className="text-xs mb-2 block text-left"
+                  >
+                    {item.notes ? (
+                      <span className="text-slate-400 italic">📝 {item.notes}</span>
+                    ) : (
+                      <span className="text-slate-600 hover:text-slate-400">+ Add note</span>
+                    )}
+                  </button>
+                ) : (
+                  item.notes && (
+                    <p className="text-xs text-slate-400 italic mb-2">📝 {item.notes}</p>
+                  )
+                )}
+                {isEditor ? (
+                  <button
+                    onClick={() => {
                       setEditingSmeFor(item);
                       setSmeDraft((item.serials || []).join(", "));
                     }}
@@ -13048,6 +13081,36 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
                 onClick={saveRename}
                 disabled={!renameDraft.trim()}
                 className="flex-1 text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400 disabled:opacity-40"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingNoteFor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-3">Note for "{editingNoteFor.name}"</h3>
+            <textarea
+              autoFocus
+              value={noteDraft}
+              onChange={(e) => setNoteDraft(e.target.value)}
+              placeholder="Any extra context worth remembering..."
+              rows={4}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-rose-500/60 resize-none"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => setEditingNoteFor(null)}
+                className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveNote}
+                className="flex-1 text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400"
               >
                 Save
               </button>
