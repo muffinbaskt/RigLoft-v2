@@ -3728,6 +3728,9 @@ function SuggestionsInboxModal({
         </>
       )}
       {s.note && <p className="text-xs text-slate-400 italic mt-1.5">"{s.note}"</p>}
+      {s.submitted_by && (
+        <p className="text-xs text-sky-400 mt-1.5">👤 Suggested by {s.submitted_by}</p>
+      )}
     </>
   );
 
@@ -4768,6 +4771,7 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
 function TodoListModal({
   todos,
   isEditor,
+  managerName,
   job,
   onAddCustom,
   onToggleDone,
@@ -4808,6 +4812,7 @@ function TodoListModal({
       type: "add_todo",
       payload: { text: trimmed },
       note: "",
+      submittedBy: managerName,
     });
     setTaskSuggestionSent(true);
     setTimeout(() => setTaskSuggestionSent(false), 2500);
@@ -4827,6 +4832,7 @@ function TodoListModal({
       type: "complete_todo",
       payload: { todoId: t.id, todoText: t.text },
       note: "",
+      submittedBy: managerName,
     });
   };
 
@@ -5748,7 +5754,7 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
   );
 }
 
-function SuggestEditModal({ job, item, onSubmit, onClose }) {
+function SuggestEditModal({ job, item, managerName, onSubmit, onClose }) {
   const currentContainer = (item.containers || [])[0];
   const [qtyHave, setQtyHave] = useState(item.qtyHave);
   const [containerName, setContainerName] = useState(currentContainer?.name || "");
@@ -5776,6 +5782,7 @@ function SuggestEditModal({ job, item, onSubmit, onClose }) {
         received,
       },
       note,
+      submittedBy: managerName,
     });
     setSubmitting(false);
     if (result.ok) setDone(true);
@@ -5910,7 +5917,7 @@ function SuggestEditModal({ job, item, onSubmit, onClose }) {
   );
 }
 
-function SuggestNewItemModal({ job, onClose }) {
+function SuggestNewItemModal({ job, managerName, onClose }) {
   const [name, setName] = useState("");
   const [qtyNeeded, setQtyNeeded] = useState("");
   const [container, setContainer] = useState("");
@@ -5934,6 +5941,7 @@ function SuggestNewItemModal({ job, onClose }) {
         container: container.trim() || null,
       },
       note,
+      submittedBy: managerName,
     });
     setSubmitting(false);
     if (result.ok) setDone(true);
@@ -6662,6 +6670,7 @@ function JobPicker({
   jobs,
   catalog,
   isEditor,
+  isManager,
   onRequestLogin,
   onSelect,
   onCreateClick,
@@ -6815,7 +6824,7 @@ function JobPicker({
                 Riggy
                 {!isEditor && (
                   <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-400 rounded-full px-2 py-0.5">
-                    View only
+                    {isManager ? "Manager" : "View only"}
                   </span>
                 )}
               </h1>
@@ -7306,6 +7315,7 @@ function JobPicker({
 function JobInventory({
   job,
   isEditor: rawIsEditor,
+  managerName,
   onRequestLogin,
   onUpdateJob,
   onBackToJobs,
@@ -8943,6 +8953,7 @@ function JobInventory({
         <TodoListModal
           todos={todos}
           isEditor={isEditor}
+          managerName={managerName}
           job={job}
           onAddCustom={addCustomTodo}
           onToggleDone={toggleTodoDone}
@@ -8965,12 +8976,13 @@ function JobInventory({
         <SuggestEditModal
           job={job}
           item={suggestEditTarget}
+          managerName={managerName}
           onClose={() => setSuggestEditTarget(null)}
         />
       )}
 
       {suggestNewItemOpen && (
-        <SuggestNewItemModal job={job} onClose={() => setSuggestNewItemOpen(false)} />
+        <SuggestNewItemModal job={job} managerName={managerName} onClose={() => setSuggestNewItemOpen(false)} />
       )}
 
       {renameOpen && (
@@ -9075,7 +9087,7 @@ async function getWithRetry(key, attempts = 6) {
 // Anyone (including viewers with no login) can submit a suggestion — this
 // hits its own database table with its own permission rules, separate from
 // the main app_storage table, so it never conflicts with view-only access.
-async function submitSuggestion({ jobId, itemId, type, payload, note }) {
+async function submitSuggestion({ jobId, itemId, type, payload, note, submittedBy }) {
   try {
     const { error } = await supabase.from("suggestions").insert({
       job_id: String(jobId),
@@ -9083,6 +9095,7 @@ async function submitSuggestion({ jobId, itemId, type, payload, note }) {
       suggestion_type: type,
       payload,
       note: note || null,
+      submitted_by: submittedBy || null,
     });
     return { ok: !error, error: error ? error.message : null };
   } catch (err) {
@@ -9770,7 +9783,7 @@ async function maybeAutoBackupLoveLists(loveLists) {
   }
 }
 
-function WareHub({ isEditor, onSignOut, onRequestLogin, onGoToLanding, initialAction }) {
+function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, onGoToLanding, initialAction }) {
   const [jobs, setJobs] = useState([]);
   const [activeJobId, setActiveJobId] = useState(null);
   const [showPicker, setShowPicker] = useState(true);
@@ -11387,6 +11400,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin, onGoToLanding, initialAc
           jobs={jobs}
           catalog={catalog}
           isEditor={isEditor}
+          isManager={isManager}
           onRequestLogin={onRequestLogin}
           onSelect={(id) => {
             setActiveJobId(id);
@@ -11426,6 +11440,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin, onGoToLanding, initialAc
           key={activeJob.id}
           job={activeJob}
           isEditor={isEditor && !activeJob.sealed}
+          managerName={managerName}
           onRequestLogin={onRequestLogin}
           onUpdateJob={updateActiveJob}
           onBackToJobs={() => setShowPicker(true)}
@@ -11573,7 +11588,7 @@ function WareHub({ isEditor, onSignOut, onRequestLogin, onGoToLanding, initialAc
   );
 }
 
-function AppLandingScreen({ isEditor, onSelectLove, onSelectJobs, onRequestLogin, onSignOut }) {
+function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onRequestLogin, onSignOut }) {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
@@ -12503,7 +12518,7 @@ function LoveListAddForm({ catalog, allLists, onLearnAlias, onSave, onCancel }) 
   );
 }
 
-function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateList, onDeleteList, onLearnAlias, onBack, onGoHome }) {
+function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, onUpdateList, onDeleteList, onLearnAlias, onBack, onGoHome }) {
   const [addingItem, setAddingItem] = useState(false);
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
@@ -12706,7 +12721,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, onUpdateLi
               <ImageIcon className="w-4 h-4" />
             </button>
           )}
-          {isEditor && (
+          {isOwner && (
             <button
               onClick={() => setDeleteListConfirm(true)}
               className="text-slate-500 hover:text-red-400 p-2 shrink-0"
@@ -13588,7 +13603,7 @@ function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onScanList
 
 const LOVE_LISTS_KEY = "warehub-love-lists";
 
-function LoveListsApp({ isEditor, onGoHome }) {
+function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   const [lists, setLists] = useState([]);
   const [catalog, setCatalog] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -13673,7 +13688,7 @@ function LoveListsApp({ isEditor, onGoHome }) {
   };
 
   const handleDeleteList = (id) => {
-    if (!isEditor) return;
+    if (!isOwner) return;
     updateLists((prev) => prev.filter((l) => l.id !== id));
     setActiveListId(null);
   };
@@ -13693,6 +13708,7 @@ function LoveListsApp({ isEditor, onGoHome }) {
         catalog={catalog}
         allLists={lists}
         isEditor={isEditor}
+        isOwner={isOwner}
         onUpdateList={handleUpdateList}
         onDeleteList={handleDeleteList}
         onLearnAlias={learnCatalogAlias}
@@ -13809,6 +13825,17 @@ export default function AuthGate() {
   const [appSection, setAppSection] = useState(null); // null = landing, "jobs" | "love"
   const [pendingJobAction, setPendingJobAction] = useState(null);
 
+  // Only the owner's account can create new Supabase Auth users (the app
+  // itself never exposes sign-up), so any *other* real, logged-in account
+  // is safely assumed to be the manager — no separate roles table needed
+  // for a single manager account.
+  const OWNER_EMAIL = "muffinbaskt@gmail.com";
+  const isOwner = !!session && session.user?.email?.toLowerCase() === OWNER_EMAIL;
+  const isManager = !!session && !isOwner;
+  const managerName = isManager
+    ? session.user?.user_metadata?.name || session.user?.email || "Manager"
+    : null;
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
@@ -13831,7 +13858,8 @@ export default function AuthGate() {
     <>
       {appSection === null ? (
         <AppLandingScreen
-          isEditor={!!session}
+          isEditor={isOwner}
+          isManager={isManager}
           onSelectLove={() => setAppSection("love")}
           onSelectJobs={(action) => {
             setPendingJobAction(action || null);
@@ -13841,10 +13869,16 @@ export default function AuthGate() {
           onSignOut={() => supabase.auth.signOut()}
         />
       ) : appSection === "love" ? (
-        <LoveListsApp isEditor={!!session} onGoHome={() => setAppSection(null)} />
+        <LoveListsApp
+          isEditor={isOwner || isManager}
+          isOwner={isOwner}
+          onGoHome={() => setAppSection(null)}
+        />
       ) : (
         <WareHub
-          isEditor={!!session}
+          isEditor={isOwner}
+          isManager={isManager}
+          managerName={managerName}
           onSignOut={() => supabase.auth.signOut()}
           onRequestLogin={() => setShowLogin(true)}
           onGoToLanding={() => setAppSection(null)}
