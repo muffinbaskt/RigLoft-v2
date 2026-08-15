@@ -11077,6 +11077,21 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
     return task.id;
   };
 
+  // Worker Tasks manages its own independent copy of this data while
+  // it is open, so edits/deletes made there do not automatically reach
+  // whatever is already sitting in memory here — refresh on close so item
+  // cards do not keep showing an assignment that was actually deleted.
+  const reloadWorkerData = async () => {
+    try {
+      const workersResult = await getWithRetry(WORKERS_KEY);
+      if (workersResult.ok && workersResult.value) setWorkers(JSON.parse(workersResult.value));
+    } catch {}
+    try {
+      const tasksResult = await getWithRetry(WORKER_TASKS_KEY);
+      if (tasksResult.ok && tasksResult.value) setWorkerTasks(JSON.parse(tasksResult.value));
+    } catch {}
+  };
+
   const addGeneralTodo = (text) => {
     if (!text.trim()) return;
     playSaveChime();
@@ -11667,7 +11682,14 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
         />
       )}
 
-      {showWorkerTasks && <WorkerTasksSection onClose={() => setShowWorkerTasks(false)} />}
+      {showWorkerTasks && (
+        <WorkerTasksSection
+          onClose={() => {
+            setShowWorkerTasks(false);
+            reloadWorkerData();
+          }}
+        />
+      )}
 
       {showNewJobModal && (
         <JobNameModal
@@ -13911,6 +13933,7 @@ function newWorkerTask(workerId, workerName, title, jobLabel, source = null) {
     // When assigned from an item card, links back so the item can show
     // live status and so re-assigning doesn't create duplicate tasks.
     source, // { type: "job_item" | "love_list_item", itemId, containerId? }
+    archived: false,
   };
 }
 
@@ -14092,6 +14115,7 @@ function WorkerDetailPage({ worker, tasks, onUpdateTask, onDeleteTask, onBack })
   const [failingTask, setFailingTask] = useState(null);
   const [failReasonDraft, setFailReasonDraft] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   const setStatus = (task, status) => {
     if (status === "failed") {
@@ -14122,6 +14146,17 @@ function WorkerDetailPage({ worker, tasks, onUpdateTask, onDeleteTask, onBack })
     setFailingTask(null);
   };
 
+  const archiveTask = (task) => onUpdateTask({ ...task, archived: true });
+  const unarchiveTask = (task) => onUpdateTask({ ...task, archived: false });
+  const archiveAllResolved = () => {
+    tasks
+      .filter((t) => (t.status === "completed" || t.status === "failed") && !t.archived)
+      .forEach((t) => onUpdateTask({ ...t, archived: true }));
+  };
+
+  // Stats are computed from every task regardless of archived status —
+  // archiving only tidies up the visible list, it never changes what
+  // actually counts toward this person's completion rate.
   const counts = WORKER_TASK_STATUSES.reduce((acc, s) => {
     acc[s.key] = tasks.filter((t) => t.status === s.key).length;
     return acc;
@@ -14129,6 +14164,12 @@ function WorkerDetailPage({ worker, tasks, onUpdateTask, onDeleteTask, onBack })
   const resolvedCount = counts.completed + counts.failed;
   const completionRate =
     resolvedCount > 0 ? Math.round((counts.completed / resolvedCount) * 100) : null;
+
+  const visibleTasks = tasks.filter((t) => showArchived || !t.archived);
+  const archivedCount = tasks.filter((t) => t.archived).length;
+  const resolvedUnarchivedCount = tasks.filter(
+    (t) => (t.status === "completed" || t.status === "failed") && !t.archived
+  ).length;
 
   return (
     <div className="fixed inset-0 z-40 bg-slate-950 text-slate-100 overflow-y-auto">
@@ -14156,14 +14197,39 @@ function WorkerDetailPage({ worker, tasks, onUpdateTask, onDeleteTask, onBack })
           ))}
         </div>
 
-        {tasks.length === 0 ? (
+        {(resolvedUnarchivedCount > 0 || archivedCount > 0) && (
+          <div className="flex items-center gap-3 mb-4 flex-wrap">
+            {resolvedUnarchivedCount > 0 && (
+              <button
+                onClick={archiveAllResolved}
+                className="text-xs flex items-center gap-1 text-slate-400 hover:text-slate-200 border border-slate-700 rounded-md px-2.5 py-1.5"
+              >
+                <Archive className="w-3.5 h-3.5" />
+                Archive {resolvedUnarchivedCount} completed/failed
+              </button>
+            )}
+            {archivedCount > 0 && (
+              <button
+                onClick={() => setShowArchived((v) => !v)}
+                className="text-xs text-slate-500 hover:text-slate-300"
+              >
+                {showArchived ? "Hide" : "Show"} {archivedCount} archived
+              </button>
+            )}
+          </div>
+        )}
+
+        {visibleTasks.length === 0 ? (
           <p className="text-sm text-slate-500 text-center py-10">
-            Nothing assigned to {worker.name} yet.
+            {tasks.length === 0
+              ? `Nothing assigned to ${worker.name} yet.`
+              : "Nothing to show — everything's archived."}
           </p>
         ) : (
           <div className="space-y-2">
-            {tasks.map((task) => {
+            {visibleTasks.map((task) => {
               const meta = workerTaskStatusMeta(task.status);
+              const isResolved = task.status === "completed" || task.status === "failed";
               return (
                 <div key={task.id} className="border border-slate-800 rounded-lg p-3 bg-slate-900">
                   <div className="flex items-center justify-between gap-2 mb-1.5">
@@ -14184,7 +14250,7 @@ function WorkerDetailPage({ worker, tasks, onUpdateTask, onDeleteTask, onBack })
                   {task.status === "failed" && task.failReason && (
                     <p className="text-xs text-red-400 mb-2">⚠ {task.failReason}</p>
                   )}
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex flex-wrap gap-1.5 mb-2">
                     {WORKER_TASK_STATUSES.map((s) => (
                       <button
                         key={s.key}
@@ -14199,6 +14265,25 @@ function WorkerDetailPage({ worker, tasks, onUpdateTask, onDeleteTask, onBack })
                       </button>
                     ))}
                   </div>
+                  {task.archived ? (
+                    <button
+                      onClick={() => unarchiveTask(task)}
+                      className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1"
+                    >
+                      <Archive className="w-3 h-3" />
+                      Archived — tap to restore
+                    </button>
+                  ) : (
+                    isResolved && (
+                      <button
+                        onClick={() => archiveTask(task)}
+                        className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1"
+                      >
+                        <Archive className="w-3 h-3" />
+                        Archive
+                      </button>
+                    )
+                  )}
                 </div>
               );
             })}
