@@ -14174,32 +14174,53 @@ function AssignToWorkerModal({ workers, itemLabel, initiallySelectedWorkerIds = 
 }
 
 function WorkerTaskAddForm({ workers, onSave, onCancel }) {
-  const [workerId, setWorkerId] = useState(workers[0]?.id || "");
+  const [selectedWorkerIds, setSelectedWorkerIds] = useState(new Set());
   const [title, setTitle] = useState("");
   const [jobLabel, setJobLabel] = useState("");
 
-  const canSave = workerId && title.trim();
+  const toggleWorker = (id) => {
+    setSelectedWorkerIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const canSave = selectedWorkerIds.size > 0 && title.trim();
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-      <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg p-5">
-        <h2 className="text-slate-100 font-semibold text-base mb-4">New task</h2>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+        <div className="px-5 pt-5 shrink-0">
+          <h2 className="text-slate-100 font-semibold text-base mb-4">New task</h2>
+        </div>
         {workers.length === 0 ? (
-          <p className="text-sm text-slate-500 mb-4">
+          <p className="text-sm text-slate-500 px-5 mb-4">
             Add a worker to the roster first before assigning a task.
           </p>
         ) : (
-          <>
+          <div className="flex-1 overflow-y-auto px-5">
             <label className="block text-xs font-medium text-slate-400 mb-1.5">
               Assign to
             </label>
-            <Select
-              value={workerId}
-              onChange={setWorkerId}
-              options={workers.map((w) => w.id)}
-              labels={Object.fromEntries(workers.map((w) => [w.id, w.name]))}
-            />
-            <label className="block text-xs font-medium text-slate-400 mb-1.5 mt-3">
+            <div className="space-y-1.5 mb-3">
+              {workers.map((w) => (
+                <label
+                  key={w.id}
+                  className="flex items-center gap-2.5 px-3 py-2 rounded-md border border-slate-800 bg-slate-800/40 cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedWorkerIds.has(w.id)}
+                    onChange={() => toggleWorker(w.id)}
+                    className="w-4 h-4 rounded accent-amber-500 shrink-0"
+                  />
+                  <span className="text-sm text-slate-100">{w.name}</span>
+                </label>
+              ))}
+            </div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
               Task
             </label>
             <input
@@ -14215,11 +14236,11 @@ function WorkerTaskAddForm({ workers, onSave, onCancel }) {
               value={jobLabel}
               onChange={(e) => setJobLabel(e.target.value)}
               placeholder="e.g. 3052"
-              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
             />
-          </>
+          </div>
         )}
-        <div className="flex gap-3">
+        <div className="flex gap-3 p-5 pt-3 shrink-0">
           <button
             onClick={onCancel}
             className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
@@ -14229,13 +14250,16 @@ function WorkerTaskAddForm({ workers, onSave, onCancel }) {
           {workers.length > 0 && (
             <button
               onClick={() => {
-                const w = workers.find((w) => w.id === workerId);
-                onSave(newWorkerTask(w.id, w.name, title.trim(), jobLabel.trim()));
+                const tasks = [...selectedWorkerIds]
+                  .map((wid) => workers.find((w) => w.id === wid))
+                  .filter(Boolean)
+                  .map((w) => newWorkerTask(w.id, w.name, title.trim(), jobLabel.trim()));
+                onSave(tasks);
               }}
               disabled={!canSave}
               className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
             >
-              Add task
+              Add task{selectedWorkerIds.size > 1 ? "s" : ""}
             </button>
           )}
         </div>
@@ -14605,9 +14629,9 @@ function WorkerTasksSection({ onClose }) {
   const removeWorker = (id) => {
     saveWorkers(workers.filter((w) => w.id !== id));
   };
-  const addTask = (task) => {
+  const addTask = (newTasks) => {
     playSaveChime();
-    saveTasks([...tasks, task]);
+    saveTasks([...tasks, ...newTasks]);
     setShowAddTask(false);
   };
   const updateTask = (updated) => {
