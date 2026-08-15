@@ -6145,38 +6145,40 @@ function ItemCard({ item, selectMode, selected, isEditor, workerTasks = [], onTo
           </span>
         )}
         {(() => {
-          const assignedTask = item.assignedTaskId
-            ? workerTasks.find((t) => t.id === item.assignedTaskId)
-            : null;
-          const taskMeta = assignedTask ? workerTaskStatusMeta(assignedTask.status) : null;
-          if (assignedTask) {
-            return (
-              isEditor && (
+          const assignedTaskIds = item.assignedTaskIds || [];
+          const assignedTasks = assignedTaskIds
+            .map((tid) => workerTasks.find((t) => t.id === tid))
+            .filter(Boolean);
+          return (
+            <>
+              {assignedTasks.map((task) => {
+                const taskMeta = workerTaskStatusMeta(task.status);
+                return (
+                  <button
+                    key={task.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAssignItem(item);
+                    }}
+                    disabled={!isEditor}
+                    className={`text-xs rounded-full px-2.5 py-1 border ${taskMeta.color}`}
+                  >
+                    👤 {task.workerName} · {taskMeta.label}
+                  </button>
+                );
+              })}
+              {isEditor && !selectMode && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     onAssignItem(item);
                   }}
-                  className={`text-xs rounded-full px-2.5 py-1 border ${taskMeta.color}`}
+                  className="text-xs rounded-full px-2.5 py-1 border border-slate-700 text-slate-500 hover:text-slate-300"
                 >
-                  👤 {assignedTask.workerName} · {taskMeta.label}
+                  {assignedTasks.length > 0 ? "+ Add worker" : "+ Assign"}
                 </button>
-              )
-            );
-          }
-          return (
-            isEditor &&
-            !selectMode && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onAssignItem(item);
-                }}
-                className="text-xs rounded-full px-2.5 py-1 border border-slate-700 text-slate-500 hover:text-slate-300"
-              >
-                + Assign
-              </button>
-            )
+              )}
+            </>
           );
         })()}
         <span className={`text-xs rounded-full px-2.5 py-1 border ${GANG_COLOR[item.gang]}`}>
@@ -7365,6 +7367,7 @@ function JobInventory({
   workers = [],
   workerTasks = [],
   onAssignToWorker,
+  onUnassignWorkerTask,
   onRequestLogin,
   onUpdateJob,
   onBackToJobs,
@@ -7730,29 +7733,38 @@ function JobInventory({
   // Not routed through bulkUpdate — creating a worker task per item is a
   // real side effect (writing to Worker Tasks storage), not a pure data
   // transform, so it needs its own path.
-  const bulkAssignToWorker = (worker) => {
-    if (!worker || !onAssignToWorker) return;
+  const bulkAssignToWorker = (workerIds) => {
+    if (!workerIds || workerIds.length === 0 || !onAssignToWorker) return;
     playSaveChime();
     const targetItems = (job.items || []).filter((i) => selectedItemIds.includes(i.id));
-    const taskIdByItemId = {};
+    const newTaskIdsByItemId = {};
     targetItems.forEach((item) => {
-      taskIdByItemId[item.id] = onAssignToWorker(
-        worker,
-        `${item.name} x${item.qtyHave}`,
-        job.name,
-        { type: "job_item", itemId: item.id, jobId: job.id }
-      );
+      const taskIds = [];
+      workerIds.forEach((wid) => {
+        const worker = workers.find((w) => w.id === wid);
+        if (!worker) return;
+        const taskId = onAssignToWorker(
+          worker,
+          `${item.name} x${item.qtyHave}`,
+          job.name,
+          { type: "job_item", itemId: item.id, jobId: job.id }
+        );
+        if (taskId) taskIds.push(taskId);
+      });
+      newTaskIdsByItemId[item.id] = taskIds;
     });
     onUpdateJob((prevJob) => ({
       ...prevJob,
       items: prevJob.items.map((i) =>
-        taskIdByItemId[i.id] ? { ...i, assignedTaskId: taskIdByItemId[i.id] } : i
+        newTaskIdsByItemId[i.id]
+          ? { ...i, assignedTaskIds: [...(i.assignedTaskIds || []), ...newTaskIdsByItemId[i.id]] }
+          : i
       ),
       activityLog: [
         {
           id: uniqueId(),
           time: timeStamp(),
-          message: `Assigned ${targetItems.length} item${targetItems.length === 1 ? "" : "s"} to ${worker.name}`,
+          message: `Assigned ${targetItems.length} item${targetItems.length === 1 ? "" : "s"} to ${workerIds.length} worker${workerIds.length === 1 ? "" : "s"}`,
         },
         ...prevJob.activityLog,
       ].slice(0, 50),
@@ -7761,18 +7773,45 @@ function JobInventory({
     clearSelection();
   };
 
-  const confirmAssignSingle = (worker) => {
-    if (!assigningItem || !worker || !onAssignToWorker) return;
+  const confirmAssignSingle = (workerIds) => {
+    if (!assigningItem || !onAssignToWorker) return;
     playSaveChime();
-    const taskId = onAssignToWorker(
-      worker,
-      `${assigningItem.name} x${assigningItem.qtyHave}`,
-      job.name,
-      { type: "job_item", itemId: assigningItem.id, jobId: job.id }
-    );
+    const currentTaskIds = assigningItem.assignedTaskIds || [];
+    const currentWorkerIds = currentTaskIds
+      .map((tid) => workerTasks.find((t) => t.id === tid)?.workerId)
+      .filter(Boolean);
+
+    const addedWorkerIds = workerIds.filter((wid) => !currentWorkerIds.includes(wid));
+    const removedTaskIds = currentTaskIds.filter((tid) => {
+      const t = workerTasks.find((task) => task.id === tid);
+      return t && !workerIds.includes(t.workerId);
+    });
+
+    const newTaskIds = addedWorkerIds
+      .map((wid) => {
+        const worker = workers.find((w) => w.id === wid);
+        if (!worker) return null;
+        return onAssignToWorker(
+          worker,
+          `${assigningItem.name} x${assigningItem.qtyHave}`,
+          job.name,
+          { type: "job_item", itemId: assigningItem.id, jobId: job.id }
+        );
+      })
+      .filter(Boolean);
+
+    if (onUnassignWorkerTask) removedTaskIds.forEach((tid) => onUnassignWorkerTask(tid));
+
+    const finalTaskIds = [
+      ...currentTaskIds.filter((tid) => !removedTaskIds.includes(tid)),
+      ...newTaskIds,
+    ];
+
     onUpdateJob((prevJob) => ({
       ...prevJob,
-      items: prevJob.items.map((i) => (i.id === assigningItem.id ? { ...i, assignedTaskId: taskId } : i)),
+      items: prevJob.items.map((i) =>
+        i.id === assigningItem.id ? { ...i, assignedTaskIds: finalTaskIds } : i
+      ),
     }));
     setAssigningItem(null);
   };
@@ -8976,7 +9015,7 @@ function JobInventory({
         <AssignToWorkerModal
           workers={workers}
           itemLabel={`${selectedItemIds.length} selected item${selectedItemIds.length === 1 ? "" : "s"}`}
-          onAssign={bulkAssignToWorker}
+          onConfirm={bulkAssignToWorker}
           onCancel={() => setBulkAssignPicker(false)}
         />
       )}
@@ -8985,7 +9024,10 @@ function JobInventory({
         <AssignToWorkerModal
           workers={workers}
           itemLabel={`${assigningItem.name} x${assigningItem.qtyHave}`}
-          onAssign={confirmAssignSingle}
+          initiallySelectedWorkerIds={(assigningItem.assignedTaskIds || [])
+            .map((tid) => workerTasks.find((t) => t.id === tid)?.workerId)
+            .filter(Boolean)}
+          onConfirm={confirmAssignSingle}
           onCancel={() => setAssigningItem(null)}
         />
       )}
@@ -11077,6 +11119,15 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
     return task.id;
   };
 
+  const unassignWorkerTask = (taskId) => {
+    if (!isEditor) return;
+    setWorkerTasks((prev) => {
+      const next = prev.filter((t) => t.id !== taskId);
+      saveWithRetry(WORKER_TASKS_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
   // Worker Tasks manages its own independent copy of this data while
   // it is open, so edits/deletes made there do not automatically reach
   // whatever is already sitting in memory here — refresh on close so item
@@ -11623,6 +11674,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           workers={workers}
           workerTasks={workerTasks}
           onAssignToWorker={assignItemToWorker}
+          onUnassignWorkerTask={unassignWorkerTask}
           onRequestLogin={onRequestLogin}
           onUpdateJob={updateActiveJob}
           onBackToJobs={() => setShowPicker(true)}
@@ -12005,7 +12057,7 @@ function newLoveListItem(name, qty, extra = {}) {
     needsOrdering: extra.needsOrdering !== false,
     archived: false,
     duplicateOf: extra.duplicateOf || null,
-    assignedTaskId: null,
+    assignedTaskIds: [],
   };
 }
 
@@ -12719,7 +12771,7 @@ function LoveListAddForm({ catalog, allLists, onLearnAlias, onSave, onCancel }) 
   );
 }
 
-function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], onAssignToWorker, onUpdateList, onDeleteList, onLearnAlias, onBack, onGoHome }) {
+function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onBack, onGoHome }) {
   const [addingItem, setAddingItem] = useState(false);
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
@@ -12830,25 +12882,77 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     setEditingQtyFor(null);
   };
 
-  const confirmAssign = (worker) => {
-    if (!assigningItem || !worker || !onAssignToWorker) return;
+  const confirmAssign = (workerIds) => {
+    if (!assigningItem || !onAssignToWorker) return;
     playSaveChime();
-    const targetItems = assigningItem === "bulk" ? list.items.filter((i) => selectedIds.has(i.id)) : [assigningItem];
-    const updatedItems = list.items.map((i) => {
-      const target = targetItems.find((t) => t.id === i.id);
-      if (!target) return i;
-      const taskId = onAssignToWorker(
-        worker,
-        `${target.name} x${target.qty}${target.qtyUnit ? ` ${target.qtyUnit}` : ""}`,
-        list.jobLabel,
-        { type: "love_list_item", itemId: target.id, listId: list.id }
-      );
-      return { ...i, assignedTaskId: taskId };
+
+    if (assigningItem === "bulk") {
+      const targetItems = list.items.filter((i) => selectedIds.has(i.id));
+      const updatedItems = list.items.map((i) => {
+        const target = targetItems.find((t) => t.id === i.id);
+        if (!target) return i;
+        const newTaskIds = workerIds
+          .map((wid) => {
+            const worker = workers.find((w) => w.id === wid);
+            if (!worker) return null;
+            return onAssignToWorker(
+              worker,
+              `${target.name} x${target.qty}${target.qtyUnit ? ` ${target.qtyUnit}` : ""}`,
+              list.jobLabel,
+              { type: "love_list_item", itemId: target.id, listId: list.id }
+            );
+          })
+          .filter(Boolean);
+        return { ...i, assignedTaskIds: [...(i.assignedTaskIds || []), ...newTaskIds] };
+      });
+      onUpdateList({ ...list, items: updatedItems });
+      setAssigningItem(null);
+      setSelectMode(false);
+      setSelectedIds(new Set());
+      return;
+    }
+
+    // Single item — diff against what's currently assigned so unchecking
+    // someone actually removes them instead of just leaving stale tasks.
+    const target = assigningItem;
+    const currentTaskIds = target.assignedTaskIds || [];
+    const currentWorkerIds = currentTaskIds
+      .map((tid) => workerTasks.find((t) => t.id === tid)?.workerId)
+      .filter(Boolean);
+
+    const addedWorkerIds = workerIds.filter((wid) => !currentWorkerIds.includes(wid));
+    const removedTaskIds = currentTaskIds.filter((tid) => {
+      const t = workerTasks.find((task) => task.id === tid);
+      return t && !workerIds.includes(t.workerId);
     });
-    onUpdateList({ ...list, items: updatedItems });
+
+    const newTaskIds = addedWorkerIds
+      .map((wid) => {
+        const worker = workers.find((w) => w.id === wid);
+        if (!worker) return null;
+        return onAssignToWorker(
+          worker,
+          `${target.name} x${target.qty}${target.qtyUnit ? ` ${target.qtyUnit}` : ""}`,
+          list.jobLabel,
+          { type: "love_list_item", itemId: target.id, listId: list.id }
+        );
+      })
+      .filter(Boolean);
+
+    if (onUnassignWorkerTask) removedTaskIds.forEach((tid) => onUnassignWorkerTask(tid));
+
+    const finalTaskIds = [
+      ...currentTaskIds.filter((tid) => !removedTaskIds.includes(tid)),
+      ...newTaskIds,
+    ];
+
+    onUpdateList({
+      ...list,
+      items: list.items.map((i) =>
+        i.id === target.id ? { ...i, assignedTaskIds: finalTaskIds } : i
+      ),
+    });
     setAssigningItem(null);
-    setSelectMode(false);
-    setSelectedIds(new Set());
   };
 
   const toggleSelected = (id) => {
@@ -13183,30 +13287,34 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                   </button>
                 )}
                 {(() => {
-                  const assignedTask = item.assignedTaskId
-                    ? workerTasks.find((t) => t.id === item.assignedTaskId)
-                    : null;
-                  const taskMeta = assignedTask ? workerTaskStatusMeta(assignedTask.status) : null;
-                  if (assignedTask) {
-                    return (
-                      <button
-                        onClick={() => isEditor && setAssigningItem(item)}
-                        disabled={!isEditor}
-                        className={`text-xs rounded-full px-2 py-0.5 border mb-2 inline-block ${taskMeta.color}`}
-                      >
-                        👤 {assignedTask.workerName} · {taskMeta.label}
-                      </button>
-                    );
-                  }
+                  const assignedTaskIds = item.assignedTaskIds || [];
+                  const assignedTasks = assignedTaskIds
+                    .map((tid) => workerTasks.find((t) => t.id === tid))
+                    .filter(Boolean);
                   return (
-                    isEditor && (
-                      <button
-                        onClick={() => setAssigningItem(item)}
-                        className="text-xs mb-2 block text-slate-600 hover:text-slate-400"
-                      >
-                        + Assign to worker
-                      </button>
-                    )
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {assignedTasks.map((task) => {
+                        const taskMeta = workerTaskStatusMeta(task.status);
+                        return (
+                          <button
+                            key={task.id}
+                            onClick={() => isEditor && setAssigningItem(item)}
+                            disabled={!isEditor}
+                            className={`text-xs rounded-full px-2 py-0.5 border inline-block ${taskMeta.color}`}
+                          >
+                            👤 {task.workerName} · {taskMeta.label}
+                          </button>
+                        );
+                      })}
+                      {isEditor && (
+                        <button
+                          onClick={() => setAssigningItem(item)}
+                          className="text-xs rounded-full px-2 py-0.5 border border-slate-700 text-slate-600 hover:text-slate-400"
+                        >
+                          {assignedTasks.length > 0 ? "+ Add worker" : "+ Assign to worker"}
+                        </button>
+                      )}
+                    </div>
                   );
                 })()}
                 {isEditor ? (
@@ -13404,7 +13512,14 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
               ? `${selectedIds.size} selected item${selectedIds.size === 1 ? "" : "s"}`
               : `${assigningItem.name} x${assigningItem.qty}${assigningItem.qtyUnit ? ` ${assigningItem.qtyUnit}` : ""}`
           }
-          onAssign={confirmAssign}
+          initiallySelectedWorkerIds={
+            assigningItem === "bulk"
+              ? []
+              : (assigningItem.assignedTaskIds || [])
+                  .map((tid) => workerTasks.find((t) => t.id === tid)?.workerId)
+                  .filter(Boolean)
+          }
+          onConfirm={confirmAssign}
           onCancel={() => setAssigningItem(null)}
         />
       )}
@@ -14000,26 +14115,44 @@ function WorkerRosterModal({ workers, onAddWorker, onRemoveWorker, onClose }) {
 // Shared between Love Lists and Job Lists item cards — assigning an item
 // creates a real tracked task for that worker, not just a label, so it
 // counts toward their completion rate in Worker Tasks.
-function AssignToWorkerModal({ workers, itemLabel, onAssign, onCancel }) {
-  const [workerId, setWorkerId] = useState(workers[0]?.id || "");
+function AssignToWorkerModal({ workers, itemLabel, initiallySelectedWorkerIds = [], onConfirm, onCancel }) {
+  const [selected, setSelected] = useState(new Set(initiallySelectedWorkerIds));
+  const toggle = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 px-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
-        <h3 className="text-slate-100 font-semibold mb-1">Assign to worker</h3>
+      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5 max-h-[80vh] flex flex-col">
+        <h3 className="text-slate-100 font-semibold mb-1">Assign to worker(s)</h3>
         <p className="text-xs text-slate-500 mb-4 truncate">{itemLabel}</p>
         {workers.length === 0 ? (
           <p className="text-sm text-slate-500 mb-4">
             No workers on the roster yet — add one from Worker Tasks first.
           </p>
         ) : (
-          <Select
-            value={workerId}
-            onChange={setWorkerId}
-            options={workers.map((w) => w.id)}
-            labels={Object.fromEntries(workers.map((w) => [w.id, w.name]))}
-          />
+          <div className="flex-1 overflow-y-auto space-y-1.5 mb-2">
+            {workers.map((w) => (
+              <label
+                key={w.id}
+                className="flex items-center gap-2.5 px-3 py-2 rounded-md border border-slate-800 bg-slate-800/40 cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  checked={selected.has(w.id)}
+                  onChange={() => toggle(w.id)}
+                  className="w-4 h-4 rounded accent-amber-500 shrink-0"
+                />
+                <span className="text-sm text-slate-100">{w.name}</span>
+              </label>
+            ))}
+          </div>
         )}
-        <div className="flex gap-3 mt-5">
+        <div className="flex gap-3 mt-3">
           <button
             onClick={onCancel}
             className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
@@ -14028,10 +14161,10 @@ function AssignToWorkerModal({ workers, itemLabel, onAssign, onCancel }) {
           </button>
           {workers.length > 0 && (
             <button
-              onClick={() => onAssign(workers.find((w) => w.id === workerId))}
+              onClick={() => onConfirm([...selected])}
               className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
             >
-              Assign
+              Save
             </button>
           )}
         </div>
@@ -14586,6 +14719,15 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
     return task.id;
   };
 
+  const unassignWorkerTask = (taskId) => {
+    if (!isEditor) return;
+    setWorkerTasks((prev) => {
+      const next = prev.filter((t) => t.id !== taskId);
+      saveWithRetry(WORKER_TASKS_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
   const updateLists = (updater) => {
     if (!isEditor) return;
     setLists((prev) => {
@@ -14665,6 +14807,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
         workers={workers}
         workerTasks={workerTasks}
         onAssignToWorker={assignItemToWorker}
+        onUnassignWorkerTask={unassignWorkerTask}
         onUpdateList={handleUpdateList}
         onDeleteList={handleDeleteList}
         onLearnAlias={learnCatalogAlias}
