@@ -6796,7 +6796,12 @@ function JobPicker({
     .filter((j) => !j.parentId && !j.isQuickTransfer)
     .filter((j) => showArchived || !j.archived);
   const archivedCount = jobs.filter((j) => !j.parentId && !j.isQuickTransfer && j.archived).length;
-  const quickTransferJobs = jobs.filter((j) => j.isQuickTransfer && !j.parentId);
+  const quickTransferJobs = jobs
+    .filter((j) => j.isQuickTransfer && !j.parentId)
+    .filter((j) => showArchived || !j.archived);
+  const archivedQuickTransferCount = jobs.filter(
+    (j) => j.isQuickTransfer && !j.parentId && j.archived
+  ).length;
   const childrenOf = (parentId) => jobs.filter((j) => j.parentId === parentId);
 
   // The catalog link for a given item never depends on what's being typed
@@ -7250,12 +7255,23 @@ function JobPicker({
           </div>
         )}
 
-        {!searching && quickTransferJobs.length > 0 && (
+        {!searching && (quickTransferJobs.length > 0 || archivedQuickTransferCount > 0) && (
           <div className="mt-8">
-            <p className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-1.5">
-              <Truck className="w-3.5 h-3.5" />
-              Quick Transfers
-            </p>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-medium text-slate-500 flex items-center gap-1.5">
+                <Truck className="w-3.5 h-3.5" />
+                Quick Transfers
+              </p>
+              {archivedQuickTransferCount > 0 && (
+                <button
+                  onClick={() => setShowArchived((v) => !v)}
+                  className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1"
+                >
+                  <Archive className="w-3.5 h-3.5" />
+                  {showArchived ? "Hide" : "Show"} {archivedQuickTransferCount} archived
+                </button>
+              )}
+            </div>
             <div className="space-y-2.5">
               {quickTransferJobs.map((job) => {
                 const children = childrenOf(job.id);
