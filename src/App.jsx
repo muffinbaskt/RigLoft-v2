@@ -17,6 +17,7 @@ import {
   Filter,
   Briefcase,
   Heart,
+  ShoppingCart,
   Settings,
   Users,
   Image as ImageIcon,
@@ -13062,6 +13063,26 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     });
   };
 
+  const bulkMarkOrdered = () => {
+    const today = new Date().toISOString().slice(0, 10);
+    playSaveChime();
+    onUpdateList({
+      ...list,
+      items: list.items.map((i) => {
+        // Items pulled from inventory never actually pass through
+        // "Ordered" — skip them rather than giving them a fake order date.
+        if (!selectedIds.has(i.id) || i.needsOrdering === false) return i;
+        return {
+          ...i,
+          status: "ordered",
+          statusDates: { ...i.statusDates, ordered: i.statusDates.ordered || today },
+        };
+      }),
+    });
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
 
   const relinkCatalog = (catalogItem) => {
     if (!relinkingItem) return;
@@ -13227,13 +13248,22 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
               {selectMode ? "Cancel select" : "Select items"}
             </button>
             {selectMode && selectedIds.size > 0 && (
-              <button
-                onClick={() => setAssigningItem("bulk")}
-                className="text-xs flex items-center gap-1 bg-amber-500 text-slate-950 font-semibold rounded-md px-2.5 py-1.5 hover:bg-amber-400"
-              >
-                <Users className="w-3.5 h-3.5" />
-                Assign {selectedIds.size} selected
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={bulkMarkOrdered}
+                  className="text-xs flex items-center gap-1 bg-amber-500 text-slate-950 font-semibold rounded-md px-2.5 py-1.5 hover:bg-amber-400"
+                >
+                  <ShoppingCart className="w-3.5 h-3.5" />
+                  Mark as Ordered
+                </button>
+                <button
+                  onClick={() => setAssigningItem("bulk")}
+                  className="text-xs flex items-center gap-1 bg-amber-500 text-slate-950 font-semibold rounded-md px-2.5 py-1.5 hover:bg-amber-400"
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  Assign {selectedIds.size} selected
+                </button>
+              </div>
             )}
           </div>
         )}
