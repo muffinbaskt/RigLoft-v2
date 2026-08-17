@@ -7483,6 +7483,15 @@ function JobInventory({
         if (match.storage === "Other") {
           fieldChanges.storageDetail = match.storageDetail || "";
         }
+      } else if (
+        match.storage === "Other" &&
+        (match.storageDetail || "") !== (i.storageDetail || "")
+      ) {
+        // Storage is already "Other" on both sides, but the actual detail
+        // text differs (or was never carried over in the first place) —
+        // sync it on its own even though the top-level storage value
+        // itself isn't changing.
+        fieldChanges.storageDetail = match.storageDetail || "";
       }
       // Category still only fills in if missing — never overwrites one you
       // deliberately chose by hand, unlike gang/storage which should match
