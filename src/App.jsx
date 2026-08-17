@@ -13783,7 +13783,7 @@ function StaleThresholdsModal({ thresholds, onSave, onClose }) {
   );
 }
 
-function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onSaveThresholds, onOpenList, onAddList, onScanList, onGoHome }) {
+function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onSaveThresholds, onOpenList, onAddList, onScanList, onOpenWorkerTasks, onGoHome }) {
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("active"); // "active" | "ready"
   const [showThresholdSettings, setShowThresholdSettings] = useState(false);
@@ -13835,6 +13835,13 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
           </div>
           {isEditor && (
             <div className="flex gap-2 shrink-0">
+              <button
+                onClick={onOpenWorkerTasks}
+                title="Workers"
+                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+              >
+                <Users className="w-4 h-4" />
+              </button>
               <button
                 onClick={() => setShowThresholdSettings(true)}
                 title="Needs Attention timing"
@@ -14785,6 +14792,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   const [activeListId, setActiveListId] = useState(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
+  const [showWorkerTasks, setShowWorkerTasks] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -14850,6 +14858,19 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
       saveWithRetry(WORKER_TASKS_KEY, JSON.stringify(next)).catch(() => {});
       return next;
     });
+  };
+
+  // Same as the Job Lists side — Worker Tasks manages its own independent
+  // copy of this data while open, so refresh here too once it closes.
+  const reloadWorkerData = async () => {
+    try {
+      const workersResult = await getWithRetry(WORKERS_KEY);
+      if (workersResult.ok && workersResult.value) setWorkers(JSON.parse(workersResult.value));
+    } catch {}
+    try {
+      const tasksResult = await getWithRetry(WORKER_TASKS_KEY);
+      if (tasksResult.ok && tasksResult.value) setWorkerTasks(JSON.parse(tasksResult.value));
+    } catch {}
   };
 
   const updateLists = (updater) => {
@@ -14952,6 +14973,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
         onOpenList={(l) => setActiveListId(l.id)}
         onAddList={() => setShowAddForm(true)}
         onScanList={() => setShowScanModal(true)}
+        onOpenWorkerTasks={() => setShowWorkerTasks(true)}
         onGoHome={onGoHome}
       />
       {showAddForm && isEditor && (
@@ -14963,6 +14985,14 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
           onLearnAlias={learnCatalogAlias}
           onSave={handleSaveNewList}
           onCancel={() => setShowScanModal(false)}
+        />
+      )}
+      {showWorkerTasks && isEditor && (
+        <WorkerTasksSection
+          onClose={() => {
+            setShowWorkerTasks(false);
+            reloadWorkerData();
+          }}
         />
       )}
     </>
