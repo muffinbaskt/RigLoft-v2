@@ -6573,6 +6573,7 @@ function JobCard({
   onRename,
   onDelete,
   onToggleSeal,
+  onToggleArchive,
 }) {
   const borderClass = job.isQuickTransfer
     ? "border-l-sky-500"
@@ -6622,6 +6623,12 @@ function JobCard({
               <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-700 border border-slate-600 text-slate-300 rounded-full px-1.5 py-0.5 shrink-0 flex items-center gap-1">
                 <Lock className="w-2.5 h-2.5" />
                 Sealed
+              </span>
+            )}
+            {job.archived && (
+              <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-500 rounded-full px-1.5 py-0.5 shrink-0 flex items-center gap-1">
+                <Archive className="w-2.5 h-2.5" />
+                Archived
               </span>
             )}
             {!job.isQuickTransfer && job.parentId && (
@@ -6684,6 +6691,16 @@ function JobCard({
           <span
             onClick={(e) => {
               e.stopPropagation();
+              onToggleArchive(job);
+            }}
+            title={job.archived ? "Unarchive (show in main list)" : "Archive (hide from main list)"}
+            className="text-slate-600 hover:text-slate-300 p-1.5 rounded-md hover:bg-slate-800"
+          >
+            <Archive className="w-3.5 h-3.5" />
+          </span>
+          <span
+            onClick={(e) => {
+              e.stopPropagation();
               onRename(job);
             }}
             className="text-slate-600 hover:text-slate-300 p-1.5 rounded-md hover:bg-slate-800"
@@ -6717,6 +6734,7 @@ function JobPicker({
   onCreateSubJobClick,
   onDeleteRequest,
   onToggleJobSeal,
+  onToggleJobArchive,
   onRenameRequest,
   onResetRequest,
   onOpenCatalog,
@@ -6772,7 +6790,12 @@ function JobPicker({
     setBackupFolderName(null);
   };
 
-  const topLevel = jobs.filter((j) => !j.parentId && !j.isQuickTransfer);
+  const [showArchived, setShowArchived] = useState(false);
+
+  const topLevel = jobs
+    .filter((j) => !j.parentId && !j.isQuickTransfer)
+    .filter((j) => showArchived || !j.archived);
+  const archivedCount = jobs.filter((j) => !j.parentId && !j.isQuickTransfer && j.archived).length;
   const quickTransferJobs = jobs.filter((j) => j.isQuickTransfer && !j.parentId);
   const childrenOf = (parentId) => jobs.filter((j) => j.parentId === parentId);
 
@@ -7028,6 +7051,7 @@ function JobPicker({
                             onRename={onRenameRequest}
                             onDelete={onDeleteRequest}
                             onToggleSeal={onToggleJobSeal}
+                            onToggleArchive={onToggleJobArchive}
                           />
                         );
                       })}
@@ -7140,6 +7164,15 @@ function JobPicker({
           </div>
         ) : (
           <div className="space-y-3">
+            {archivedCount > 0 && (
+              <button
+                onClick={() => setShowArchived((v) => !v)}
+                className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1 mb-1"
+              >
+                <Archive className="w-3.5 h-3.5" />
+                {showArchived ? "Hide" : "Show"} {archivedCount} archived job{archivedCount === 1 ? "" : "s"}
+              </button>
+            )}
             {topLevel.map((job) => {
               const outstanding = (job.items || []).filter((i) => i.status !== "green").length;
               const children = childrenOf(job.id);
@@ -7173,6 +7206,7 @@ function JobPicker({
                         onRename={onRenameRequest}
                         onDelete={onDeleteRequest}
                         onToggleSeal={onToggleJobSeal}
+                        onToggleArchive={onToggleJobArchive}
                       />
                     </div>
                   </div>
@@ -7194,6 +7228,7 @@ function JobPicker({
                             onRename={onRenameRequest}
                             onDelete={onDeleteRequest}
                             onToggleSeal={onToggleJobSeal}
+                            onToggleArchive={onToggleJobArchive}
                           />
                         );
                       })}
@@ -7283,6 +7318,7 @@ function JobPicker({
                               onRename={onRenameRequest}
                               onDelete={onDeleteRequest}
                               onToggleSeal={onToggleJobSeal}
+                              onToggleArchive={onToggleJobArchive}
                             />
                           );
                         })}
@@ -11041,6 +11077,10 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
     setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, sealed: !j.sealed } : j)));
   };
 
+  const toggleJobArchive = (job) => {
+    setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, archived: !j.archived } : j)));
+  };
+
   const deleteJob = (job) => {
     setJobs((prev) => prev.filter((j) => j.id !== job.id && j.parentId !== job.id));
     if (activeJobId === job.id || jobs.find((j) => j.id === activeJobId)?.parentId === job.id) {
@@ -11654,6 +11694,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           onCreateSubJobClick={(job) => setSubJobParent(job)}
           onDeleteRequest={(job) => setJobDeleteTarget(job)}
           onToggleJobSeal={toggleJobSeal}
+          onToggleJobArchive={toggleJobArchive}
           onRenameRequest={(job) => setJobRenameTarget(job)}
           onResetRequest={() => setResetConfirmOpen(true)}
           onOpenCatalog={() => setCatalogModalOpen(true)}
