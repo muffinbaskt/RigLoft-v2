@@ -7750,7 +7750,7 @@ function JobInventory({
         if (!worker) return;
         const taskId = onAssignToWorker(
           worker,
-          `${item.name} x${item.qtyHave}`,
+          `${item.name} ${item.qtyHave}/${item.qtyNeeded}`,
           job.name,
           { type: "job_item", itemId: item.id, jobId: job.id }
         );
@@ -7798,7 +7798,7 @@ function JobInventory({
         if (!worker) return null;
         return onAssignToWorker(
           worker,
-          `${assigningItem.name} x${assigningItem.qtyHave}`,
+          `${assigningItem.name} ${assigningItem.qtyHave}/${assigningItem.qtyNeeded}`,
           job.name,
           { type: "job_item", itemId: assigningItem.id, jobId: job.id }
         );
@@ -9028,7 +9028,7 @@ function JobInventory({
       {assigningItem && (
         <AssignToWorkerModal
           workers={workers}
-          itemLabel={`${assigningItem.name} x${assigningItem.qtyHave}`}
+          itemLabel={`${assigningItem.name} ${assigningItem.qtyHave}/${assigningItem.qtyNeeded}`}
           initiallySelectedWorkerIds={(assigningItem.assignedTaskIds || [])
             .map((tid) => workerTasks.find((t) => t.id === tid)?.workerId)
             .filter(Boolean)}
@@ -12050,6 +12050,7 @@ function newLoveListItem(name, qty, extra = {}) {
     id: uniqueId(),
     name,
     qty,
+    qtyHave: extra.qtyHave || 0,
     qtyUnit: extra.qtyUnit || "",
     status: "requested",
     statusDates: { requested: today, ordered: null, received: null, staged: null, sent: null },
@@ -12794,6 +12795,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [noteDraft, setNoteDraft] = useState("");
   const [editingQtyFor, setEditingQtyFor] = useState(null); // item, while editing its qty
   const [qtyDraft, setQtyDraft] = useState("");
+  const [qtyHaveDraft, setQtyHaveDraft] = useState("");
   const [qtyUnitDraft, setQtyUnitDraft] = useState("");
   const [catalogSearch, setCatalogSearch] = useState("");
   const [smeDraft, setSmeDraft] = useState("");
@@ -12879,11 +12881,14 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     if (!editingQtyFor) return;
     const num = Number(qtyDraft);
     if (!num || num <= 0) return;
+    const haveNum = qtyHaveDraft.trim() === "" ? 0 : Math.max(0, Number(qtyHaveDraft) || 0);
     playSaveChime();
     onUpdateList({
       ...list,
       items: list.items.map((i) =>
-        i.id === editingQtyFor.id ? { ...i, qty: num, qtyUnit: qtyUnitDraft.trim() } : i
+        i.id === editingQtyFor.id
+          ? { ...i, qty: num, qtyHave: haveNum, qtyUnit: qtyUnitDraft.trim() }
+          : i
       ),
     });
     setEditingQtyFor(null);
@@ -12908,7 +12913,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
             if (!worker) return null;
             return onAssignToWorker(
               worker,
-              `${target.name} x${target.qty}${target.qtyUnit ? ` ${target.qtyUnit}` : ""}`,
+              `${target.name} ${target.qtyHave ?? 0}/${target.qty}${target.qtyUnit ? ` ${target.qtyUnit}` : ""}`,
               list.jobLabel,
               { type: "love_list_item", itemId: target.id, listId: list.id }
             );
@@ -12943,7 +12948,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         if (!worker) return null;
         return onAssignToWorker(
           worker,
-          `${target.name} x${target.qty}${target.qtyUnit ? ` ${target.qtyUnit}` : ""}`,
+          `${target.name} ${target.qtyHave ?? 0}/${target.qty}${target.qtyUnit ? ` ${target.qtyUnit}` : ""}`,
           list.jobLabel,
           { type: "love_list_item", itemId: target.id, listId: list.id }
         );
@@ -13221,18 +13226,19 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                           onClick={() => {
                             setEditingQtyFor(item);
                             setQtyDraft(String(item.qty));
+                            setQtyHaveDraft(String(item.qtyHave ?? 0));
                             setQtyUnitDraft(item.qtyUnit || "");
                           }}
                           className="text-slate-500 hover:underline decoration-dotted"
                         >
-                          x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
+                          {item.qtyHave ?? 0}/{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
                         </button>
                       </p>
                     ) : (
                       <p className="text-sm text-slate-100 truncate">
                         {item.name}{" "}
                         <span className="text-slate-500">
-                          x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
+                          {item.qtyHave ?? 0}/{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
                         </span>
                       </p>
                     )}
@@ -13495,7 +13501,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                     <p className="text-sm text-slate-100">
                       {item.name}{" "}
                       <span className="text-slate-500">
-                        x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
+                        {item.qtyHave ?? 0}/{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
                       </span>
                     </p>
                   </div>
@@ -13521,7 +13527,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           itemLabel={
             assigningItem === "bulk"
               ? `${selectedIds.size} selected item${selectedIds.size === 1 ? "" : "s"}`
-              : `${assigningItem.name} x${assigningItem.qty}${assigningItem.qtyUnit ? ` ${assigningItem.qtyUnit}` : ""}`
+              : `${assigningItem.name} ${assigningItem.qtyHave ?? 0}/${assigningItem.qty}${assigningItem.qtyUnit ? ` ${assigningItem.qtyUnit}` : ""}`
           }
           initiallySelectedWorkerIds={
             assigningItem === "bulk"
@@ -13599,24 +13605,38 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
           <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
             <h3 className="text-slate-100 font-semibold mb-3">Qty for "{editingQtyFor.name}"</h3>
-            <div className="flex gap-2 mb-4">
-              <input
-                autoFocus
-                type="number"
-                min="1"
-                value={qtyDraft}
-                onChange={(e) => setQtyDraft(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && saveQty()}
-                className="w-20 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
-              />
-              <input
-                value={qtyUnitDraft}
-                onChange={(e) => setQtyUnitDraft(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && saveQty()}
-                placeholder="each (default), case, box, custom..."
-                className="flex-1 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
-              />
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Have</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={qtyHaveDraft}
+                  onChange={(e) => setQtyHaveDraft(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && saveQty()}
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Needed</label>
+                <input
+                  autoFocus
+                  type="number"
+                  min="1"
+                  value={qtyDraft}
+                  onChange={(e) => setQtyDraft(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && saveQty()}
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+                />
+              </div>
             </div>
+            <input
+              value={qtyUnitDraft}
+              onChange={(e) => setQtyUnitDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && saveQty()}
+              placeholder="each (default), case, box, custom..."
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+            />
             <div className="flex gap-3">
               <button
                 onClick={() => setEditingQtyFor(null)}
@@ -13919,7 +13939,7 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
                                   <p className="text-sm text-slate-100">
                                     {item.name}{" "}
                                     <span className="text-slate-500">
-                                      x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
+                                      {item.qtyHave ?? 0}/{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
                                     </span>
                                   </p>
                                   <span className={`text-xs rounded-full px-2 py-0.5 border shrink-0 ${meta.color}`}>
@@ -14054,7 +14074,7 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
                               className="w-full text-left bg-slate-900 border border-sky-500/30 rounded-lg p-3 hover:border-sky-500/50"
                             >
                               <p className="text-sm text-slate-100">
-                                {item.name} <span className="text-slate-500">x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}</span>
+                                {item.name} <span className="text-slate-500">{item.qtyHave ?? 0}/{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}</span>
                               </p>
                               <p className="text-xs text-slate-500 mt-0.5">
                                 Staged {item.statusDates.staged}
@@ -14089,7 +14109,7 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
                             >
                               <div className="flex items-center justify-between gap-2">
                                 <p className="text-sm text-slate-100">
-                                  {item.name} <span className="text-slate-500">x{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}</span>
+                                  {item.name} <span className="text-slate-500">{item.qtyHave ?? 0}/{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}</span>
                                 </p>
                                 <span className={`text-xs rounded-full px-2 py-0.5 border shrink-0 ${meta.color}`}>
                                   {meta.label}
@@ -14368,7 +14388,7 @@ function WorkerTaskAddForm({ workers, onSave, onCancel }) {
   );
 }
 
-function WorkerDetailPage({ worker, tasks, onUpdateTask, onDeleteTask, onBack }) {
+function WorkerDetailPage({ worker, tasks, onUpdateTask, onBulkUpdateTasks, onDeleteTask, onBack }) {
   const [failingTask, setFailingTask] = useState(null);
   const [failReasonDraft, setFailReasonDraft] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -14406,9 +14426,11 @@ function WorkerDetailPage({ worker, tasks, onUpdateTask, onDeleteTask, onBack })
   const archiveTask = (task) => onUpdateTask({ ...task, archived: true });
   const unarchiveTask = (task) => onUpdateTask({ ...task, archived: false });
   const archiveAllResolved = () => {
-    tasks
+    const toArchive = tasks
       .filter((t) => (t.status === "completed" || t.status === "failed") && !t.archived)
-      .forEach((t) => onUpdateTask({ ...t, archived: true }));
+      .map((t) => ({ ...t, archived: true }));
+    if (toArchive.length === 0) return;
+    onBulkUpdateTasks(toArchive);
   };
 
   // Stats are computed from every task regardless of archived status —
@@ -14745,6 +14767,14 @@ function WorkerTasksSection({ onClose }) {
   const updateTask = (updated) => {
     saveTasks(tasks.map((t) => (t.id === updated.id ? updated : t)));
   };
+  // For updating several tasks at once (e.g. "archive all resolved") —
+  // calling updateTask repeatedly in a loop would have each call read the
+  // same stale tasks snapshot and overwrite the previous call's change,
+  // leaving only the last one actually applied. This does it in one pass.
+  const bulkUpdateTasks = (updatedTasks) => {
+    const byId = new Map(updatedTasks.map((t) => [t.id, t]));
+    saveTasks(tasks.map((t) => byId.get(t.id) || t));
+  };
   const deleteTask = (id) => {
     saveTasks(tasks.filter((t) => t.id !== id));
   };
@@ -14765,6 +14795,7 @@ function WorkerTasksSection({ onClose }) {
         worker={activeWorker}
         tasks={tasks.filter((t) => t.workerId === activeWorker.id)}
         onUpdateTask={updateTask}
+        onBulkUpdateTasks={bulkUpdateTasks}
         onDeleteTask={deleteTask}
         onBack={() => setActiveWorkerId(null)}
       />
