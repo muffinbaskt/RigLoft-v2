@@ -13142,6 +13142,11 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
               <p className="font-semibold text-slate-100 truncate flex items-center gap-1.5">
                 <Heart className="w-4 h-4 text-rose-400 shrink-0" />
                 {list.jobLabel}
+                {list.archived && (
+                  <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-500 rounded-full px-1.5 py-0.5 shrink-0">
+                    Archived
+                  </span>
+                )}
               </p>
               <p className="text-xs text-slate-500 truncate">
                 {list.dateReceived}
@@ -13156,6 +13161,15 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
               className="text-slate-400 hover:text-slate-200 p-2 shrink-0"
             >
               <ImageIcon className="w-4 h-4" />
+            </button>
+          )}
+          {isEditor && (
+            <button
+              onClick={() => onUpdateList({ ...list, archived: !list.archived })}
+              title={list.archived ? "Unarchive (show in main list)" : "Archive (hide from main list)"}
+              className="text-slate-500 hover:text-slate-300 p-2 shrink-0"
+            >
+              <Archive className="w-4 h-4" />
             </button>
           )}
           {isOwner && (
@@ -13897,8 +13911,12 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("active"); // "active" | "ready"
   const [showThresholdSettings, setShowThresholdSettings] = useState(false);
+  const [showArchivedLists, setShowArchivedLists] = useState(false);
 
   const searchLower = search.trim().toLowerCase();
+  // Search intentionally bypasses the archive filter — looking something
+  // up is a deliberate action, so it should still find it even if the
+  // list it's on has been archived.
   const searchResults = searchLower
     ? lists.flatMap((l) =>
         l.items
@@ -13907,18 +13925,21 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
       )
     : [];
 
-  const jobGroups = [...new Map(lists.map((l) => [l.jobLabel, l.jobLabel])).entries()]
+  const visibleLists = lists.filter((l) => showArchivedLists || !l.archived);
+  const archivedListCount = lists.filter((l) => l.archived).length;
+
+  const jobGroups = [...new Map(visibleLists.map((l) => [l.jobLabel, l.jobLabel])).entries()]
     .map(([label]) => label)
     .sort((a, b) => a.localeCompare(b));
 
-  const readyToSend = lists.flatMap((l) =>
+  const readyToSend = visibleLists.flatMap((l) =>
     l.items.filter((i) => i.status === "staged").map((i) => ({ list: l, item: i }))
   );
   const readyByJob = [...new Map(readyToSend.map((r) => [r.list.jobLabel, r.list.jobLabel])).keys()].sort(
     (a, b) => a.localeCompare(b)
   );
 
-  const staleItems = lists.flatMap((l) =>
+  const staleItems = visibleLists.flatMap((l) =>
     l.items.filter((i) => isStale(i, staleThresholds)).map((i) => ({ list: l, item: i }))
   );
   const staleByJob = [...new Map(staleItems.map((r) => [r.list.jobLabel, r.list.jobLabel])).keys()].sort(
@@ -14094,11 +14115,21 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
                 </p>
               ) : (
                 <div className="space-y-5">
+                  {archivedListCount > 0 && (
+                    <button
+                      onClick={() => setShowArchivedLists((v) => !v)}
+                      className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1"
+                    >
+                      <Archive className="w-3.5 h-3.5" />
+                      {showArchivedLists ? "Hide" : "Show"} {archivedListCount} archived list
+                      {archivedListCount === 1 ? "" : "s"}
+                    </button>
+                  )}
                   {jobGroups.map((jobLabel) => (
                     <div key={jobLabel}>
                       <p className="font-semibold text-slate-100 mb-2">{jobLabel}</p>
                       <div className="space-y-2">
-                        {lists
+                        {visibleLists
                           .filter((l) => l.jobLabel === jobLabel)
                           .sort((a, b) => b.dateReceived.localeCompare(a.dateReceived))
                           .map((list) => {
@@ -14113,8 +14144,13 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
                                 className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700"
                               >
                                 <div className="flex items-center justify-between gap-2 mb-1.5">
-                                  <p className="text-sm text-slate-100">
+                                  <p className="text-sm text-slate-100 flex items-center gap-1.5">
                                     {list.items.length} item{list.items.length === 1 ? "" : "s"}
+                                    {list.archived && (
+                                      <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-500 rounded-full px-1.5 py-0.5">
+                                        Archived
+                                      </span>
+                                    )}
                                   </p>
                                   <p className="text-xs text-slate-500">{list.dateReceived}</p>
                                 </div>
@@ -15044,6 +15080,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
       items,
       scanImageUrl: scanImageUrl || null,
       createdAt: timeStamp(),
+      archived: false,
     };
     playSaveChime();
     updateLists((prev) => [...prev, list]);
