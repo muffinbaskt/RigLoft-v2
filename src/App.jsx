@@ -7740,8 +7740,12 @@ function JobInventory({
     const targetItems = (job.items || []).filter((i) => selectedItemIds.includes(i.id));
     const newTaskIdsByItemId = {};
     targetItems.forEach((item) => {
+      const existingWorkerIds = (item.assignedTaskIds || [])
+        .map((tid) => workerTasks.find((t) => t.id === tid)?.workerId)
+        .filter(Boolean);
       const taskIds = [];
       workerIds.forEach((wid) => {
+        if (existingWorkerIds.includes(wid)) return; // already assigned — don't duplicate
         const worker = workers.find((w) => w.id === wid);
         if (!worker) return;
         const taskId = onAssignToWorker(
@@ -12894,7 +12898,11 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
       const updatedItems = list.items.map((i) => {
         const target = targetItems.find((t) => t.id === i.id);
         if (!target) return i;
+        const existingWorkerIds = (target.assignedTaskIds || [])
+          .map((tid) => workerTasks.find((t) => t.id === tid)?.workerId)
+          .filter(Boolean);
         const newTaskIds = workerIds
+          .filter((wid) => !existingWorkerIds.includes(wid)) // already assigned — don't duplicate
           .map((wid) => {
             const worker = workers.find((w) => w.id === wid);
             if (!worker) return null;
@@ -14475,67 +14483,75 @@ function WorkerDetailPage({ worker, tasks, onUpdateTask, onDeleteTask, onBack })
               : "Nothing to show — everything's archived."}
           </p>
         ) : (
-          <div className="space-y-2">
-            {visibleTasks.map((task) => {
-              const meta = workerTaskStatusMeta(task.status);
-              const isResolved = task.status === "completed" || task.status === "failed";
-              return (
-                <div key={task.id} className="border border-slate-800 rounded-lg p-3 bg-slate-900">
-                  <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <div className="min-w-0">
-                      <p className="text-sm text-slate-100 truncate">{task.title}</p>
-                      <p className="text-xs text-slate-500">
-                        {task.jobLabel && `Job ${task.jobLabel} · `}
-                        created {task.createdAt}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => setDeleteTarget(task)}
-                      className="text-slate-600 hover:text-red-400 shrink-0"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
+          <div className="space-y-5">
+            {[...new Map(visibleTasks.map((t) => [t.jobLabel || "No job", t.jobLabel || "No job"])).keys()]
+              .sort((a, b) => a.localeCompare(b))
+              .map((jobLabel) => (
+                <div key={jobLabel}>
+                  <p className="font-semibold text-slate-100 mb-2">{jobLabel}</p>
+                  <div className="space-y-2">
+                    {visibleTasks
+                      .filter((t) => (t.jobLabel || "No job") === jobLabel)
+                      .map((task) => {
+                        const meta = workerTaskStatusMeta(task.status);
+                        const isResolved = task.status === "completed" || task.status === "failed";
+                        return (
+                          <div key={task.id} className="border border-slate-800 rounded-lg p-3 bg-slate-900">
+                            <div className="flex items-center justify-between gap-2 mb-1.5">
+                              <div className="min-w-0">
+                                <p className="text-sm text-slate-100 truncate">{task.title}</p>
+                                <p className="text-xs text-slate-500">created {task.createdAt}</p>
+                              </div>
+                              <button
+                                onClick={() => setDeleteTarget(task)}
+                                className="text-slate-600 hover:text-red-400 shrink-0"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                            {task.status === "failed" && task.failReason && (
+                              <p className="text-xs text-red-400 mb-2">⚠ {task.failReason}</p>
+                            )}
+                            <div className="flex flex-wrap gap-1.5 mb-2">
+                              {WORKER_TASK_STATUSES.map((s) => (
+                                <button
+                                  key={s.key}
+                                  onClick={() => setStatus(task, s.key)}
+                                  className={`text-xs rounded-full px-2.5 py-1 border ${
+                                    task.status === s.key
+                                      ? s.color
+                                      : "bg-slate-800 border-slate-700 text-slate-500 hover:text-slate-300"
+                                  }`}
+                                >
+                                  {s.label}
+                                </button>
+                              ))}
+                            </div>
+                            {task.archived ? (
+                              <button
+                                onClick={() => unarchiveTask(task)}
+                                className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1"
+                              >
+                                <Archive className="w-3 h-3" />
+                                Archived — tap to restore
+                              </button>
+                            ) : (
+                              isResolved && (
+                                <button
+                                  onClick={() => archiveTask(task)}
+                                  className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1"
+                                >
+                                  <Archive className="w-3 h-3" />
+                                  Archive
+                                </button>
+                              )
+                            )}
+                          </div>
+                        );
+                      })}
                   </div>
-                  {task.status === "failed" && task.failReason && (
-                    <p className="text-xs text-red-400 mb-2">⚠ {task.failReason}</p>
-                  )}
-                  <div className="flex flex-wrap gap-1.5 mb-2">
-                    {WORKER_TASK_STATUSES.map((s) => (
-                      <button
-                        key={s.key}
-                        onClick={() => setStatus(task, s.key)}
-                        className={`text-xs rounded-full px-2.5 py-1 border ${
-                          task.status === s.key
-                            ? s.color
-                            : "bg-slate-800 border-slate-700 text-slate-500 hover:text-slate-300"
-                        }`}
-                      >
-                        {s.label}
-                      </button>
-                    ))}
-                  </div>
-                  {task.archived ? (
-                    <button
-                      onClick={() => unarchiveTask(task)}
-                      className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1"
-                    >
-                      <Archive className="w-3 h-3" />
-                      Archived — tap to restore
-                    </button>
-                  ) : (
-                    isResolved && (
-                      <button
-                        onClick={() => archiveTask(task)}
-                        className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1"
-                      >
-                        <Archive className="w-3 h-3" />
-                        Archive
-                      </button>
-                    )
-                  )}
                 </div>
-              );
-            })}
+              ))}
           </div>
         )}
       </main>
