@@ -6802,7 +6802,8 @@ function JobPicker({
   const archivedQuickTransferCount = jobs.filter(
     (j) => j.isQuickTransfer && !j.parentId && j.archived
   ).length;
-  const childrenOf = (parentId) => jobs.filter((j) => j.parentId === parentId);
+  const childrenOf = (parentId) =>
+    jobs.filter((j) => j.parentId === parentId).filter((j) => showArchived || !j.archived);
 
   // The catalog link for a given item never depends on what's being typed
   // into the search box — only on the item itself and the catalog. Working
@@ -7302,11 +7303,26 @@ function JobPicker({
                           <span className="text-[10px] font-medium tracking-wide uppercase bg-sky-500/10 border border-sky-500/40 text-sky-300 rounded-full px-1.5 py-0.5 shrink-0">
                             Quick
                           </span>
+                          {job.archived && (
+                            <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-500 rounded-full px-1.5 py-0.5 shrink-0 flex items-center gap-1">
+                              <Archive className="w-2.5 h-2.5" />
+                              Archived
+                            </span>
+                          )}
                         </p>
                         <p className="text-xs text-slate-500">
                           {children.length} entr{children.length === 1 ? "y" : "ies"}
                         </p>
                       </div>
+                      {isEditor && (
+                        <button
+                          onClick={() => onToggleJobArchive(job)}
+                          title={job.archived ? "Unarchive (show in main list)" : "Archive (hide from main list)"}
+                          className="text-slate-600 hover:text-slate-300 p-1.5 shrink-0"
+                        >
+                          <Archive className="w-4 h-4" />
+                        </button>
+                      )}
                       {isEditor && (
                         <button
                           onClick={() => onDeleteRequest(job)}
