@@ -17,6 +17,7 @@ import {
   Filter,
   Briefcase,
   Heart,
+  Settings,
   Users,
   Image as ImageIcon,
   ScanLine,
@@ -11997,12 +11998,14 @@ const prevLoveStatus = (item) => {
 };
 const loveStatusMeta = (key) => LOVE_STATUSES.find((s) => s.key === key) || LOVE_STATUSES[0];
 
-// How many days an item can sit in a given status before it counts as
+// Default days an item can sit in a given status before it counts as
 // stuck and worth flagging — the actual fix for "we lose track of what's
 // been sitting around too long." Ordered gets a longer leash since that
 // delay is usually out of our hands; Requested and Staged are the two
 // spots where something sitting still usually means it just got missed.
-const STALE_THRESHOLD_DAYS = { requested: 3, ordered: 7, received: 7, staged: 3, sent: null };
+// User-adjustable from Love Lists settings — this is just the fallback.
+const DEFAULT_STALE_THRESHOLD_DAYS = { requested: 3, ordered: 7, received: 7, staged: 3, sent: null };
+const STALE_THRESHOLDS_KEY = "warehub-stale-thresholds";
 
 function daysInCurrentStatus(item) {
   const since = item.statusDates && item.statusDates[item.status];
@@ -12011,9 +12014,9 @@ function daysInCurrentStatus(item) {
   return Math.floor(ms / (24 * 60 * 60 * 1000));
 }
 
-function isStale(item) {
+function isStale(item, thresholds = DEFAULT_STALE_THRESHOLD_DAYS) {
   if (item.archived) return false;
-  const threshold = STALE_THRESHOLD_DAYS[item.status];
+  const threshold = thresholds[item.status];
   if (threshold == null) return false;
   return daysInCurrentStatus(item) >= threshold;
 }
@@ -12771,7 +12774,7 @@ function LoveListAddForm({ catalog, allLists, onLearnAlias, onSave, onCancel }) 
   );
 }
 
-function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onBack, onGoHome }) {
+function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onBack, onGoHome }) {
   const [addingItem, setAddingItem] = useState(false);
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
@@ -13265,7 +13268,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                     ⚠ Also currently pending on: {liveDuplicates.map((d) => d.list.jobLabel).join(", ")}
                   </p>
                 )}
-                {isStale(item) && (
+                {isStale(item, staleThresholds) && (
                   <p className="text-xs text-amber-400 mb-2">
                     ⚠ {daysInCurrentStatus(item)} day{daysInCurrentStatus(item) === 1 ? "" : "s"}{" "}
                     with no movement
@@ -13717,9 +13720,73 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   );
 }
 
-function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onScanList, onGoHome }) {
+function StaleThresholdsModal({ thresholds, onSave, onClose }) {
+  const [draft, setDraft] = useState({ ...thresholds });
+  const editableStatuses = LOVE_STATUSES.filter((s) => s.key !== "sent");
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <h2 className="text-slate-100 font-semibold text-base flex items-center gap-2">
+            <Settings className="w-4 h-4 text-slate-400" />
+            Needs Attention timing
+          </h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          <p className="text-xs text-slate-500 mb-4">
+            How many days an item can sit in each stage before it gets flagged as needing
+            attention. "Sent to job" is the finish line, so it never goes stale.
+          </p>
+          <div className="space-y-3">
+            {editableStatuses.map((s) => (
+              <div key={s.key} className="flex items-center justify-between gap-3">
+                <span className={`text-xs rounded-full px-2.5 py-1 border ${s.color}`}>
+                  {s.label}
+                </span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    value={draft[s.key] ?? ""}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        [s.key]: e.target.value === "" ? null : Number(e.target.value),
+                      }))
+                    }
+                    placeholder="off"
+                    className="w-16 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+                  />
+                  <span className="text-xs text-slate-500">days</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-slate-600 mt-4">
+            Leave a field blank to turn off alerts for that stage entirely.
+          </p>
+        </div>
+        <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+          <button
+            onClick={() => onSave(draft)}
+            className="w-full text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onSaveThresholds, onOpenList, onAddList, onScanList, onGoHome }) {
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("active"); // "active" | "ready"
+  const [showThresholdSettings, setShowThresholdSettings] = useState(false);
 
   const searchLower = search.trim().toLowerCase();
   const searchResults = searchLower
@@ -13742,7 +13809,7 @@ function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onScanList
   );
 
   const staleItems = lists.flatMap((l) =>
-    l.items.filter((i) => isStale(i)).map((i) => ({ list: l, item: i }))
+    l.items.filter((i) => isStale(i, staleThresholds)).map((i) => ({ list: l, item: i }))
   );
   const staleByJob = [...new Map(staleItems.map((r) => [r.list.jobLabel, r.list.jobLabel])).keys()].sort(
     (a, b) => a.localeCompare(b)
@@ -13768,6 +13835,13 @@ function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onScanList
           </div>
           {isEditor && (
             <div className="flex gap-2 shrink-0">
+              <button
+                onClick={() => setShowThresholdSettings(true)}
+                title="Needs Attention timing"
+                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+              >
+                <Settings className="w-4 h-4" />
+              </button>
               <button
                 onClick={onScanList}
                 title="Scan a list"
@@ -14020,6 +14094,17 @@ function LoveListsDashboard({ lists, isEditor, onOpenList, onAddList, onScanList
           </>
         )}
       </main>
+
+      {showThresholdSettings && (
+        <StaleThresholdsModal
+          thresholds={staleThresholds}
+          onSave={(updated) => {
+            onSaveThresholds(updated);
+            setShowThresholdSettings(false);
+          }}
+          onClose={() => setShowThresholdSettings(false)}
+        />
+      )}
     </div>
   );
 }
@@ -14695,6 +14780,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   const [catalog, setCatalog] = useState([]);
   const [workers, setWorkers] = useState([]);
   const [workerTasks, setWorkerTasks] = useState([]);
+  const [staleThresholds, setStaleThresholds] = useState(DEFAULT_STALE_THRESHOLD_DAYS);
   const [loading, setLoading] = useState(true);
   const [activeListId, setActiveListId] = useState(null);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -14724,11 +14810,25 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
         const tasksResult = await getWithRetry(WORKER_TASKS_KEY);
         if (tasksResult.ok && tasksResult.value) setWorkerTasks(JSON.parse(tasksResult.value));
       } catch {}
+      try {
+        const thresholdsResult = await getWithRetry(STALE_THRESHOLDS_KEY);
+        if (thresholdsResult.ok && thresholdsResult.value) {
+          setStaleThresholds({ ...DEFAULT_STALE_THRESHOLD_DAYS, ...JSON.parse(thresholdsResult.value) });
+        }
+      } catch {
+        // custom thresholds just won't be available this session — defaults still work fine
+      }
       setLoading(false);
       if (isEditor) maybeAutoBackupLoveLists(loadedLists);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const saveStaleThresholds = (updated) => {
+    if (!isEditor) return;
+    setStaleThresholds(updated);
+    saveWithRetry(STALE_THRESHOLDS_KEY, JSON.stringify(updated)).catch(() => {});
+  };
 
   // Assigning an item creates a real task, not just a label — it shows up
   // in Worker Tasks and counts toward that person's completion rate.
@@ -14830,6 +14930,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
         isOwner={isOwner}
         workers={workers}
         workerTasks={workerTasks}
+        staleThresholds={staleThresholds}
         onAssignToWorker={assignItemToWorker}
         onUnassignWorkerTask={unassignWorkerTask}
         onUpdateList={handleUpdateList}
@@ -14846,6 +14947,8 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
       <LoveListsDashboard
         lists={lists}
         isEditor={isEditor}
+        staleThresholds={staleThresholds}
+        onSaveThresholds={saveStaleThresholds}
         onOpenList={(l) => setActiveListId(l.id)}
         onAddList={() => setShowAddForm(true)}
         onScanList={() => setShowScanModal(true)}
