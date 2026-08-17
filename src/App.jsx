@@ -6941,7 +6941,7 @@ function JobPicker({
             >
               <BookOpen className="w-4 h-4" />
             </button>
-            {isEditor ? (
+            {isEditor || isManager ? (
               <button
                 onClick={onSignOut}
                 title="Log out"
@@ -11909,7 +11909,7 @@ function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onR
             >
               <BookOpen className="w-4 h-4" />
             </button>
-            {isEditor ? (
+            {isEditor || isManager ? (
               <button
                 onClick={onSignOut}
                 title="Log out"
