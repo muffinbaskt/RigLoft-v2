@@ -13238,15 +13238,31 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
 
         {isEditor && visibleItems.length > 0 && (
           <div className="flex items-center justify-between mb-4">
-            <button
-              onClick={() => {
-                setSelectMode((v) => !v);
-                setSelectedIds(new Set());
-              }}
-              className="text-xs flex items-center gap-1 text-slate-400 hover:text-slate-200 border border-slate-700 rounded-md px-2.5 py-1.5"
-            >
-              {selectMode ? "Cancel select" : "Select items"}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setSelectMode((v) => !v);
+                  setSelectedIds(new Set());
+                }}
+                className="text-xs flex items-center gap-1 text-slate-400 hover:text-slate-200 border border-slate-700 rounded-md px-2.5 py-1.5"
+              >
+                {selectMode ? "Cancel select" : "Select items"}
+              </button>
+              {selectMode && (
+                <button
+                  onClick={() =>
+                    setSelectedIds((prev) =>
+                      prev.size === visibleItems.length
+                        ? new Set()
+                        : new Set(visibleItems.map((i) => i.id))
+                    )
+                  }
+                  className="text-xs text-slate-400 hover:text-slate-200 border border-slate-700 rounded-md px-2.5 py-1.5"
+                >
+                  {selectedIds.size === visibleItems.length ? "Deselect all" : "Select all"}
+                </button>
+              )}
+            </div>
             {selectMode && selectedIds.size > 0 && (
               <div className="flex gap-2">
                 <button
@@ -13325,16 +13341,27 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
               .filter(Boolean)
               .join(" · ");
             return (
-              <div key={item.id} className="border border-slate-800 rounded-lg p-3 bg-slate-900 flex gap-2.5">
+              <div
+                key={item.id}
+                onClick={() => selectMode && toggleSelected(item.id)}
+                className={`border rounded-lg p-3 bg-slate-900 flex gap-2.5 ${
+                  selectMode ? "cursor-pointer" : ""
+                } ${
+                  selectMode && selectedIds.has(item.id)
+                    ? "border-amber-500/60 bg-amber-500/5"
+                    : "border-slate-800"
+                }`}
+              >
                 {selectMode && (
                   <input
                     type="checkbox"
                     checked={selectedIds.has(item.id)}
                     onChange={() => toggleSelected(item.id)}
-                    className="w-4 h-4 mt-1 rounded accent-amber-500 shrink-0"
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-4 h-4 mt-1 rounded accent-amber-500 shrink-0 pointer-events-none"
                   />
                 )}
-                <div className="flex-1 min-w-0">
+                <div className={`flex-1 min-w-0 ${selectMode ? "pointer-events-none" : ""}`}>
                 <div className="flex items-center justify-between gap-2 mb-2">
                   <div className="min-w-0">
                     {isEditor ? (
