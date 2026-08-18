@@ -350,6 +350,21 @@ function totalHave(containers) {
   return (containers || []).reduce((sum, c) => sum + (Number(c.qty) || 0), 0);
 }
 
+// A container counts as "fully transferred" — physically gone from the yard —
+// once every item portion that was ever placed in it has been locked as
+// transferred, and at least one item actually referenced it. Containers with
+// no history at all (e.g. freshly created, never used) are NOT transferred,
+// so they stay available for new items.
+function isContainerTransferred(containerName, items) {
+  const inContainer = (items || []).filter((i) =>
+    (i.containers || []).some((c) => c.name === containerName)
+  );
+  if (inContainer.length === 0) return false;
+  return inContainer.every((i) =>
+    (i.transferredContainers || []).includes(containerName)
+  );
+}
+
 // Converts an old single-container item into the new breakdown-list shape.
 // Safe to call on already-migrated items (returns them unchanged).
 function migrateItemContainers(item) {
@@ -729,9 +744,18 @@ function ItemForm({
     });
   };
 
+  // Transferred containers are physically gone — don't offer them as a
+  // destination for new (or reassigned) container rows.
+  const transferredContainerNames = new Set(
+    containerOptions.filter((name) => isContainerTransferred(name, existingItems))
+  );
+  const assignableContainerOptions = containerOptions.filter(
+    (name) => !transferredContainerNames.has(name)
+  );
+
   const addContainerRow = () => {
     const used = new Set(item.containers.map((c) => c.name));
-    const nextAvailable = [...containerOptions].sort((a, b) => a.localeCompare(b)).find(
+    const nextAvailable = [...assignableContainerOptions].sort((a, b) => a.localeCompare(b)).find(
       (name) => !used.has(name)
     );
     setItem((prev) => ({
@@ -1201,13 +1225,22 @@ function ItemForm({
               </p>
             ) : (
               <div className="space-y-2 mb-2">
-                {item.containers.map((c, idx) => (
+                {item.containers.map((c, idx) => {
+                  const rowOptions = transferredContainerNames.has(c.name)
+                    ? [...new Set([c.name, ...assignableContainerOptions])]
+                    : assignableContainerOptions;
+                  return (
                   <div key={idx} className="flex items-center gap-2">
                     <div className="flex-1 min-w-0">
                       <Select
                         value={c.name}
                         onChange={(val) => updateContainerRow(idx, "name", val)}
-                        options={[...containerOptions].sort((a, b) => a.localeCompare(b))}
+                        options={[...rowOptions].sort((a, b) => a.localeCompare(b))}
+                        labels={
+                          transferredContainerNames.has(c.name)
+                            ? { [c.name]: `${c.name} (transferred — pick a new container)` }
+                            : undefined
+                        }
                       />
                     </div>
                     <input
@@ -1226,12 +1259,13 @@ function ItemForm({
                       <X className="w-4 h-4" />
                     </button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
             <button
               onClick={addContainerRow}
-              disabled={containerOptions.length === 0}
+              disabled={assignableContainerOptions.length === 0}
               className="text-xs text-amber-400 hover:text-amber-300 disabled:text-slate-600 disabled:cursor-not-allowed"
             >
               + Add another container
@@ -3163,6 +3197,7 @@ function ContainerDetailModal({
   onPull,
   onBack,
 }) {
+  const transferred = isContainerTransferred(containerName, items);
   const [picking, setPicking] = useState(false);
   const [selected, setSelected] = useState({});
   const [qtyOverrides, setQtyOverrides] = useState({});
@@ -3322,7 +3357,14 @@ function ContainerDetailModal({
               <ChevronLeft className="w-5 h-5" />
             </button>
             <div className="min-w-0">
-              <h2 className="text-slate-100 font-semibold text-base truncate">{containerName}</h2>
+              <div className="flex items-center gap-2 min-w-0">
+                <h2 className="text-slate-100 font-semibold text-base truncate">{containerName}</h2>
+                {transferred && (
+                  <span className="shrink-0 text-[10px] uppercase tracking-wide bg-purple-500/15 text-purple-300 border border-purple-500/40 rounded-full px-2 py-0.5">
+                    Transferred
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-slate-500">
                 {inContainer.length} item{inContainer.length === 1 ? "" : "s"}
               </p>
@@ -3356,13 +3398,20 @@ function ContainerDetailModal({
 
         {isEditor && (
           <div className="px-5 py-4 border-t border-slate-800 shrink-0">
-            <button
-              onClick={() => setPicking(true)}
-              className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
-            >
-              <Plus className="w-4 h-4" />
-              Pull items into this container
-            </button>
+            {transferred ? (
+              <p className="text-xs text-slate-500 text-center">
+                This container is marked transferred — it's no longer here, so new items can't
+                be pulled into it.
+              </p>
+            ) : (
+              <button
+                onClick={() => setPicking(true)}
+                className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                <Plus className="w-4 h-4" />
+                Pull items into this container
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -5116,7 +5165,14 @@ function ContainersModal({
                       className="border border-slate-800 rounded-md p-3 flex items-center justify-between gap-2 cursor-pointer hover:border-slate-700"
                     >
                       <div className="min-w-0">
-                        <p className="text-sm text-slate-100 truncate">{name}</p>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <p className="text-sm text-slate-100 truncate">{name}</p>
+                          {isContainerTransferred(name, items) && (
+                            <span className="shrink-0 text-[10px] uppercase tracking-wide bg-purple-500/15 text-purple-300 border border-purple-500/40 rounded-full px-2 py-0.5">
+                              Transferred
+                            </span>
+                          )}
+                        </div>
                         <p className="text-xs text-slate-500">
                           {countFor(name)} item{countFor(name) === 1 ? "" : "s"}
                         </p>
@@ -7476,6 +7532,12 @@ function JobInventory({
   const isEditor = rawIsEditor && !job.sealed;
   const items = job.items || [];
   const containerOptions = job.containerOptions || [];
+  // Transferred containers are physically gone — excluded anywhere items
+  // get newly assigned to a container, but kept in filters/lists so past
+  // records stay visible.
+  const assignableContainerOptions = containerOptions.filter(
+    (name) => !isContainerTransferred(name, items)
+  );
   const categoryOptions = job.categoryOptions || [];
   const activityLog = job.activityLog || [];
   const [formState, setFormState] = useState(null);
@@ -7700,6 +7762,7 @@ function JobInventory({
       return item.ordered && normalizeReceived(item.received) === "no";
     if (procFilter === "partially_received") return normalizeReceived(item.received) === "partial";
     if (procFilter === "received") return normalizeReceived(item.received) === "yes";
+    if (procFilter === "transferred") return (item.transferredContainers || []).length > 0;
     return true;
   };
 
@@ -8645,6 +8708,7 @@ function JobInventory({
               <option value="ordered_awaiting">Ordered, awaiting</option>
               <option value="partially_received">Partially received</option>
               <option value="received">Received</option>
+              <option value="transferred">Transferred</option>
             </select>
           </div>
         </div>
@@ -9090,13 +9154,15 @@ function JobInventory({
               replacing any existing breakdown. For a partial amount split across containers,
               use "Pull items into this container" from the Containers screen instead.
             </p>
-            {containerOptions.length === 0 ? (
+            {assignableContainerOptions.length === 0 ? (
               <p className="text-sm text-slate-500 mb-4">
-                No containers yet — add one from the Containers screen first.
+                {containerOptions.length === 0
+                  ? "No containers yet — add one from the Containers screen first."
+                  : "Every container is marked transferred — add a new one from the Containers screen first."}
               </p>
             ) : (
               <div className="space-y-1.5 mb-4 max-h-64 overflow-y-auto">
-                {[...containerOptions].sort((a, b) => a.localeCompare(b)).map((c) => (
+                {[...assignableContainerOptions].sort((a, b) => a.localeCompare(b)).map((c) => (
                   <button
                     key={c}
                     onClick={() => bulkSetContainer(c)}
