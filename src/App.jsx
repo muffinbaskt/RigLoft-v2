@@ -12959,6 +12959,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [catalogSearch, setCatalogSearch] = useState("");
   const [smeDraft, setSmeDraft] = useState("");
   const [showArchived, setShowArchived] = useState(false);
+  const [statusFilter, setStatusFilter] = useState(null); // null = off, or a LOVE_STATUSES key
 
   const archiveItem = (id) => {
     onUpdateList({
@@ -12981,7 +12982,9 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     });
   };
 
-  const visibleItems = list.items.filter((i) => showArchived || !i.archived);
+  const visibleItems = list.items
+    .filter((i) => showArchived || !i.archived)
+    .filter((i) => !statusFilter || i.status === statusFilter);
   const archivedCount = list.items.filter((i) => i.archived).length;
   // Archive only makes sense for items that are genuinely, fully done —
   // a partial send still has a remainder outstanding, so it stays out of
@@ -13409,14 +13412,27 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
       <main className="max-w-2xl mx-auto px-4 py-5">
         <div className="flex flex-wrap gap-2 mb-4">
           {LOVE_STATUSES.map((s) => (
-            <span
+            <button
               key={s.key}
-              className={`text-xs rounded-full px-2.5 py-1 border ${s.color}`}
+              onClick={() => setStatusFilter((prev) => (prev === s.key ? null : s.key))}
+              className={`text-xs rounded-full px-2.5 py-1 border transition-colors ${
+                statusFilter === s.key
+                  ? s.color
+                  : "bg-slate-800/40 border-slate-700 text-slate-500 hover:text-slate-300"
+              }`}
             >
               {counts[s.key]} {s.label}
-            </span>
+            </button>
           ))}
         </div>
+        {statusFilter && (
+          <button
+            onClick={() => setStatusFilter(null)}
+            className="text-xs text-slate-500 hover:text-slate-300 mb-4 -mt-2 block"
+          >
+            Clear filter
+          </button>
+        )}
 
         {isEditor && visibleItems.length > 0 && (
           <div className="flex items-center justify-between mb-4">
@@ -13508,6 +13524,13 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         )}
 
         <div className="space-y-2 mb-4">
+          {visibleItems.length === 0 && (
+            <p className="text-sm text-slate-500 text-center py-6">
+              {statusFilter
+                ? `Nothing at "${loveStatusMeta(statusFilter).label}" right now.`
+                : "No items on this list."}
+            </p>
+          )}
           {visibleItems.map((item) => {
             const meta = loveStatusMeta(item.status);
             const liveDuplicates = findPossibleDuplicates(item.name, item.catalogId, catalog, allLists, {
@@ -14234,6 +14257,7 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
   const [tab, setTab] = useState("active"); // "active" | "ready"
   const [showThresholdSettings, setShowThresholdSettings] = useState(false);
   const [showArchivedLists, setShowArchivedLists] = useState(false);
+  const [statusFilter, setStatusFilter] = useState(null); // null = off, or a LOVE_STATUSES key
 
   const searchLower = search.trim().toLowerCase();
   // Search intentionally bypasses the archive filter — looking something
@@ -14249,6 +14273,17 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
 
   const visibleLists = lists.filter((l) => showArchivedLists || !l.archived);
   const archivedListCount = lists.filter((l) => l.archived).length;
+
+  // Works like search — a flat, job-grouped view of every item at the
+  // selected status across every list, overriding the normal tabs while
+  // active.
+  const statusFilterResults = statusFilter
+    ? visibleLists.flatMap((l) =>
+        l.items
+          .filter((i) => i.status === statusFilter)
+          .map((i) => ({ list: l, item: i }))
+      )
+    : [];
 
   const jobGroups = [...new Map(visibleLists.map((l) => [l.jobLabel, l.jobLabel])).entries()]
     .map(([label]) => label)
@@ -14320,7 +14355,7 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
           )}
         </div>
         <div className="max-w-2xl mx-auto px-4 pb-3">
-          <div className="relative">
+          <div className="relative mb-2">
             <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               value={search}
@@ -14328,6 +14363,21 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
               placeholder="Search an item — find out where it goes..."
               className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md pl-9 pr-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
             />
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {LOVE_STATUSES.map((s) => (
+              <button
+                key={s.key}
+                onClick={() => setStatusFilter((prev) => (prev === s.key ? null : s.key))}
+                className={`text-xs rounded-full px-2.5 py-1 border transition-colors ${
+                  statusFilter === s.key
+                    ? s.color
+                    : "bg-slate-800 border-slate-700 text-slate-500 hover:text-slate-300"
+                }`}
+              >
+                {s.label}
+              </button>
+            ))}
           </div>
         </div>
       </header>
@@ -14378,6 +14428,50 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
                               </button>
                             );
                           })}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
+        ) : statusFilter ? (
+          <div>
+            <p className="text-xs text-slate-500 mb-3">
+              {statusFilterResults.length} item{statusFilterResults.length === 1 ? "" : "s"}{" "}
+              {loveStatusMeta(statusFilter).label}
+            </p>
+            {statusFilterResults.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-10">
+                Nothing currently {loveStatusMeta(statusFilter).label}.
+              </p>
+            ) : (
+              <div className="space-y-5">
+                {[...new Map(statusFilterResults.map((r) => [r.list.jobLabel, r.list.jobLabel])).keys()]
+                  .sort((a, b) => a.localeCompare(b))
+                  .map((jobLabel) => (
+                    <div key={jobLabel}>
+                      <p className="font-semibold text-slate-100 mb-2">{jobLabel}</p>
+                      <div className="space-y-2">
+                        {statusFilterResults
+                          .filter((r) => r.list.jobLabel === jobLabel)
+                          .map(({ list, item }) => (
+                            <button
+                              key={item.id}
+                              onClick={() => onOpenList(list)}
+                              className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700"
+                            >
+                              <p className="text-sm text-slate-100">
+                                {item.name}{" "}
+                                <span className="text-slate-500">
+                                  {item.qtyHave ?? 0}/{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
+                                </span>
+                              </p>
+                              <p className="text-xs text-slate-500 mt-1">
+                                {list.subJobLabel && `${list.subJobLabel} · `}received{" "}
+                                {list.dateReceived}
+                              </p>
+                            </button>
+                          ))}
                       </div>
                     </div>
                   ))}
