@@ -12107,6 +12107,12 @@ const prevLoveStatus = (item) => {
   return prev >= 0 ? LOVE_STATUSES[prev].key : null;
 };
 const loveStatusMeta = (key) => LOVE_STATUSES.find((s) => s.key === key) || LOVE_STATUSES[0];
+// Shows the sub-job/nickname alongside the job number when set, without
+// changing what the dashboard actually groups by — grouping always stays
+// on the plain job number so multiple nicknamed lists on the same job
+// still land together.
+const listDisplayLabel = (list) =>
+  list.subJobLabel ? `${list.jobLabel} — ${list.subJobLabel}` : list.jobLabel;
 
 // Default days an item can sit in a given status before it counts as
 // stuck and worth flagging — the actual fix for "we lose track of what's
@@ -12440,6 +12446,7 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const [step, setStep] = useState("details"); // "details" | "scanning" | "review" | "error"
   const [jobLabel, setJobLabel] = useState("");
+  const [subJobLabel, setSubJobLabel] = useState("");
   const [submittedBy, setSubmittedBy] = useState("");
   const [dateReceived, setDateReceived] = useState(todayStr);
   const [scanError, setScanError] = useState("");
@@ -12520,6 +12527,7 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
       );
     onSave({
       jobLabel: jobLabel.trim(),
+      subJobLabel: subJobLabel.trim(),
       submittedBy: submittedBy.trim(),
       dateReceived,
       items: finalItems,
@@ -12566,6 +12574,17 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
                   className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
                 />
               </div>
+            </div>
+            <div className="mb-3">
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                Sub-job / nickname (optional)
+              </label>
+              <input
+                value={subJobLabel}
+                onChange={(e) => setSubJobLabel(e.target.value)}
+                placeholder="e.g. Support Building"
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+              />
             </div>
             <div className="mb-5">
               <label className="block text-xs font-medium text-slate-400 mb-1.5">
@@ -12778,6 +12797,7 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
 function LoveListAddForm({ catalog, allLists, onLearnAlias, onSave, onCancel }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const [jobLabel, setJobLabel] = useState("");
+  const [subJobLabel, setSubJobLabel] = useState("");
   const [submittedBy, setSubmittedBy] = useState("");
   const [dateReceived, setDateReceived] = useState(todayStr);
   const [items, setItems] = useState([]);
@@ -12818,6 +12838,21 @@ function LoveListAddForm({ catalog, allLists, onLearnAlias, onSave, onCancel }) 
                 className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
               />
             </div>
+          </div>
+          <div className="mb-4">
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              Sub-job / nickname (optional)
+            </label>
+            <input
+              value={subJobLabel}
+              onChange={(e) => setSubJobLabel(e.target.value)}
+              placeholder="e.g. Support Building"
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+            />
+            <p className="text-xs text-slate-600 mt-1">
+              Still groups under {jobLabel.trim() || "the job number"} — this just tells the
+              list apart from others on the same job.
+            </p>
           </div>
           <div className="mb-4">
             <label className="block text-xs font-medium text-slate-400 mb-1.5">
@@ -12889,7 +12924,7 @@ function LoveListAddForm({ catalog, allLists, onLearnAlias, onSave, onCancel }) 
         </div>
         <div className="px-5 py-4 border-t border-slate-800 shrink-0">
           <button
-            onClick={() => onSave({ jobLabel: jobLabel.trim(), submittedBy: submittedBy.trim(), dateReceived, items })}
+            onClick={() => onSave({ jobLabel: jobLabel.trim(), subJobLabel: subJobLabel.trim(), submittedBy: submittedBy.trim(), dateReceived, items })}
             disabled={!canSave}
             className="w-full text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400 disabled:opacity-40"
           >
@@ -13283,7 +13318,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
             <div className="min-w-0">
               <p className="font-semibold text-slate-100 truncate flex items-center gap-1.5">
                 <Heart className="w-4 h-4 text-rose-400 shrink-0" />
-                {list.jobLabel}
+                {listDisplayLabel(list)}
                 {list.archived && (
                   <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-500 rounded-full px-1.5 py-0.5 shrink-0">
                     Archived
@@ -14277,7 +14312,8 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
                                   </span>
                                 </div>
                                 <p className="text-xs text-slate-500 mt-1">
-                                  received {list.dateReceived}
+                                  {list.subJobLabel && `${list.subJobLabel} · `}received{" "}
+                                  {list.dateReceived}
                                 </p>
                               </button>
                             );
@@ -14372,7 +14408,7 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
                               >
                                 <div className="flex items-center justify-between gap-2 mb-1.5">
                                   <p className="text-sm text-slate-100 flex items-center gap-1.5">
-                                    {list.items.length} item{list.items.length === 1 ? "" : "s"}
+                                    {list.subJobLabel || `${list.items.length} item${list.items.length === 1 ? "" : "s"}`}
                                     {list.archived && (
                                       <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-500 rounded-full px-1.5 py-0.5">
                                         Archived
@@ -14381,6 +14417,11 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
                                   </p>
                                   <p className="text-xs text-slate-500">{list.dateReceived}</p>
                                 </div>
+                                {list.subJobLabel && (
+                                  <p className="text-xs text-slate-500 mb-1.5">
+                                    {list.items.length} item{list.items.length === 1 ? "" : "s"}
+                                  </p>
+                                )}
                                 <div className="flex flex-wrap gap-1.5">
                                   {counts.map((s) => (
                                     <span
@@ -15297,11 +15338,12 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
 
   const activeList = lists.find((l) => l.id === activeListId) || null;
 
-  const handleSaveNewList = ({ jobLabel, submittedBy, dateReceived, items, scanImageUrl }) => {
+  const handleSaveNewList = ({ jobLabel, subJobLabel, submittedBy, dateReceived, items, scanImageUrl }) => {
     if (!isEditor) return;
     const list = {
       id: uniqueId(),
       jobLabel,
+      subJobLabel: subJobLabel || "",
       submittedBy,
       dateReceived,
       items,
