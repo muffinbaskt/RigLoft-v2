@@ -13415,10 +13415,12 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
             <button
               key={s.key}
               onClick={() => setStatusFilter((prev) => (prev === s.key ? null : s.key))}
-              className={`text-xs rounded-full px-2.5 py-1 border transition-colors ${
-                statusFilter === s.key
-                  ? s.color
-                  : "bg-slate-800/40 border-slate-700 text-slate-500 hover:text-slate-300"
+              className={`text-xs rounded-full px-2.5 py-1 border transition-all ${s.color} ${
+                statusFilter && statusFilter !== s.key
+                  ? "opacity-40"
+                  : statusFilter === s.key
+                  ? "ring-2 ring-offset-1 ring-offset-slate-950 ring-white/60"
+                  : ""
               }`}
             >
               {counts[s.key]} {s.label}
@@ -14369,10 +14371,12 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
               <button
                 key={s.key}
                 onClick={() => setStatusFilter((prev) => (prev === s.key ? null : s.key))}
-                className={`text-xs rounded-full px-2.5 py-1 border transition-colors ${
-                  statusFilter === s.key
-                    ? s.color
-                    : "bg-slate-800 border-slate-700 text-slate-500 hover:text-slate-300"
+                className={`text-xs rounded-full px-2.5 py-1 border transition-all ${s.color} ${
+                  statusFilter && statusFilter !== s.key
+                    ? "opacity-40"
+                    : statusFilter === s.key
+                    ? "ring-2 ring-offset-1 ring-offset-slate-950 ring-white/60"
+                    : ""
                 }`}
               >
                 {s.label}
