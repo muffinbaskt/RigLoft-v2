@@ -12960,6 +12960,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [smeDraft, setSmeDraft] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [statusFilter, setStatusFilter] = useState(null); // null = off, or a LOVE_STATUSES key
+  const [itemSearch, setItemSearch] = useState("");
 
   const archiveItem = (id) => {
     onUpdateList({
@@ -12984,7 +12985,8 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
 
   const visibleItems = list.items
     .filter((i) => showArchived || !i.archived)
-    .filter((i) => !statusFilter || i.status === statusFilter);
+    .filter((i) => !statusFilter || i.status === statusFilter)
+    .filter((i) => !itemSearch.trim() || i.name.toLowerCase().includes(itemSearch.trim().toLowerCase()));
   const archivedCount = list.items.filter((i) => i.archived).length;
   // Archive only makes sense for items that are genuinely, fully done —
   // a partial send still has a remainder outstanding, so it stays out of
@@ -13410,6 +13412,15 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
       )}
 
       <main className="max-w-2xl mx-auto px-4 py-5">
+        <div className="relative mb-4">
+          <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            value={itemSearch}
+            onChange={(e) => setItemSearch(e.target.value)}
+            placeholder="Search items on this list..."
+            className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md pl-9 pr-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+          />
+        </div>
         <div className="flex flex-wrap gap-2 mb-4">
           {LOVE_STATUSES.map((s) => (
             <button
@@ -13528,7 +13539,9 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         <div className="space-y-2 mb-4">
           {visibleItems.length === 0 && (
             <p className="text-sm text-slate-500 text-center py-6">
-              {statusFilter
+              {itemSearch.trim()
+                ? `Nothing matching "${itemSearch.trim()}" on this list.`
+                : statusFilter
                 ? `Nothing at "${loveStatusMeta(statusFilter).label}" right now.`
                 : "No items on this list."}
             </p>
