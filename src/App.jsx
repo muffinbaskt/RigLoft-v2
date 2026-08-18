@@ -9534,14 +9534,83 @@ async function fetchResolvedSuggestions() {
   }
 }
 
+// Downscales an oversized photo before it goes to Supabase Storage — the
+// goal is trimming the huge dimensions modern phone cameras produce
+// (often 3000-4000px wide) down to something reasonable, while keeping
+// quality high enough that fine print on a receipt or packing list stays
+// perfectly legible. Non-image files (PDFs, etc.) and anything already
+// under the cap pass through untouched — nothing to gain by re-encoding
+// those.
+function resizeImageForUpload(file, { maxWidth = 2000, quality = 0.92 } = {}) {
+  return new Promise((resolve) => {
+    if (!file || !file.type || !file.type.startsWith("image/")) {
+      resolve(file);
+      return;
+    }
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const scale = Math.min(1, maxWidth / img.width);
+      if (scale >= 1) {
+        resolve(file); // already small enough
+        return;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            resolve(file); // encoding failed — fall back to the original
+            return;
+          }
+          resolve(
+            new File([blob], file.name || "photo.jpg", {
+              type: "image/jpeg",
+              lastModified: Date.now(),
+            })
+          );
+        },
+        "image/jpeg",
+        quality
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(file); // couldn't decode — upload the original rather than fail
+    };
+    img.src = objectUrl;
+  });
+}
+
+// Storage paths aren't kept alongside every reference to an image (older
+// records only ever stored the public URL) — deriving the path back out
+// of that URL lets deletion work retroactively for everything already
+// uploaded, not just new files going forward.
+function storagePathFromPublicUrl(url) {
+  if (!url) return null;
+  const marker = "/object/public/job-documents/";
+  const idx = url.indexOf(marker);
+  if (idx === -1) return null;
+  try {
+    return decodeURIComponent(url.slice(idx + marker.length));
+  } catch {
+    return url.slice(idx + marker.length);
+  }
+}
+
 async function uploadReferenceDocument(jobId, file) {
   try {
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const uploadFile = await resizeImageForUpload(file);
+    const safeName = uploadFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
     const path = `${jobId}/${uniqueId()}-${safeName}`;
-    const { error } = await supabase.storage.from("job-documents").upload(path, file);
+    const { error } = await supabase.storage.from("job-documents").upload(path, uploadFile);
     if (error) return { ok: false, error: error.message };
     const { data } = supabase.storage.from("job-documents").getPublicUrl(path);
-    return { ok: true, url: data.publicUrl, path, name: file.name };
+    return { ok: true, url: data.publicUrl, path, name: uploadFile.name };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };
   }
@@ -9551,9 +9620,10 @@ async function uploadReferenceDocument(jobId, file) {
 // photo of a scanned Love List can be pulled back up later for reference.
 async function uploadLoveListScan(file) {
   try {
-    const safeName = (file.name || "scan.jpg").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const uploadFile = await resizeImageForUpload(file);
+    const safeName = (uploadFile.name || "scan.jpg").replace(/[^a-zA-Z0-9._-]/g, "_");
     const path = `love-list-scans/${uniqueId()}-${safeName}`;
-    const { error } = await supabase.storage.from("job-documents").upload(path, file);
+    const { error } = await supabase.storage.from("job-documents").upload(path, uploadFile);
     if (error) return { ok: false, error: error.message };
     const { data } = supabase.storage.from("job-documents").getPublicUrl(path);
     return { ok: true, url: data.publicUrl, path };
@@ -13730,14 +13800,22 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           onAddPhoto={(url) =>
             onUpdateList({ ...list, referenceImages: [...(list.referenceImages || []), url] })
           }
-          onRemovePhoto={(url, isScan) =>
-            isScan
-              ? onUpdateList({ ...list, scanImageUrl: null })
-              : onUpdateList({
-                  ...list,
-                  referenceImages: (list.referenceImages || []).filter((u) => u !== url),
-                })
-          }
+          onRemovePhoto={async (url, isScan) => {
+            // Storage deletion first, then the UI update — same pattern as
+            // Job Lists' reference docs, and fires regardless of whether
+            // the delete call succeeds so a network hiccup never leaves
+            // someone stuck unable to remove a photo from the list.
+            const path = storagePathFromPublicUrl(isScan ? list.scanImageUrl : url);
+            if (path) await deleteReferenceDocument(path);
+            if (isScan) {
+              onUpdateList({ ...list, scanImageUrl: null });
+            } else {
+              onUpdateList({
+                ...list,
+                referenceImages: (list.referenceImages || []).filter((u) => u !== url),
+              });
+            }
+          }}
           onClose={() => setShowPhotosModal(false)}
         />
       )}
@@ -15966,6 +16044,20 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
 
   const handleDeleteList = (id) => {
     if (!isOwner) return;
+    // Sweep every photo attached to this list out of storage before the
+    // list record itself goes away — otherwise the files just sit there
+    // forever, invisible in the app but still counting against storage.
+    const target = lists.find((l) => l.id === id);
+    if (target) {
+      const urls = [
+        ...(target.scanImageUrl ? [target.scanImageUrl] : []),
+        ...(target.referenceImages || []),
+      ];
+      urls.forEach((url) => {
+        const path = storagePathFromPublicUrl(url);
+        if (path) deleteReferenceDocument(path);
+      });
+    }
     updateLists((prev) => prev.filter((l) => l.id !== id));
     setActiveListId(null);
   };
