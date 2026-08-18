@@ -2326,11 +2326,16 @@ function emptyCatalogItem() {
     needsTransfer: false,
     pinned: false,
     aliases: [],
+    // Marks catalog entries that intentionally cover several real
+    // variants (e.g. a generic "Reamer" entry spanning multiple sizes) —
+    // duplicate detection skips catalog-ID matching for these, since a
+    // shared link doesn't actually mean the same physical item.
+    multiSize: false,
   };
 }
 
 function CatalogItemForm({ initial, existingCategories = [], existingVendors = [], onSave, onCancel }) {
-  const [item, setItem] = useState({ needsTransfer: false, pinned: false, category: "", storageDetail: "", ...initial });
+  const [item, setItem] = useState({ needsTransfer: false, pinned: false, multiSize: false, category: "", storageDetail: "", ...initial });
   const set = (field) => (val) => setItem((prev) => ({ ...prev, [field]: val }));
   const canSave = item.name.trim().length > 0;
 
@@ -2459,6 +2464,24 @@ function CatalogItemForm({ initial, existingCategories = [], existingVendors = [
               Items matched to this catalog entry during import will be pre-flagged for
               transfer automatically. Pinned items always sort to the top of the transfer list,
               ahead of everything else.
+            </p>
+          </div>
+          <div>
+            <label className="flex items-center gap-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!!item.multiSize}
+                onChange={(e) => set("multiSize")(e.target.checked)}
+                className="w-4 h-4 rounded accent-amber-500"
+              />
+              <span className="text-sm text-slate-200">
+                Covers several sizes/variants (e.g. "Reamer")
+              </span>
+            </label>
+            <p className="text-xs text-slate-600 mt-1 ml-6">
+              Love Lists' duplicate detection skips matching by catalog link for entries marked
+              this way, since two requests linked to the same broad entry might genuinely be
+              different sizes, not the same request. It'll still catch duplicates by name.
             </p>
           </div>
         </div>
@@ -12111,15 +12134,28 @@ function isStale(item, thresholds = DEFAULT_STALE_THRESHOLD_DAYS) {
 // Finds other still-pending items (not yet sent, not archived) across every
 // Love List with a matching name — the actual fix for the "job never got
 // told this was already coming, so they re-requested it" problem.
-function findPossibleDuplicates(name, allLists = [], { excludeListId, excludeItemId } = {}) {
+function findPossibleDuplicates(name, catalogId, catalog = [], allLists = [], { excludeListId, excludeItemId } = {}) {
   const normName = normalizeText(name).replace(/\s+/g, "");
-  if (!normName) return [];
+  const catalogEntry = catalogId ? catalog.find((c) => c.id === catalogId) : null;
+  // Catalog-ID matching is reliable duplicate detection — it catches the
+  // "field wrote the same item five different inconsistent ways" case
+  // that name matching alone misses. But it's skipped for entries flagged
+  // as covering several real variants (e.g. a generic "Reamer" spanning
+  // multiple sizes), since a shared link there doesn't mean the same
+  // physical item — those fall back to name matching only.
+  const useCatalogMatch = !!catalogEntry && !catalogEntry.multiSize;
+  if (!normName && !useCatalogMatch) return [];
   const matches = [];
   allLists.forEach((l) => {
     l.items.forEach((i) => {
       if (i.id === excludeItemId) return;
       if (i.archived) return;
       if (i.status === "sent") return;
+      if (useCatalogMatch && i.catalogId === catalogId) {
+        matches.push({ list: l, item: i });
+        return;
+      }
+      if (!normName) return;
       const normOther = normalizeText(i.name).replace(/\s+/g, "");
       if (normOther === normName) matches.push({ list: l, item: i });
     });
@@ -12165,12 +12201,14 @@ function LoveListItemEntry({ catalog, allLists = [], currentListId, onLearnAlias
   const [catalogSearch, setCatalogSearch] = useState("");
 
   const autoMatch = name.trim() ? findCatalogMatch(name.trim(), catalog) : null;
-  const duplicates = name.trim()
-    ? findPossibleDuplicates(name.trim(), allLists, { excludeListId: currentListId })
-    : [];
   const linkedCatalogItem = manualCatalogId
     ? catalog.find((c) => c.id === manualCatalogId) || null
     : autoMatch;
+  const duplicates = name.trim()
+    ? findPossibleDuplicates(name.trim(), linkedCatalogItem?.id || null, catalog, allLists, {
+        excludeListId: currentListId,
+      })
+    : [];
 
   // Auto-fill storage from the catalog link, but only while the user
   // hasn't manually touched the storage field themselves.
@@ -13326,7 +13364,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         <div className="space-y-2 mb-4">
           {visibleItems.map((item) => {
             const meta = loveStatusMeta(item.status);
-            const liveDuplicates = findPossibleDuplicates(item.name, allLists, {
+            const liveDuplicates = findPossibleDuplicates(item.name, item.catalogId, catalog, allLists, {
               excludeListId: list.id,
               excludeItemId: item.id,
             });
