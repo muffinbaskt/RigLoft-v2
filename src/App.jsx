@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useRef, useMemo } from "react";
 import QRCode from "qrcode";
 import { supabase } from "./supabaseClient";
@@ -12936,11 +12937,139 @@ function LoveListAddForm({ catalog, allLists, onLearnAlias, onSave, onCancel }) 
   );
 }
 
+function LoveListPhotosModal({ list, isEditor, onAddPhoto, onRemovePhoto, onClose }) {
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const [viewingUrl, setViewingUrl] = useState(null);
+  const fileInputRef = useRef(null);
+
+  // The original scan (if this list came from the scan feature) shown
+  // alongside anything manually uploaded — one gallery, same treatment.
+  const allPhotos = [
+    ...(list.scanImageUrl ? [{ url: list.scanImageUrl, isScan: true }] : []),
+    ...(list.referenceImages || []).map((url) => ({ url, isScan: false })),
+  ];
+
+  const handleUpload = async (file) => {
+    if (!file) return;
+    setUploading(true);
+    setUploadError("");
+    try {
+      const res = await uploadLoveListScan(file);
+      if (res.ok) {
+        onAddPhoto(res.url);
+      } else {
+        setUploadError(res.error || "Upload failed.");
+      }
+    } catch (err) {
+      setUploadError(err.message || String(err));
+    }
+    setUploading(false);
+  };
+
+  if (viewingUrl) {
+    return (
+      <div
+        className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
+        onClick={() => setViewingUrl(null)}
+      >
+        <button
+          onClick={() => setViewingUrl(null)}
+          className="absolute top-4 right-4 text-slate-300 hover:text-white"
+        >
+          <X className="w-6 h-6" />
+        </button>
+        <img
+          src={viewingUrl}
+          alt="Reference photo"
+          className="max-w-full max-h-full rounded-lg"
+          onClick={(e) => e.stopPropagation()}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4 py-8">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-md rounded-lg max-h-full flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <h2 className="text-slate-100 font-semibold text-base flex items-center gap-2">
+            <ImageIcon className="w-4 h-4 text-slate-400" />
+            Photos
+          </h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {allPhotos.length === 0 ? (
+            <p className="text-sm text-slate-500 text-center py-6">
+              No photos attached to this list yet.
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-2.5">
+              {allPhotos.map((photo, idx) => (
+                <div key={idx} className="relative group">
+                  <button
+                    onClick={() => setViewingUrl(photo.url)}
+                    className="block w-full aspect-square rounded-lg overflow-hidden border border-slate-800"
+                  >
+                    <img src={photo.url} alt="" className="w-full h-full object-cover" />
+                  </button>
+                  {photo.isScan && (
+                    <span className="absolute top-1.5 left-1.5 text-[10px] font-medium tracking-wide uppercase bg-slate-950/80 text-slate-300 rounded-full px-1.5 py-0.5">
+                      Original scan
+                    </span>
+                  )}
+                  {isEditor && (
+                    <button
+                      onClick={() =>
+                        photo.isScan ? onRemovePhoto(null, true) : onRemovePhoto(photo.url, false)
+                      }
+                      className="absolute top-1.5 right-1.5 bg-slate-950/80 text-slate-300 hover:text-red-400 rounded-full p-1"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {uploadError && <p className="text-xs text-red-400 mt-3">{uploadError}</p>}
+        </div>
+        {isEditor && (
+          <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={(e) => {
+                handleUpload(e.target.files[0]);
+                e.target.value = "";
+              }}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400 disabled:opacity-60"
+            >
+              <Camera className="w-4 h-4" />
+              {uploading ? "Uploading..." : "Add a photo"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onBack, onGoHome }) {
   const [addingItem, setAddingItem] = useState(false);
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
-  const [showScanImage, setShowScanImage] = useState(false);
+  const [showPhotosModal, setShowPhotosModal] = useState(false);
   const [editingNickname, setEditingNickname] = useState(false);
   const [nicknameDraft, setNicknameDraft] = useState("");
   const [selectMode, setSelectMode] = useState(false);
@@ -13362,15 +13491,16 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
               </p>
             </div>
           </div>
-          {list.scanImageUrl && (
-            <button
-              onClick={() => setShowScanImage(true)}
-              title="View original scan"
-              className="text-slate-400 hover:text-slate-200 p-2 shrink-0"
-            >
-              <ImageIcon className="w-4 h-4" />
-            </button>
-          )}
+          <button
+            onClick={() => setShowPhotosModal(true)}
+            title="Photos"
+            className="text-slate-400 hover:text-slate-200 p-2 shrink-0 relative"
+          >
+            <ImageIcon className="w-4 h-4" />
+            {(list.scanImageUrl || (list.referenceImages || []).length > 0) && (
+              <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-rose-400" />
+            )}
+          </button>
           {isEditor && (
             <button
               onClick={() => onUpdateList({ ...list, archived: !list.archived })}
@@ -13391,24 +13521,23 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         </div>
       </header>
 
-      {showScanImage && list.scanImageUrl && (
-        <div
-          className="fixed inset-0 z-[70] bg-black/90 flex items-center justify-center px-4 py-8"
-          onClick={() => setShowScanImage(false)}
-        >
-          <button
-            onClick={() => setShowScanImage(false)}
-            className="absolute top-4 right-4 text-slate-300 hover:text-white"
-          >
-            <X className="w-6 h-6" />
-          </button>
-          <img
-            src={list.scanImageUrl}
-            alt="Original scanned list"
-            className="max-w-full max-h-full rounded-lg"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
+      {showPhotosModal && (
+        <LoveListPhotosModal
+          list={list}
+          isEditor={isEditor}
+          onAddPhoto={(url) =>
+            onUpdateList({ ...list, referenceImages: [...(list.referenceImages || []), url] })
+          }
+          onRemovePhoto={(url, isScan) =>
+            isScan
+              ? onUpdateList({ ...list, scanImageUrl: null })
+              : onUpdateList({
+                  ...list,
+                  referenceImages: (list.referenceImages || []).filter((u) => u !== url),
+                })
+          }
+          onClose={() => setShowPhotosModal(false)}
+        />
       )}
 
       <main className="max-w-2xl mx-auto px-4 py-5">
@@ -15519,6 +15648,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
       dateReceived,
       items,
       scanImageUrl: scanImageUrl || null,
+      referenceImages: [],
       createdAt: timeStamp(),
       archived: false,
     };
