@@ -257,6 +257,20 @@ function parseSerials(text) {
     .filter(Boolean);
 }
 
+// SME#s that already belong to a locked Received/Staged/Sent batch on a
+// Love List item — permanent historical record, never editable again.
+// Used to keep the SME# entry box showing only what's new/unrecorded,
+// rather than mixing fresh entries in with numbers that already shipped.
+function lockedLoveSerials(item) {
+  return [
+    ...new Set([
+      ...((item.receivedBatches || []).flatMap((b) => b.serials || [])),
+      ...((item.stagedBatches || []).flatMap((b) => b.serials || [])),
+      ...((item.sentBatches || []).flatMap((b) => b.serials || [])),
+    ]),
+  ];
+}
+
 function emptyItem(defaultStorage) {
   return {
     id: null,
@@ -12259,6 +12273,7 @@ function newLoveListItem(name, qty, extra = {}) {
     assignedTaskIds: [],
     sentBatches: [],
     receivedBatches: [],
+    stagedBatches: [],
   };
 }
 
@@ -13252,12 +13267,20 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
 
   const saveSme = () => {
     if (!editingSmeFor) return;
-    const newSerials = parseSerials(smeDraft);
+    const enteredNew = parseSerials(smeDraft);
     playSaveChime();
     onUpdateList({
       ...list,
       items: list.items.map((i) => {
         if (i.id !== editingSmeFor.id) return i;
+        // Locked (already-shipped/staged/received) numbers are never
+        // touched by this box — only combine them with whatever's newly
+        // typed in, so there's no risk of accidentally dropping a
+        // historical SME# just by editing the field.
+        const locked = lockedLoveSerials(i);
+        const newlyEntered = enteredNew.filter((s) => !locked.includes(s));
+        const newSerials = [...new Set([...locked, ...newlyEntered])];
+
         const prevCount = (i.serials || []).length;
         const newCount = newSerials.length;
         const currentHave = i.qtyHave || 0;
@@ -13289,7 +13312,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     onUpdateList({
       ...list,
       items: list.items.map((i) =>
-        i.id === item.id ? { ...i, sentBatches: [], receivedBatches: [] } : i
+        i.id === item.id ? { ...i, sentBatches: [], receivedBatches: [], stagedBatches: [] } : i
       ),
     });
     setClearBatchesTarget(null);
@@ -13569,6 +13592,31 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
             status: newStatus,
             statusDates: { ...i.statusDates, [newStatus]: today },
             receivedBatches,
+          };
+        }
+
+        if (newStatus === "staged" && direction === "forward") {
+          // Same idea as Received — items often get physically staged as
+          // they become ready, before the rest of the order has shown up.
+          const priorBatches = i.stagedBatches || [];
+          const priorStagedQty = priorBatches.reduce((sum, b) => sum + b.stagedQty, 0);
+          const priorSerials = new Set(priorBatches.flatMap((b) => b.serials || []));
+          const deltaQty = Math.max(0, (i.qtyHave || 0) - priorStagedQty);
+          const deltaSerials = (i.serials || []).filter((s) => !priorSerials.has(s));
+          const hasNewContent = deltaQty > 0 || deltaSerials.length > 0;
+          const stagedBatches = hasNewContent
+            ? [...priorBatches, { stagedQty: deltaQty, serials: deltaSerials, timestamp: new Date().toISOString() }]
+            : priorBatches;
+
+          // Staged sits in the middle of the pipeline too — blocking here
+          // would stop a partial staging batch from moving on toward
+          // Sent, so this always actually advances the status the same
+          // way Received does.
+          return {
+            ...i,
+            status: newStatus,
+            statusDates: { ...i.statusDates, [newStatus]: today },
+            stagedBatches,
           };
         }
 
@@ -13981,6 +14029,29 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                     })()}
                   </div>
                 )}
+                {item.stagedBatches && item.stagedBatches.some((b) => b.stagedQty > 0 || (b.serials || []).length > 0) && (
+                  <div className="mb-2 space-y-1">
+                    {item.stagedBatches
+                      .filter((b) => b.stagedQty > 0 || (b.serials || []).length > 0)
+                      .map((batch, idx) => (
+                      <div key={idx}>
+                        <span className="inline-block text-xs rounded-full px-2.5 py-1 border border-slate-700 bg-slate-800/60 text-slate-500">
+                          🔒 Staged {batch.stagedQty}
+                          {item.qtyUnit ? ` ${item.qtyUnit}` : ""} on{" "}
+                          {new Date(batch.timestamp).toLocaleString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}
+                          {batch.serials && batch.serials.length > 0 && (
+                            <span className="font-mono"> · SME# {batch.serials.join(", ")}</span>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {item.sentBatches && item.sentBatches.some((b) => b.sentQty > 0 || (b.serials || []).length > 0) && (
                   <div className="mb-2 space-y-1">
                     {item.sentBatches
@@ -14012,6 +14083,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                 )}
                 {isEditor &&
                   (((item.receivedBatches || []).length > 0) ||
+                    ((item.stagedBatches || []).length > 0) ||
                     ((item.sentBatches || []).length > 0)) && (
                     <button
                       onClick={() => setClearBatchesTarget(item)}
@@ -14089,7 +14161,10 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                   <button
                     onClick={() => {
                       setEditingSmeFor(item);
-                      setSmeDraft((item.serials || []).join(", "));
+                      const locked = lockedLoveSerials(item);
+                      setSmeDraft(
+                        (item.serials || []).filter((s) => !locked.includes(s)).join(", ")
+                      );
                     }}
                     className="text-xs mb-2 block"
                   >
@@ -14200,7 +14275,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
       {clearBatchesTarget && (
         <ConfirmDelete
           title="Clear delivery history?"
-          message={`Every locked Received and Sent record for "${clearBatchesTarget.name}" will be permanently wiped. This is meant as a reset for test/mistaken entries — it can't be undone.`}
+          message={`Every locked Received, Staged, and Sent record for "${clearBatchesTarget.name}" will be permanently wiped. This is meant as a reset for test/mistaken entries — it can't be undone.`}
           onConfirm={() => clearBatches(clearBatchesTarget)}
           onCancel={() => setClearBatchesTarget(null)}
         />
@@ -14460,8 +14535,18 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
           <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
             <h3 className="text-slate-100 font-semibold mb-1">SME # for "{editingSmeFor.name}"</h3>
+            {lockedLoveSerials(editingSmeFor).length > 0 && (
+              <p className="text-xs text-slate-500 mb-3">
+                Already recorded (locked, can't be edited here):{" "}
+                <span className="font-mono text-slate-400">
+                  {lockedLoveSerials(editingSmeFor).join(", ")}
+                </span>
+              </p>
+            )}
             <p className="text-xs text-slate-500 mb-3">
-              Now that you actually have it in hand — separate multiple numbers with commas.
+              {lockedLoveSerials(editingSmeFor).length > 0
+                ? "Add ones you have in hand but haven't recorded yet — separate multiple with commas."
+                : "Now that you actually have it in hand — separate multiple numbers with commas."}{" "}
               Qty have updates automatically to match.
             </p>
             <input
