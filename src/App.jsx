@@ -12185,6 +12185,7 @@ function newLoveListItem(name, qty, extra = {}) {
     archived: false,
     duplicateOf: extra.duplicateOf || null,
     assignedTaskIds: [],
+    partialSend: null,
   };
 }
 
@@ -12951,7 +12952,10 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [transferCopied, setTransferCopied] = useState(false);
 
   const transferListText = sentUnarchivedItems
-    .map((i) => `${i.name} x${i.qty}${i.qtyUnit ? ` ${i.qtyUnit}` : ""}`)
+    .map((i) => {
+      const base = `${i.name} x${i.qty}${i.qtyUnit ? ` ${i.qtyUnit}` : ""}`;
+      return i.serials && i.serials.length > 0 ? `${base} — SME# ${i.serials.join(", ")}` : base;
+    })
     .join("\n");
 
   const copyTransferList = async () => {
@@ -13006,11 +13010,15 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     playSaveChime();
     onUpdateList({
       ...list,
-      items: list.items.map((i) =>
-        i.id === editingQtyFor.id
-          ? { ...i, qty: num, qtyHave: haveNum, qtyUnit: qtyUnitDraft.trim() }
-          : i
-      ),
+      items: list.items.map((i) => {
+        if (i.id !== editingQtyFor.id) return i;
+        const updated = { ...i, qty: num, qtyHave: haveNum, qtyUnit: qtyUnitDraft.trim() };
+        // If the remainder got caught up (have now meets or exceeds
+        // needed) while a partial-send flag was still sitting on this
+        // item, the shipment's effectively complete now — clear it.
+        if (i.partialSend && haveNum >= num) updated.partialSend = null;
+        return updated;
+      }),
     });
     setEditingQtyFor(null);
   };
@@ -13158,7 +13166,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         const newStatus = direction === "forward" ? nextLoveStatus(i) : prevLoveStatus(i);
         if (!newStatus) return i;
         const today = new Date().toISOString().slice(0, 10);
-        return {
+        const updated = {
           ...i,
           status: newStatus,
           statusDates: {
@@ -13166,6 +13174,20 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
             [newStatus]: direction === "forward" ? today : i.statusDates[newStatus],
           },
         };
+        // Moving to "sent" with less on hand than needed means only part
+        // of the request actually went out — flag it with a timestamp so
+        // it's never mistaken for a completed shipment, and the
+        // remaining amount doesn't quietly get forgotten.
+        if (newStatus === "sent" && direction === "forward" && i.qtyHave < i.qty) {
+          updated.partialSend = {
+            sentQty: i.qtyHave,
+            totalQty: i.qty,
+            timestamp: new Date().toISOString(),
+          };
+        } else if (newStatus !== "sent") {
+          updated.partialSend = null;
+        }
+        return updated;
       }),
     });
   };
@@ -13479,6 +13501,18 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                     with no movement
                   </p>
                 )}
+                {item.partialSend && (
+                  <p className="text-xs text-orange-400 mb-2">
+                    ⚠ Partially sent — {item.partialSend.sentQty}/{item.partialSend.totalQty} on{" "}
+                    {new Date(item.partialSend.timestamp).toLocaleString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                    . {item.partialSend.totalQty - item.partialSend.sentQty} still needed.
+                  </p>
+                )}
                 {isEditor && item.status === "requested" && (
                   <button
                     onClick={() =>
@@ -13695,6 +13729,11 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                         {item.qtyHave ?? 0}/{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
                       </span>
                     </p>
+                    {item.serials && item.serials.length > 0 && (
+                      <p className="text-xs text-fuchsia-300 font-mono">
+                        SME# {item.serials.join(", ")}
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>
