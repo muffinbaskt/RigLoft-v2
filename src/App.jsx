@@ -13134,7 +13134,9 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const transferListEntries = list.items
     .filter((i) => !i.archived && i.needsTransfer)
     .flatMap((i) => {
-      const batches = i.sentBatches || [];
+      const batches = (i.sentBatches || []).filter(
+        (b) => b.sentQty > 0 || (b.serials || []).length > 0
+      );
       return batches.map((batch, idx) => ({
         item: i,
         qty: batch.sentQty,
@@ -13412,12 +13414,14 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           const priorSerials = new Set(priorBatches.flatMap((b) => b.serials || []));
           const deltaQty = Math.max(0, (i.qtyHave || 0) - priorSentQty);
           const deltaSerials = (i.serials || []).filter((s) => !priorSerials.has(s));
-          const newBatch = {
-            sentQty: deltaQty,
-            serials: deltaSerials,
-            timestamp: new Date().toISOString(),
-          };
-          const sentBatches = [...priorBatches, newBatch];
+          // Nothing actually new since the last batch — e.g. tapping
+          // forward again after already recording this delivery, or
+          // toggling back and forth without the quantity changing. Don't
+          // stamp a fresh empty entry just because the button got tapped.
+          const hasNewContent = deltaQty > 0 || deltaSerials.length > 0;
+          const sentBatches = hasNewContent
+            ? [...priorBatches, { sentQty: deltaQty, serials: deltaSerials, timestamp: new Date().toISOString() }]
+            : priorBatches;
 
           if (i.qtyHave < i.qty) {
             // Still short overall — lock this batch in, but keep the
@@ -13444,12 +13448,10 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           const priorSerials = new Set(priorBatches.flatMap((b) => b.serials || []));
           const deltaQty = Math.max(0, (i.qtyHave || 0) - priorReceivedQty);
           const deltaSerials = (i.serials || []).filter((s) => !priorSerials.has(s));
-          const newBatch = {
-            receivedQty: deltaQty,
-            serials: deltaSerials,
-            timestamp: new Date().toISOString(),
-          };
-          const receivedBatches = [...priorBatches, newBatch];
+          const hasNewContent = deltaQty > 0 || deltaSerials.length > 0;
+          const receivedBatches = hasNewContent
+            ? [...priorBatches, { receivedQty: deltaQty, serials: deltaSerials, timestamp: new Date().toISOString() }]
+            : priorBatches;
 
           // Unlike Sent (the final stage), Received sits in the middle of
           // the pipeline — staying "stuck" here would block moving a
@@ -13840,9 +13842,11 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                     with no movement
                   </p>
                 )}
-                {item.receivedBatches && item.receivedBatches.length > 0 && (
+                {item.receivedBatches && item.receivedBatches.some((b) => b.receivedQty > 0 || (b.serials || []).length > 0) && (
                   <div className="mb-2 space-y-1">
-                    {item.receivedBatches.map((batch, idx) => (
+                    {item.receivedBatches
+                      .filter((b) => b.receivedQty > 0 || (b.serials || []).length > 0)
+                      .map((batch, idx) => (
                       <div key={idx}>
                         <span className="inline-block text-xs rounded-full px-2.5 py-1 border border-slate-700 bg-slate-800/60 text-slate-500">
                           🔒 Received {batch.receivedQty}
@@ -13873,9 +13877,11 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                     })()}
                   </div>
                 )}
-                {item.sentBatches && item.sentBatches.length > 0 && (
+                {item.sentBatches && item.sentBatches.some((b) => b.sentQty > 0 || (b.serials || []).length > 0) && (
                   <div className="mb-2 space-y-1">
-                    {item.sentBatches.map((batch, idx) => (
+                    {item.sentBatches
+                      .filter((b) => b.sentQty > 0 || (b.serials || []).length > 0)
+                      .map((batch, idx) => (
                       <div key={idx}>
                         <span className="inline-block text-xs rounded-full px-2.5 py-1 border border-slate-700 bg-slate-800/60 text-slate-500">
                           🔒 Sent {batch.sentQty}
