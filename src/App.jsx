@@ -13076,6 +13076,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [assigningItem, setAssigningItem] = useState(null); // single item, or "bulk"
   const [editingSmeFor, setEditingSmeFor] = useState(null); // item, while editing its SME#s
+  const [clearBatchesTarget, setClearBatchesTarget] = useState(null); // item, while confirming a batch history reset
   const [relinkingItem, setRelinkingItem] = useState(null); // item, while relinking its catalog match
   const [renamingItem, setRenamingItem] = useState(null); // item, while renaming it
   const [renameDraft, setRenameDraft] = useState("");
@@ -13193,6 +13194,16 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
       ),
     });
     setEditingSmeFor(null);
+  };
+
+  const clearBatches = (item) => {
+    onUpdateList({
+      ...list,
+      items: list.items.map((i) =>
+        i.id === item.id ? { ...i, sentBatches: [], receivedBatches: [] } : i
+      ),
+    });
+    setClearBatchesTarget(null);
   };
 
   const saveRename = () => {
@@ -13906,6 +13917,16 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                     )}
                   </div>
                 )}
+                {isEditor &&
+                  (((item.receivedBatches || []).length > 0) ||
+                    ((item.sentBatches || []).length > 0)) && (
+                    <button
+                      onClick={() => setClearBatchesTarget(item)}
+                      className="text-xs text-slate-600 hover:text-red-400 mb-2 block"
+                    >
+                      Clear delivery history
+                    </button>
+                  )}
                 {isEditor && item.status === "requested" && (
                   <button
                     onClick={() =>
@@ -14081,6 +14102,14 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           message={`"${deleteItemTarget.name}" will be removed from this list.`}
           onConfirm={() => deleteItem(deleteItemTarget.id)}
           onCancel={() => setDeleteItemTarget(null)}
+        />
+      )}
+      {clearBatchesTarget && (
+        <ConfirmDelete
+          title="Clear delivery history?"
+          message={`Every locked Received and Sent record for "${clearBatchesTarget.name}" will be permanently wiped. This is meant as a reset for test/mistaken entries — it can't be undone.`}
+          onConfirm={() => clearBatches(clearBatchesTarget)}
+          onCancel={() => setClearBatchesTarget(null)}
         />
       )}
       {deleteListConfirm && (
