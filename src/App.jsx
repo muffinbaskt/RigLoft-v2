@@ -13252,12 +13252,35 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
 
   const saveSme = () => {
     if (!editingSmeFor) return;
+    const newSerials = parseSerials(smeDraft);
     playSaveChime();
     onUpdateList({
       ...list,
-      items: list.items.map((i) =>
-        i.id === editingSmeFor.id ? { ...i, serials: parseSerials(smeDraft) } : i
-      ),
+      items: list.items.map((i) => {
+        if (i.id !== editingSmeFor.id) return i;
+        const prevCount = (i.serials || []).length;
+        const newCount = newSerials.length;
+        const currentHave = i.qtyHave || 0;
+
+        let qtyHave = currentHave;
+        if (newCount > prevCount) {
+          // Got more SME#s than before — bring Have up to at least match,
+          // the SME count sets the floor rather than needing a separate
+          // manual bump.
+          qtyHave = Math.max(currentHave, newCount);
+        } else if (newCount < prevCount) {
+          // Fewer SME#s than before — drop Have by exactly the removed
+          // count, preserving any untracked (no-SME#) quantity already
+          // sitting on top of what was tracked.
+          const untracked = Math.max(0, currentHave - prevCount);
+          qtyHave = newCount + untracked;
+        }
+        // Belt-and-suspenders: Have should never sit below the tracked
+        // count, even for older items saved before this synced them.
+        qtyHave = Math.max(qtyHave, newCount);
+
+        return { ...i, serials: newSerials, qtyHave };
+      }),
     });
     setEditingSmeFor(null);
   };
@@ -13306,7 +13329,11 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     if (!editingQtyFor) return;
     const num = Number(qtyDraft);
     if (!num || num <= 0) return;
-    const haveNum = qtyHaveDraft.trim() === "" ? 0 : Math.max(0, Number(qtyHaveDraft) || 0);
+    const rawHave = qtyHaveDraft.trim() === "" ? 0 : Math.max(0, Number(qtyHaveDraft) || 0);
+    // Have can't be manually dropped below the number of SME#s already
+    // tracked on this item — that count is a floor, not a suggestion.
+    const smeCount = (editingQtyFor.serials || []).length;
+    const haveNum = Math.max(rawHave, smeCount);
     playSaveChime();
     onUpdateList({
       ...list,
@@ -14383,6 +14410,12 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                   onKeyDown={(e) => e.key === "Enter" && saveQty()}
                   className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
                 />
+                {(editingQtyFor.serials || []).length > 0 && (
+                  <p className="text-[10px] text-slate-600 mt-1">
+                    Won't go below {editingQtyFor.serials.length} tracked SME#
+                    {editingQtyFor.serials.length === 1 ? "" : "s"}.
+                  </p>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-400 mb-1">Needed</label>
@@ -14429,6 +14462,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
             <h3 className="text-slate-100 font-semibold mb-1">SME # for "{editingSmeFor.name}"</h3>
             <p className="text-xs text-slate-500 mb-3">
               Now that you actually have it in hand — separate multiple numbers with commas.
+              Qty have updates automatically to match.
             </p>
             <input
               autoFocus
