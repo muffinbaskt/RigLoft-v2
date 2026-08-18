@@ -12941,6 +12941,8 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
   const [showScanImage, setShowScanImage] = useState(false);
+  const [editingNickname, setEditingNickname] = useState(false);
+  const [nicknameDraft, setNicknameDraft] = useState("");
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [assigningItem, setAssigningItem] = useState(null); // single item, or "bulk"
@@ -13067,6 +13069,12 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
       ),
     });
     setRenamingItem(null);
+  };
+
+  const saveNickname = () => {
+    playSaveChime();
+    onUpdateList({ ...list, subJobLabel: nicknameDraft.trim() });
+    setEditingNickname(false);
   };
 
   const saveNote = () => {
@@ -13316,15 +13324,33 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
               <Home className="w-4 h-4" />
             </button>
             <div className="min-w-0">
-              <p className="font-semibold text-slate-100 truncate flex items-center gap-1.5">
-                <Heart className="w-4 h-4 text-rose-400 shrink-0" />
-                {listDisplayLabel(list)}
-                {list.archived && (
-                  <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-500 rounded-full px-1.5 py-0.5 shrink-0">
-                    Archived
-                  </span>
-                )}
-              </p>
+              {isEditor ? (
+                <button
+                  onClick={() => {
+                    setEditingNickname(true);
+                    setNicknameDraft(list.subJobLabel || "");
+                  }}
+                  className="font-semibold text-slate-100 truncate flex items-center gap-1.5 hover:underline decoration-dotted text-left"
+                >
+                  <Heart className="w-4 h-4 text-rose-400 shrink-0" />
+                  {listDisplayLabel(list)}
+                  {list.archived && (
+                    <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-500 rounded-full px-1.5 py-0.5 shrink-0">
+                      Archived
+                    </span>
+                  )}
+                </button>
+              ) : (
+                <p className="font-semibold text-slate-100 truncate flex items-center gap-1.5">
+                  <Heart className="w-4 h-4 text-rose-400 shrink-0" />
+                  {listDisplayLabel(list)}
+                  {list.archived && (
+                    <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-500 rounded-full px-1.5 py-0.5 shrink-0">
+                      Archived
+                    </span>
+                  )}
+                </p>
+              )}
               <p className="text-xs text-slate-500 truncate">
                 {list.dateReceived}
                 {list.submittedBy ? ` · ${list.submittedBy}` : ""}
@@ -13921,6 +13947,40 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                 onClick={saveRename}
                 disabled={!renameDraft.trim()}
                 className="flex-1 text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400 disabled:opacity-40"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingNickname && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-1">Sub-job / nickname</h3>
+            <p className="text-xs text-slate-500 mb-3">
+              Still groups under {list.jobLabel} — this just tells the list apart from others on
+              the same job. Leave blank to clear it.
+            </p>
+            <input
+              autoFocus
+              value={nicknameDraft}
+              onChange={(e) => setNicknameDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && saveNickname()}
+              placeholder="e.g. Support Building"
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => setEditingNickname(false)}
+                className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveNickname}
+                className="flex-1 text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400"
               >
                 Save
               </button>
