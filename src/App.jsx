@@ -4005,9 +4005,13 @@ const REQUISITION_TEMPLATES = {
 
 function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
   const docs = job.referenceDocuments || [];
+  const photoDocs = docs.filter((d) => (d.type || "").startsWith("image/"));
+  const fileDocs = docs.filter((d) => !(d.type || "").startsWith("image/"));
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [viewingUrl, setViewingUrl] = useState(null);
+  const photoInputRef = useRef(null);
   const fileInputRef = useRef(null);
 
   const handleFileChosen = async (e) => {
@@ -4022,6 +4026,7 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
       setUploadError(result.error || "Upload failed");
       return;
     }
+    const isPhoto = (result.type || "").startsWith("image/");
     onUpdateJob((prevJob) => ({
       ...prevJob,
       referenceDocuments: [
@@ -4031,6 +4036,7 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
           name: result.name,
           url: result.url,
           path: result.path,
+          type: result.type || "",
           uploadedAt: timeStamp(),
         },
       ],
@@ -4038,7 +4044,7 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
         {
           id: uniqueId(),
           time: timeStamp(),
-          message: `Uploaded reference document "${result.name}"`,
+          message: isPhoto ? "Added a photo" : `Uploaded reference document "${result.name}"`,
         },
         ...prevJob.activityLog,
       ].slice(0, 50),
@@ -4055,6 +4061,28 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
     }));
   };
 
+  if (viewingUrl) {
+    return (
+      <div
+        className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
+        onClick={() => setViewingUrl(null)}
+      >
+        <button
+          onClick={() => setViewingUrl(null)}
+          className="absolute top-4 right-4 text-slate-300 hover:text-white"
+        >
+          <X className="w-6 h-6" />
+        </button>
+        <img
+          src={viewingUrl}
+          alt="Reference photo"
+          className="max-w-full max-h-full rounded-lg"
+          onClick={(e) => e.stopPropagation()}
+        />
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40" onClick={onClose}>
@@ -4062,7 +4090,9 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
           <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
             <div>
               <h2 className="text-slate-100 font-semibold text-base">Reference documents</h2>
-              <p className="text-xs text-slate-500">Original sheets, orders, or drawings for this job</p>
+              <p className="text-xs text-slate-500">
+                Original sheets, orders, drawings, or receipts for this job
+              </p>
             </div>
             <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
               <X className="w-5 h-5" />
@@ -4072,36 +4102,62 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
           <div className="flex-1 overflow-y-auto px-5 py-4">
             {docs.length === 0 ? (
               <p className="text-sm text-slate-500 text-center py-10">
-                Nothing uploaded yet — attach the original PDF this job's items came from, so
-                it's easy to reference later.
+                Nothing here yet — attach the original PDF this job's items came from, or snap
+                a photo of a receipt, so it's easy to reference later.
               </p>
             ) : (
-              <div className="space-y-2">
-                {docs.map((doc) => (
-                  <div
-                    key={doc.id}
-                    className="flex items-center justify-between gap-2 border border-slate-800 rounded-md p-3"
-                  >
-                    <a
-                      href={doc.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2 min-w-0 flex-1 hover:text-amber-400"
-                    >
-                      <FileText className="w-4 h-4 text-slate-500 shrink-0" />
-                      <span className="text-sm text-slate-100 truncate">{doc.name}</span>
-                    </a>
-                    {isEditor && (
-                      <button
-                        onClick={() => setDeleteTarget(doc)}
-                        className="text-slate-600 hover:text-red-400 shrink-0"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
+              <>
+                {photoDocs.length > 0 && (
+                  <div className="grid grid-cols-2 gap-2.5 mb-4">
+                    {photoDocs.map((doc) => (
+                      <div key={doc.id} className="relative group">
+                        <button
+                          onClick={() => setViewingUrl(doc.url)}
+                          className="block w-full aspect-square rounded-lg overflow-hidden border border-slate-800"
+                        >
+                          <img src={doc.url} alt="" className="w-full h-full object-cover" />
+                        </button>
+                        {isEditor && (
+                          <button
+                            onClick={() => setDeleteTarget(doc)}
+                            className="absolute top-1.5 right-1.5 bg-slate-950/80 text-slate-300 hover:text-red-400 rounded-full p-1"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                )}
+                {fileDocs.length > 0 && (
+                  <div className="space-y-2">
+                    {fileDocs.map((doc) => (
+                      <div
+                        key={doc.id}
+                        className="flex items-center justify-between gap-2 border border-slate-800 rounded-md p-3"
+                      >
+                        <a
+                          href={doc.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 min-w-0 flex-1 hover:text-amber-400"
+                        >
+                          <FileText className="w-4 h-4 text-slate-500 shrink-0" />
+                          <span className="text-sm text-slate-100 truncate">{doc.name}</span>
+                        </a>
+                        {isEditor && (
+                          <button
+                            onClick={() => setDeleteTarget(doc)}
+                            className="text-slate-600 hover:text-red-400 shrink-0"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
             {uploadError && (
               <p className="text-xs text-red-400 mt-3">Couldn't upload: {uploadError}</p>
@@ -4109,7 +4165,23 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
           </div>
 
           {isEditor && (
-            <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+            <div className="px-5 py-4 border-t border-slate-800 shrink-0 space-y-2">
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleFileChosen}
+                className="hidden"
+              />
+              <button
+                onClick={() => photoInputRef.current && photoInputRef.current.click()}
+                disabled={uploading}
+                className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-50"
+              >
+                <Camera className="w-4 h-4" />
+                {uploading ? "Uploading..." : "Take a photo"}
+              </button>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -4120,10 +4192,10 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
               <button
                 onClick={() => fileInputRef.current && fileInputRef.current.click()}
                 disabled={uploading}
-                className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-50"
+                className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-50"
               >
                 <Upload className="w-4 h-4" />
-                {uploading ? "Uploading..." : "Upload PDF"}
+                {uploading ? "Uploading..." : "Upload a file"}
               </button>
             </div>
           )}
@@ -9610,7 +9682,7 @@ async function uploadReferenceDocument(jobId, file) {
     const { error } = await supabase.storage.from("job-documents").upload(path, uploadFile);
     if (error) return { ok: false, error: error.message };
     const { data } = supabase.storage.from("job-documents").getPublicUrl(path);
-    return { ok: true, url: data.publicUrl, path, name: uploadFile.name };
+    return { ok: true, url: data.publicUrl, path, name: uploadFile.name, type: uploadFile.type };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };
   }
