@@ -12969,6 +12969,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         qty: batch.sentQty,
         qtyUnit: i.qtyUnit,
         serials: batch.serials || [],
+        date: batch.timestamp.slice(0, 10),
         // The final batch is only "not partial" if the item actually
         // reached a genuine, fully-caught-up Sent status.
         partial: idx < batches.length - 1 || i.status !== "sent",
@@ -12976,13 +12977,30 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     });
   const transferListCount = transferListEntries.length;
 
-  const transferListText = transferListEntries
-    .map(({ item, qty, qtyUnit, serials, partial }) => {
-      const base = `${item.name} x${qty}${qtyUnit ? ` ${qtyUnit}` : ""}`;
-      const withSme = serials.length > 0 ? `${base} — SME# ${serials.join(", ")}` : base;
-      return partial ? `${withSme} (partial)` : withSme;
+  // Grouped by date, newest first — a "what went out on this day" view,
+  // separate from the flat item-by-item list.
+  const transferDates = [...new Set(transferListEntries.map((e) => e.date))].sort((a, b) =>
+    b.localeCompare(a)
+  );
+  const formatTransferDate = (dateStr) =>
+    new Date(dateStr + "T00:00:00").toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+
+  const transferListText = transferDates
+    .map((date) => {
+      const lines = transferListEntries
+        .filter((e) => e.date === date)
+        .map(({ item, qty, qtyUnit, serials, partial }) => {
+          const base = `${item.name} x${qty}${qtyUnit ? ` ${qtyUnit}` : ""}`;
+          const withSme = serials.length > 0 ? `${base} — SME# ${serials.join(", ")}` : base;
+          return partial ? `${withSme} (partial)` : withSme;
+        });
+      return `Sent on ${formatTransferDate(date)}:\n${lines.join("\n")}`;
     })
-    .join("\n");
+    .join("\n\n");
 
   const copyTransferList = async () => {
     const ok = await copyToClipboard(`Transfer list — ${list.jobLabel}\n\n${transferListText}`);
@@ -13780,29 +13798,38 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto px-5 py-4">
-              <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden">
-                {transferListEntries.map(({ item, qty, qtyUnit, serials, partial }, idx) => (
-                  <div key={`${item.id}-${idx}`} className="px-3 py-2 bg-slate-800/40">
-                    <p className="text-sm text-slate-100">
-                      {item.name}{" "}
-                      <span className="text-slate-500">
-                        x{qty}{qtyUnit ? ` ${qtyUnit}` : ""}
-                      </span>
-                      {partial && (
-                        <span className="text-[10px] font-medium tracking-wide uppercase bg-orange-500/15 border border-orange-500/40 text-orange-300 rounded-full px-1.5 py-0.5 ml-1.5">
-                          Partial
-                        </span>
-                      )}
-                    </p>
-                    {serials.length > 0 && (
-                      <p className="text-xs text-fuchsia-300 font-mono">
-                        SME# {serials.join(", ")}
-                      </p>
-                    )}
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+              {transferDates.map((date) => (
+                <div key={date}>
+                  <p className="text-xs font-semibold text-slate-400 mb-1.5">
+                    Sent on {formatTransferDate(date)}
+                  </p>
+                  <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden">
+                    {transferListEntries
+                      .filter((e) => e.date === date)
+                      .map(({ item, qty, qtyUnit, serials, partial }, idx) => (
+                        <div key={`${item.id}-${idx}`} className="px-3 py-2 bg-slate-800/40">
+                          <p className="text-sm text-slate-100">
+                            {item.name}{" "}
+                            <span className="text-slate-500">
+                              x{qty}{qtyUnit ? ` ${qtyUnit}` : ""}
+                            </span>
+                            {partial && (
+                              <span className="text-[10px] font-medium tracking-wide uppercase bg-orange-500/15 border border-orange-500/40 text-orange-300 rounded-full px-1.5 py-0.5 ml-1.5">
+                                Partial
+                              </span>
+                            )}
+                          </p>
+                          {serials.length > 0 && (
+                            <p className="text-xs text-fuchsia-300 font-mono">
+                              SME# {serials.join(", ")}
+                            </p>
+                          )}
+                        </div>
+                      ))}
                   </div>
-                ))}
-              </div>
+                </div>
+              ))}
             </div>
             <div className="px-5 py-4 border-t border-slate-800 shrink-0">
               <button
