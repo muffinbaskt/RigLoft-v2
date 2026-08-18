@@ -13231,11 +13231,27 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     playSaveChime();
     onUpdateList({
       ...list,
-      items: list.items.map((i) =>
-        i.id === editingQtyFor.id
-          ? { ...i, qty: num, qtyHave: haveNum, qtyUnit: qtyUnitDraft.trim() }
-          : i
-      ),
+      items: list.items.map((i) => {
+        if (i.id !== editingQtyFor.id) return i;
+        const updated = { ...i, qty: num, qtyHave: haveNum, qtyUnit: qtyUnitDraft.trim() };
+        // If more stock shows up after this item's status has already
+        // moved on past Received (e.g. the first portion's already
+        // Staged or Sent), there's no stepper action left to record that
+        // second delivery with — so catch it here instead, independent
+        // of wherever the status currently sits.
+        const priorReceivedBatches = i.receivedBatches || [];
+        const priorReceivedQty = priorReceivedBatches.reduce((sum, b) => sum + b.receivedQty, 0);
+        if (haveNum > priorReceivedQty) {
+          const priorSerials = new Set(priorReceivedBatches.flatMap((b) => b.serials || []));
+          const deltaQty = haveNum - priorReceivedQty;
+          const deltaSerials = (i.serials || []).filter((s) => !priorSerials.has(s));
+          updated.receivedBatches = [
+            ...priorReceivedBatches,
+            { receivedQty: deltaQty, serials: deltaSerials, timestamp: new Date().toISOString() },
+          ];
+        }
+        return updated;
+      }),
     });
     setEditingQtyFor(null);
   };
@@ -13435,9 +13451,13 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           };
           const receivedBatches = [...priorBatches, newBatch];
 
-          if (i.qtyHave < i.qty) {
-            return { ...i, receivedBatches };
-          }
+          // Unlike Sent (the final stage), Received sits in the middle of
+          // the pipeline — staying "stuck" here would block moving a
+          // partial delivery on to Staged/Sent, which genuinely happens
+          // (shipping partial amounts to the job before the rest of the
+          // order arrives). So this always actually advances the status;
+          // the batch history is what keeps an honest record of exactly
+          // how much showed up and when, without blocking progress.
           return {
             ...i,
             status: newStatus,
@@ -13839,13 +13859,18 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                         </span>
                       </div>
                     ))}
-                    {item.status === "requested" || item.status === "ordered" ? (
-                      <p className="text-xs text-amber-400 mt-1">
-                        {item.qty -
-                          item.receivedBatches.reduce((sum, b) => sum + b.receivedQty, 0)}{" "}
-                        still needed — use the status below for the remainder.
-                      </p>
-                    ) : null}
+                    {(() => {
+                      const receivedSum = item.receivedBatches.reduce(
+                        (sum, b) => sum + b.receivedQty,
+                        0
+                      );
+                      return receivedSum < item.qty ? (
+                        <p className="text-xs text-amber-400 mt-1">
+                          {item.qty - receivedSum} more still on order — update the "Have" qty
+                          once it arrives to record it as its own delivery.
+                        </p>
+                      ) : null;
+                    })()}
                   </div>
                 )}
                 {item.sentBatches && item.sentBatches.length > 0 && (
