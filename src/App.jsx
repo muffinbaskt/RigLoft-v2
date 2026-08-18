@@ -12185,7 +12185,7 @@ function newLoveListItem(name, qty, extra = {}) {
     archived: false,
     duplicateOf: extra.duplicateOf || null,
     assignedTaskIds: [],
-    partialSend: null,
+    sentBatches: [],
   };
 }
 
@@ -12946,15 +12946,41 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
 
   const visibleItems = list.items.filter((i) => showArchived || !i.archived);
   const archivedCount = list.items.filter((i) => i.archived).length;
+  // Archive only makes sense for items that are genuinely, fully done —
+  // a partial send still has a remainder outstanding, so it stays out of
+  // this count regardless of what's shown on the transfer list.
   const sentUnarchivedItems = list.items.filter((i) => i.status === "sent" && !i.archived);
   const sentUnarchivedCount = sentUnarchivedItems.length;
   const [showTransferList, setShowTransferList] = useState(false);
   const [transferCopied, setTransferCopied] = useState(false);
 
-  const transferListText = sentUnarchivedItems
-    .map((i) => {
-      const base = `${i.name} x${i.qty}${i.qtyUnit ? ` ${i.qtyUnit}` : ""}`;
-      return i.serials && i.serials.length > 0 ? `${base} — SME# ${i.serials.join(", ")}` : base;
+  // What actually shows on the transfer list: only SME-tracked items,
+  // since that's the whole point of the record. Includes both items
+  // genuinely marked Sent, and partial-send snapshots — each showing the
+  // quantity and SME#s that were actually present at the moment that
+  // portion went out, not whatever the item's current values happen to
+  // be now.
+  const transferListEntries = list.items
+    .filter((i) => !i.archived && i.needsTransfer)
+    .flatMap((i) => {
+      const batches = i.sentBatches || [];
+      return batches.map((batch, idx) => ({
+        item: i,
+        qty: batch.sentQty,
+        qtyUnit: i.qtyUnit,
+        serials: batch.serials || [],
+        // The final batch is only "not partial" if the item actually
+        // reached a genuine, fully-caught-up Sent status.
+        partial: idx < batches.length - 1 || i.status !== "sent",
+      }));
+    });
+  const transferListCount = transferListEntries.length;
+
+  const transferListText = transferListEntries
+    .map(({ item, qty, qtyUnit, serials, partial }) => {
+      const base = `${item.name} x${qty}${qtyUnit ? ` ${qtyUnit}` : ""}`;
+      const withSme = serials.length > 0 ? `${base} — SME# ${serials.join(", ")}` : base;
+      return partial ? `${withSme} (partial)` : withSme;
     })
     .join("\n");
 
@@ -13010,15 +13036,11 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     playSaveChime();
     onUpdateList({
       ...list,
-      items: list.items.map((i) => {
-        if (i.id !== editingQtyFor.id) return i;
-        const updated = { ...i, qty: num, qtyHave: haveNum, qtyUnit: qtyUnitDraft.trim() };
-        // If the remainder got caught up (have now meets or exceeds
-        // needed) while a partial-send flag was still sitting on this
-        // item, the shipment's effectively complete now — clear it.
-        if (i.partialSend && haveNum >= num) updated.partialSend = null;
-        return updated;
-      }),
+      items: list.items.map((i) =>
+        i.id === editingQtyFor.id
+          ? { ...i, qty: num, qtyHave: haveNum, qtyUnit: qtyUnitDraft.trim() }
+          : i
+      ),
     });
     setEditingQtyFor(null);
   };
@@ -13166,7 +13188,42 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         const newStatus = direction === "forward" ? nextLoveStatus(i) : prevLoveStatus(i);
         if (!newStatus) return i;
         const today = new Date().toISOString().slice(0, 10);
-        const updated = {
+
+        if (newStatus === "sent" && direction === "forward") {
+          // Every prior batch is a locked, historical record — figure out
+          // what's actually NEW since the last one, so the same SME#
+          // never gets recorded (and shows on a transfer list) twice.
+          // This is what actually prevents double-transferring: once a
+          // number's in a batch, it stays there permanently, even if the
+          // item's live serials list later gets edited or cleared.
+          const priorBatches = i.sentBatches || [];
+          const priorSentQty = priorBatches.reduce((sum, b) => sum + b.sentQty, 0);
+          const priorSerials = new Set(priorBatches.flatMap((b) => b.serials || []));
+          const deltaQty = Math.max(0, (i.qtyHave || 0) - priorSentQty);
+          const deltaSerials = (i.serials || []).filter((s) => !priorSerials.has(s));
+          const newBatch = {
+            sentQty: deltaQty,
+            serials: deltaSerials,
+            timestamp: new Date().toISOString(),
+          };
+          const sentBatches = [...priorBatches, newBatch];
+
+          if (i.qtyHave < i.qty) {
+            // Still short overall — lock this batch in, but keep the
+            // stepper active so the remainder can keep moving.
+            return { ...i, sentBatches };
+          }
+          // Fully caught up now — lock the final batch and actually
+          // complete the status for real.
+          return {
+            ...i,
+            status: newStatus,
+            statusDates: { ...i.statusDates, [newStatus]: today },
+            sentBatches,
+          };
+        }
+
+        return {
           ...i,
           status: newStatus,
           statusDates: {
@@ -13174,20 +13231,6 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
             [newStatus]: direction === "forward" ? today : i.statusDates[newStatus],
           },
         };
-        // Moving to "sent" with less on hand than needed means only part
-        // of the request actually went out — flag it with a timestamp so
-        // it's never mistaken for a completed shipment, and the
-        // remaining amount doesn't quietly get forgotten.
-        if (newStatus === "sent" && direction === "forward" && i.qtyHave < i.qty) {
-          updated.partialSend = {
-            sentQty: i.qtyHave,
-            totalQty: i.qty,
-            timestamp: new Date().toISOString(),
-          };
-        } else if (newStatus !== "sent") {
-          updated.partialSend = null;
-        }
-        return updated;
       }),
     });
   };
@@ -13344,16 +13387,18 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           </div>
         )}
 
-        {sentUnarchivedCount > 0 && (
+        {(transferListCount > 0 || sentUnarchivedCount > 0 || archivedCount > 0) && (
           <div className="flex items-center gap-3 mb-4 flex-wrap">
-            <button
-              onClick={() => setShowTransferList(true)}
-              className="text-xs flex items-center gap-1 text-slate-400 hover:text-slate-200 border border-slate-700 rounded-md px-2.5 py-1.5"
-            >
-              <Truck className="w-3.5 h-3.5" />
-              Generate transfer list ({sentUnarchivedCount})
-            </button>
-            {isEditor && (
+            {transferListCount > 0 && (
+              <button
+                onClick={() => setShowTransferList(true)}
+                className="text-xs flex items-center gap-1 text-slate-400 hover:text-slate-200 border border-slate-700 rounded-md px-2.5 py-1.5"
+              >
+                <Truck className="w-3.5 h-3.5" />
+                Generate transfer list ({transferListCount})
+              </button>
+            )}
+            {isEditor && sentUnarchivedCount > 0 && (
               <button
                 onClick={archiveAllSent}
                 className="text-xs flex items-center gap-1 text-slate-400 hover:text-slate-200 border border-slate-700 rounded-md px-2.5 py-1.5"
@@ -13372,7 +13417,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
             )}
           </div>
         )}
-        {sentUnarchivedCount === 0 && archivedCount > 0 && isEditor && (
+        {transferListCount === 0 && sentUnarchivedCount === 0 && archivedCount > 0 && isEditor && (
           <div className="mb-4">
             <button
               onClick={() => setShowArchived((v) => !v)}
@@ -13501,17 +13546,32 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                     with no movement
                   </p>
                 )}
-                {item.partialSend && (
-                  <p className="text-xs text-orange-400 mb-2">
-                    ⚠ Partially sent — {item.partialSend.sentQty}/{item.partialSend.totalQty} on{" "}
-                    {new Date(item.partialSend.timestamp).toLocaleString(undefined, {
-                      month: "short",
-                      day: "numeric",
-                      hour: "numeric",
-                      minute: "2-digit",
-                    })}
-                    . {item.partialSend.totalQty - item.partialSend.sentQty} still needed.
-                  </p>
+                {item.sentBatches && item.sentBatches.length > 0 && (
+                  <div className="mb-2 space-y-1">
+                    {item.sentBatches.map((batch, idx) => (
+                      <div key={idx}>
+                        <span className="inline-block text-xs rounded-full px-2.5 py-1 border border-slate-700 bg-slate-800/60 text-slate-500">
+                          🔒 Sent {batch.sentQty}
+                          {item.qtyUnit ? ` ${item.qtyUnit}` : ""} on{" "}
+                          {new Date(batch.timestamp).toLocaleString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}
+                          {batch.serials && batch.serials.length > 0 && (
+                            <span className="font-mono"> · SME# {batch.serials.join(", ")}</span>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                    {item.status !== "sent" && (
+                      <p className="text-xs text-amber-400 mt-1">
+                        {item.qty - item.sentBatches.reduce((sum, b) => sum + b.sentQty, 0)} still
+                        needed — use the status below for the remainder.
+                      </p>
+                    )}
+                  </div>
                 )}
                 {isEditor && item.status === "requested" && (
                   <button
@@ -13709,7 +13769,8 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                   Transfer list
                 </h3>
                 <p className="text-xs text-slate-500">
-                  {list.jobLabel} · {sentUnarchivedCount} item{sentUnarchivedCount === 1 ? "" : "s"} sent
+                  {list.jobLabel} · {transferListCount} item{transferListCount === 1 ? "" : "s"}{" "}
+                  flagged for transfer
                 </p>
               </div>
               <button
@@ -13721,17 +13782,22 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
             </div>
             <div className="flex-1 overflow-y-auto px-5 py-4">
               <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden">
-                {sentUnarchivedItems.map((item) => (
-                  <div key={item.id} className="px-3 py-2 bg-slate-800/40">
+                {transferListEntries.map(({ item, qty, qtyUnit, serials, partial }, idx) => (
+                  <div key={`${item.id}-${idx}`} className="px-3 py-2 bg-slate-800/40">
                     <p className="text-sm text-slate-100">
                       {item.name}{" "}
                       <span className="text-slate-500">
-                        {item.qtyHave ?? 0}/{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
+                        x{qty}{qtyUnit ? ` ${qtyUnit}` : ""}
                       </span>
+                      {partial && (
+                        <span className="text-[10px] font-medium tracking-wide uppercase bg-orange-500/15 border border-orange-500/40 text-orange-300 rounded-full px-1.5 py-0.5 ml-1.5">
+                          Partial
+                        </span>
+                      )}
                     </p>
-                    {item.serials && item.serials.length > 0 && (
+                    {serials.length > 0 && (
                       <p className="text-xs text-fuchsia-300 font-mono">
-                        SME# {item.serials.join(", ")}
+                        SME# {serials.join(", ")}
                       </p>
                     )}
                   </div>
