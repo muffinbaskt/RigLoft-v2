@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useRef, useMemo } from "react";
 import QRCode from "qrcode";
 import { supabase } from "./supabaseClient";
@@ -12193,6 +12192,7 @@ function newLoveListItem(name, qty, extra = {}) {
     duplicateOf: extra.duplicateOf || null,
     assignedTaskIds: [],
     sentBatches: [],
+    receivedBatches: [],
   };
 }
 
@@ -13418,6 +13418,34 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           };
         }
 
+        if (newStatus === "received" && direction === "forward") {
+          // Same idea as Sent — supplier deliveries often trickle in
+          // partial, and each delivery deserves its own locked, permanent
+          // record of exactly how much showed up and when, rather than
+          // one number that keeps getting silently overwritten.
+          const priorBatches = i.receivedBatches || [];
+          const priorReceivedQty = priorBatches.reduce((sum, b) => sum + b.receivedQty, 0);
+          const priorSerials = new Set(priorBatches.flatMap((b) => b.serials || []));
+          const deltaQty = Math.max(0, (i.qtyHave || 0) - priorReceivedQty);
+          const deltaSerials = (i.serials || []).filter((s) => !priorSerials.has(s));
+          const newBatch = {
+            receivedQty: deltaQty,
+            serials: deltaSerials,
+            timestamp: new Date().toISOString(),
+          };
+          const receivedBatches = [...priorBatches, newBatch];
+
+          if (i.qtyHave < i.qty) {
+            return { ...i, receivedBatches };
+          }
+          return {
+            ...i,
+            status: newStatus,
+            statusDates: { ...i.statusDates, [newStatus]: today },
+            receivedBatches,
+          };
+        }
+
         return {
           ...i,
           status: newStatus,
@@ -13791,6 +13819,34 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                     ⚠ {daysInCurrentStatus(item)} day{daysInCurrentStatus(item) === 1 ? "" : "s"}{" "}
                     with no movement
                   </p>
+                )}
+                {item.receivedBatches && item.receivedBatches.length > 0 && (
+                  <div className="mb-2 space-y-1">
+                    {item.receivedBatches.map((batch, idx) => (
+                      <div key={idx}>
+                        <span className="inline-block text-xs rounded-full px-2.5 py-1 border border-slate-700 bg-slate-800/60 text-slate-500">
+                          🔒 Received {batch.receivedQty}
+                          {item.qtyUnit ? ` ${item.qtyUnit}` : ""} on{" "}
+                          {new Date(batch.timestamp).toLocaleString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}
+                          {batch.serials && batch.serials.length > 0 && (
+                            <span className="font-mono"> · SME# {batch.serials.join(", ")}</span>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                    {item.status === "requested" || item.status === "ordered" ? (
+                      <p className="text-xs text-amber-400 mt-1">
+                        {item.qty -
+                          item.receivedBatches.reduce((sum, b) => sum + b.receivedQty, 0)}{" "}
+                        still needed — use the status below for the remainder.
+                      </p>
+                    ) : null}
+                  </div>
                 )}
                 {item.sentBatches && item.sentBatches.length > 0 && (
                   <div className="mb-2 space-y-1">
