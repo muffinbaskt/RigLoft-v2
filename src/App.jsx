@@ -13348,10 +13348,6 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [renameDraft, setRenameDraft] = useState("");
   const [editingNoteFor, setEditingNoteFor] = useState(null); // item, while editing its note
   const [noteDraft, setNoteDraft] = useState("");
-  const [editingQtyFor, setEditingQtyFor] = useState(null); // item, while editing its qty
-  const [qtyDraft, setQtyDraft] = useState("");
-  const [qtyHaveDraft, setQtyHaveDraft] = useState("");
-  const [qtyUnitDraft, setQtyUnitDraft] = useState("");
   const [catalogSearch, setCatalogSearch] = useState("");
   const [smeDraft, setSmeDraft] = useState("");
   const [showArchived, setShowArchived] = useState(false);
@@ -13533,26 +13529,23 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     setEditingNoteFor(null);
   };
 
-  const saveQty = () => {
-    if (!editingQtyFor) return;
-    const num = Number(qtyDraft);
-    if (!num || num <= 0) return;
-    const rawHave = qtyHaveDraft.trim() === "" ? 0 : Math.max(0, Number(qtyHaveDraft) || 0);
-    // Have can't be manually dropped below the number of SME#s already
-    // tracked on this item — that count is a floor, not a suggestion.
-    const smeCount = (editingQtyFor.serials || []).length;
-    const haveNum = Math.max(rawHave, smeCount);
-    playSaveChime();
+  // Inline replacement for the old qty-edit modal — same rules (SME# count
+  // is a floor on Have, and bumping Have retroactively still catches up
+  // receivedBatches even if status has already moved past Received), just
+  // committed directly as you type instead of needing a separate window.
+  const updateItemQtyField = (item, field, rawValue) => {
+    const num = rawValue.trim() === "" ? 0 : Math.max(0, Number(rawValue) || 0);
     onUpdateList({
       ...list,
       items: list.items.map((i) => {
-        if (i.id !== editingQtyFor.id) return i;
-        const updated = { ...i, qty: num, qtyHave: haveNum, qtyUnit: qtyUnitDraft.trim() };
-        // If more stock shows up after this item's status has already
-        // moved on past Received (e.g. the first portion's already
-        // Staged or Sent), there's no stepper action left to record that
-        // second delivery with — so catch it here instead, independent
-        // of wherever the status currently sits.
+        if (i.id !== item.id) return i;
+        if (field === "qty") {
+          return { ...i, qty: Math.max(1, num) };
+        }
+        // field === "qtyHave"
+        const smeCount = (i.serials || []).length;
+        const haveNum = Math.max(num, smeCount);
+        const updated = { ...i, qtyHave: haveNum };
         const priorReceivedBatches = i.receivedBatches || [];
         const priorReceivedQty = priorReceivedBatches.reduce((sum, b) => sum + b.receivedQty, 0);
         if (haveNum > priorReceivedQty) {
@@ -13567,7 +13560,13 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         return updated;
       }),
     });
-    setEditingQtyFor(null);
+  };
+
+  const updateItemQtyUnit = (item, rawValue) => {
+    onUpdateList({
+      ...list,
+      items: list.items.map((i) => (i.id === item.id ? { ...i, qtyUnit: rawValue } : i)),
+    });
   };
 
   const confirmAssign = (workerIds) => {
@@ -13751,6 +13750,13 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         }
 
         if (newStatus === "received" && direction === "forward") {
+          // Nothing marked in-hand yet — assume the whole order showed up,
+          // since that's the common case and this saves a manual "bump Have
+          // to match Qty" step every time. If a partial amount's already
+          // sitting there (someone logged some SME#s, or set Have by hand),
+          // that's respected instead of getting clobbered.
+          const effectiveHave = (i.qtyHave || 0) > 0 ? i.qtyHave : i.qty;
+
           // Same idea as Sent — supplier deliveries often trickle in
           // partial, and each delivery deserves its own locked, permanent
           // record of exactly how much showed up and when, rather than
@@ -13758,7 +13764,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           const priorBatches = i.receivedBatches || [];
           const priorReceivedQty = priorBatches.reduce((sum, b) => sum + b.receivedQty, 0);
           const priorSerials = new Set(priorBatches.flatMap((b) => b.serials || []));
-          const deltaQty = Math.max(0, (i.qtyHave || 0) - priorReceivedQty);
+          const deltaQty = Math.max(0, effectiveHave - priorReceivedQty);
           const deltaSerials = (i.serials || []).filter((s) => !priorSerials.has(s));
           const hasNewContent = deltaQty > 0 || deltaSerials.length > 0;
           const receivedBatches = hasNewContent
@@ -13776,6 +13782,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
             ...i,
             status: newStatus,
             statusDates: { ...i.statusDates, [newStatus]: today },
+            qtyHave: effectiveHave,
             receivedBatches,
           };
         }
@@ -14137,28 +14144,49 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                 <div className="flex items-center justify-between gap-2 mb-2">
                   <div className="min-w-0">
                     {isEditor ? (
-                      <p className="text-sm truncate">
-                        <button
-                          onClick={() => {
-                            setRenamingItem(item);
-                            setRenameDraft(item.name);
-                          }}
-                          className="text-slate-100 hover:underline decoration-dotted"
+                      <>
+                        <p className="text-sm truncate">
+                          <button
+                            onClick={() => {
+                              setRenamingItem(item);
+                              setRenameDraft(item.name);
+                            }}
+                            className="text-slate-100 hover:underline decoration-dotted"
+                          >
+                            {item.name}
+                          </button>
+                        </p>
+                        <div
+                          className="flex items-center gap-1 mt-1"
+                          onClick={(e) => e.stopPropagation()}
                         >
-                          {item.name}
-                        </button>{" "}
-                        <button
-                          onClick={() => {
-                            setEditingQtyFor(item);
-                            setQtyDraft(String(item.qty));
-                            setQtyHaveDraft(String(item.qtyHave ?? 0));
-                            setQtyUnitDraft(item.qtyUnit || "");
-                          }}
-                          className="text-slate-500 hover:underline decoration-dotted"
-                        >
-                          {item.qtyHave ?? 0}/{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
-                        </button>
-                      </p>
+                          <input
+                            key={`have-${item.id}-${item.qtyHave}`}
+                            type="number"
+                            min="0"
+                            defaultValue={item.qtyHave ?? 0}
+                            onBlur={(e) => updateItemQtyField(item, "qtyHave", e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && e.target.blur()}
+                            className="w-11 bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded px-1.5 py-1 text-center focus:outline-none focus:ring-1 focus:ring-rose-500/60"
+                          />
+                          <span className="text-slate-600 text-xs shrink-0">/</span>
+                          <input
+                            key={`need-${item.id}-${item.qty}`}
+                            type="number"
+                            min="1"
+                            defaultValue={item.qty}
+                            onBlur={(e) => updateItemQtyField(item, "qty", e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && e.target.blur()}
+                            className="w-11 bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded px-1.5 py-1 text-center focus:outline-none focus:ring-1 focus:ring-rose-500/60"
+                          />
+                          <input
+                            value={item.qtyUnit || ""}
+                            onChange={(e) => updateItemQtyUnit(item, e.target.value)}
+                            placeholder="unit"
+                            className="w-16 min-w-0 bg-slate-800 border border-slate-700 text-slate-500 text-xs rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-rose-500/60"
+                          />
+                        </div>
+                      </>
                     ) : (
                       <p className="text-sm text-slate-100 truncate">
                         {item.name}{" "}
@@ -14648,67 +14676,6 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
               <button
                 onClick={saveNote}
                 className="flex-1 text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400"
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {editingQtyFor && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
-            <h3 className="text-slate-100 font-semibold mb-3">Qty for "{editingQtyFor.name}"</h3>
-            <div className="grid grid-cols-2 gap-2 mb-2">
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Have</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={qtyHaveDraft}
-                  onChange={(e) => setQtyHaveDraft(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && saveQty()}
-                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
-                />
-                {(editingQtyFor.serials || []).length > 0 && (
-                  <p className="text-[10px] text-slate-600 mt-1">
-                    Won't go below {editingQtyFor.serials.length} tracked SME#
-                    {editingQtyFor.serials.length === 1 ? "" : "s"}.
-                  </p>
-                )}
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Needed</label>
-                <input
-                  autoFocus
-                  type="number"
-                  min="1"
-                  value={qtyDraft}
-                  onChange={(e) => setQtyDraft(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && saveQty()}
-                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
-                />
-              </div>
-            </div>
-            <input
-              value={qtyUnitDraft}
-              onChange={(e) => setQtyUnitDraft(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && saveQty()}
-              placeholder="each (default), case, box, custom..."
-              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
-            />
-            <div className="flex gap-3">
-              <button
-                onClick={() => setEditingQtyFor(null)}
-                className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={saveQty}
-                disabled={!Number(qtyDraft) || Number(qtyDraft) <= 0}
-                className="flex-1 text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400 disabled:opacity-40"
               >
                 Save
               </button>
