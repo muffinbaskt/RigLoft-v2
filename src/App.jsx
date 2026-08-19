@@ -12336,6 +12336,22 @@ const prevLoveStatus = (item) => {
   return prev >= 0 ? LOVE_STATUSES[prev].key : null;
 };
 const loveStatusMeta = (key) => LOVE_STATUSES.find((s) => s.key === key) || LOVE_STATUSES[0];
+
+// The plain status label ("Staged to send") is only accurate when the
+// whole quantity is in that state together. Once some of it has actually
+// shipped (locked into sentBatches) but the item's still short of the
+// full order — blocked from flipping all the way to "Sent" — showing
+// "Staged to send" for the remainder is misleading: that missing balance
+// was never staged, it was never even received. This swaps the label to
+// something that tells the truth about what's actually outstanding.
+function loveItemDisplayMeta(item) {
+  const base = loveStatusMeta(item.status);
+  const totalSent = (item.sentBatches || []).reduce((sum, b) => sum + (b.sentQty || 0), 0);
+  if (item.status !== "sent" && totalSent > 0) {
+    return { ...base, label: `Partially Sent (${totalSent}/${item.qty})` };
+  }
+  return base;
+}
 // Shows the sub-job/nickname alongside the job number when set, without
 // changing what the dashboard actually groups by — grouping always stays
 // on the plain job number so multiple nicknamed lists on the same job
@@ -14111,7 +14127,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
             </p>
           )}
           {visibleItems.map((item) => {
-            const meta = loveStatusMeta(item.status);
+            const meta = loveItemDisplayMeta(item);
             const liveDuplicates = findPossibleDuplicates(item.name, item.catalogId, catalog, allLists, {
               excludeListId: list.id,
               excludeItemId: item.id,
@@ -15010,7 +15026,7 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
                         {searchResults
                           .filter((r) => r.list.jobLabel === jobLabel)
                           .map(({ list, item }) => {
-                            const meta = loveStatusMeta(item.status);
+                            const meta = loveItemDisplayMeta(item);
                             return (
                               <button
                                 key={item.id}
@@ -15246,7 +15262,7 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
                       {staleItems
                         .filter((r) => r.list.jobLabel === jobLabel)
                         .map(({ list, item }) => {
-                          const meta = loveStatusMeta(item.status);
+                          const meta = loveItemDisplayMeta(item);
                           const days = daysInCurrentStatus(item);
                           return (
                             <button
