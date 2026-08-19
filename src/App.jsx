@@ -12419,6 +12419,250 @@ function newLoveListItem(name, qty, extra = {}) {
   };
 }
 
+// Same pipe-delimited line format as the Job List import, kept simple for
+// Love Lists since there's no gang/container assignment to capture here —
+// just name, then optionally qty and a unit.
+function parseLoveListImportText(text, catalog) {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line, idx) => {
+      const parts = line.split("|").map((p) => p.trim());
+      const namePart = parts[0] || "";
+      const qtyPart = parts[1] || "";
+      const qtyMatch = qtyPart.match(/(\d+)\s*(.*)/);
+      const qtyParsed = qtyMatch ? parseInt(qtyMatch[1], 10) : NaN;
+      const qty = Number.isFinite(qtyParsed) && qtyParsed > 0 ? qtyParsed : 1;
+      const qtyUnit = qtyMatch ? qtyMatch[2].trim() : "";
+      const match = findCatalogMatch(namePart, catalog);
+      return {
+        lineId: Date.now() + Math.random() + idx,
+        name: namePart,
+        qty,
+        qtyUnit,
+        catalogId: match ? match.id : null,
+        storage: match ? match.storage : "",
+        storageDetail: match && match.storage === "Other" ? match.storageDetail || "" : "",
+        needsTransfer: match ? !!match.needsTransfer : false,
+      };
+    });
+}
+
+// Paste-and-parse bulk add for an existing Love List — the multi-item
+// counterpart to LoveListItemEntry's one-at-a-time form. Mirrors the Job
+// List ImportModal's row preview/clone/remove pattern, then drops straight
+// into the single-item form afterward so a stray item that didn't make it
+// into the paste can be tacked on without reopening anything.
+function LoveListImportModal({ catalog, allLists, currentListId, onImport, onAddSingle, onClose }) {
+  const [text, setText] = useState("");
+  const [preview, setPreview] = useState(null); // null = still on the paste step
+  const [imported, setImported] = useState(false);
+
+  const withDuplicates = (rows) =>
+    rows.map((r) => {
+      const dups = r.name.trim()
+        ? findPossibleDuplicates(r.name.trim(), r.catalogId, catalog, allLists, {
+            excludeListId: currentListId,
+          })
+        : [];
+      return { ...r, duplicateOf: dups.length > 0 ? dups[0] : null };
+    });
+
+  const handleParse = () => {
+    if (!text.trim()) return;
+    setPreview(withDuplicates(parseLoveListImportText(text, catalog)));
+  };
+
+  const updateRow = (lineId, changes) => {
+    setPreview((prev) =>
+      withDuplicates(prev.map((r) => (r.lineId === lineId ? { ...r, ...changes } : r)))
+    );
+  };
+
+  const removeRow = (lineId) => {
+    setPreview((prev) => prev.filter((r) => r.lineId !== lineId));
+  };
+
+  const cloneRow = (lineId) => {
+    setPreview((prev) => {
+      const idx = prev.findIndex((r) => r.lineId === lineId);
+      if (idx === -1) return prev;
+      const clone = { ...prev[idx], lineId: Date.now() + Math.random() };
+      return [...prev.slice(0, idx + 1), clone, ...prev.slice(idx + 1)];
+    });
+  };
+
+  const importCount = (preview || []).filter((r) => r.name.trim()).length;
+
+  const handleImport = () => {
+    const items = (preview || [])
+      .filter((r) => r.name.trim())
+      .map((r) =>
+        newLoveListItem(r.name.trim(), r.qty, {
+          qtyUnit: r.qtyUnit,
+          catalogId: r.catalogId,
+          storage: r.storage,
+          storageDetail: r.storageDetail,
+          needsTransfer: r.needsTransfer,
+          duplicateOf: r.duplicateOf
+            ? {
+                itemName: r.duplicateOf.item.name,
+                jobLabel: r.duplicateOf.list.jobLabel,
+                dateReceived: r.duplicateOf.list.dateReceived,
+              }
+            : null,
+        })
+      );
+    onImport(items);
+    setImported(true);
+    setPreview(null);
+    setText("");
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-md rounded-lg max-h-full flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <h2 className="text-slate-100 font-semibold text-base">
+            {imported ? "Add another item" : "Paste multiple items"}
+          </h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {imported ? (
+            <>
+              <p className="text-xs text-emerald-400 mb-3">✓ Items added to the list.</p>
+              <p className="text-xs text-slate-500 mb-3">
+                Add one more if something got left off the paste.
+              </p>
+              <LoveListItemEntry
+                catalog={catalog}
+                allLists={allLists}
+                currentListId={currentListId}
+                onLearnAlias={() => {}}
+                onAdd={(item) => onAddSingle(item)}
+              />
+            </>
+          ) : preview === null ? (
+            <>
+              <p className="text-xs text-slate-500 mb-2">
+                One item per line — name, then optionally qty and a unit separated by "|".
+              </p>
+              <pre className="text-xs text-slate-600 bg-slate-800/50 rounded-md p-2 mb-3 whitespace-pre-wrap">
+                {'1/2" shackles | 6\nTag line | 2 rolls'}
+              </pre>
+              <textarea
+                autoFocus
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                rows={8}
+                placeholder={'1/2" shackles | 6\nTag line | 2 rolls'}
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+              />
+            </>
+          ) : (
+            <div className="space-y-2">
+              {preview.length === 0 ? (
+                <p className="text-sm text-slate-500 text-center py-6">
+                  Nothing left to import — every row's been removed.
+                </p>
+              ) : (
+                preview.map((row) => (
+                  <div key={row.lineId} className="border border-slate-800 rounded-md p-2.5 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <input
+                        value={row.name}
+                        onChange={(e) => updateRow(row.lineId, { name: e.target.value })}
+                        className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+                      />
+                      <input
+                        type="number"
+                        min="1"
+                        value={row.qty}
+                        onChange={(e) => updateRow(row.lineId, { qty: Number(e.target.value) || 1 })}
+                        className="w-16 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+                      />
+                      <button
+                        onClick={() => cloneRow(row.lineId)}
+                        title="Clone this row"
+                        className="text-slate-500 hover:text-amber-400 shrink-0 p-1"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => removeRow(row.lineId)}
+                        className="text-slate-500 hover:text-red-400 shrink-0 p-1"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <input
+                      value={row.qtyUnit}
+                      onChange={(e) => updateRow(row.lineId, { qtyUnit: e.target.value })}
+                      placeholder="each (default), case, box, custom..."
+                      className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+                    />
+                    {row.catalogId ? (
+                      <p className="text-[11px] text-emerald-400">🔗 linked to catalog</p>
+                    ) : (
+                      <p className="text-[11px] text-slate-600">No catalog match</p>
+                    )}
+                    {row.duplicateOf && (
+                      <p className="text-[11px] text-amber-300">
+                        ⚠ Already requested — "{row.duplicateOf.item.name}" for{" "}
+                        {row.duplicateOf.list.jobLabel}
+                      </p>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="px-5 py-4 border-t border-slate-800 shrink-0 space-y-2">
+          {imported ? (
+            <button
+              onClick={onClose}
+              className="w-full text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400"
+            >
+              Done
+            </button>
+          ) : preview === null ? (
+            <button
+              onClick={handleParse}
+              disabled={!text.trim()}
+              className="w-full text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400 disabled:opacity-40"
+            >
+              Preview
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={handleImport}
+                disabled={importCount === 0}
+                className="w-full text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400 disabled:opacity-40"
+              >
+                Import {importCount} item{importCount === 1 ? "" : "s"}
+              </button>
+              <button
+                onClick={() => setPreview(null)}
+                className="w-full text-xs text-slate-500 hover:text-slate-300"
+              >
+                ← Back to paste
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LoveListItemEntry({ catalog, allLists = [], currentListId, onLearnAlias, onAdd }) {
   const [name, setName] = useState("");
   const [qty, setQty] = useState("");
@@ -13290,6 +13534,7 @@ function LoveListPhotosModal({ list, isEditor, onAddPhoto, onRemovePhoto, onClos
 
 function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onBack, onGoHome }) {
   const [addingItem, setAddingItem] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
   const [showPhotosModal, setShowPhotosModal] = useState(false);
@@ -13778,6 +14023,12 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     playSaveChime();
     onUpdateList({ ...list, items: [...list.items, item] });
     setAddingItem(false);
+  };
+
+  const addBulkItems = (items) => {
+    if (items.length === 0) return;
+    playSaveChime();
+    onUpdateList({ ...list, items: [...list.items, ...items] });
   };
 
   const deleteItem = (id) => {
@@ -14404,15 +14655,35 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
               </button>
             </div>
           ) : (
-            <button
-              onClick={() => setAddingItem(true)}
-              className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 border border-slate-700 text-slate-200 hover:bg-slate-800"
-            >
-              <Plus className="w-4 h-4" />
-              Add item
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setAddingItem(true)}
+                className="flex-1 flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 border border-slate-700 text-slate-200 hover:bg-slate-800"
+              >
+                <Plus className="w-4 h-4" />
+                Add item
+              </button>
+              <button
+                onClick={() => setShowImportModal(true)}
+                className="flex-1 flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 border border-slate-700 text-slate-200 hover:bg-slate-800"
+              >
+                <ClipboardList className="w-4 h-4" />
+                Paste list
+              </button>
+            </div>
           ))}
       </main>
+
+      {showImportModal && (
+        <LoveListImportModal
+          catalog={catalog}
+          allLists={allLists}
+          currentListId={list.id}
+          onImport={addBulkItems}
+          onAddSingle={addItem}
+          onClose={() => setShowImportModal(false)}
+        />
+      )}
 
       {deleteItemTarget && (
         <ConfirmDelete
