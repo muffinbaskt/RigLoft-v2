@@ -16625,7 +16625,7 @@ function LoginScreen({ onSignedIn, embedded = false }) {
 // walks up, taps their name, enters their PIN, and sees only their own
 // stuff plus whatever's open for anyone to grab. Every claim/join/status
 // change gets logged to the owner's Activity feed with a real timestamp.
-function WorkerKioskApp({ onGoHome }) {
+function WorkerKioskApp({ onRequestStaffLogin }) {
   const [workers, setWorkers] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -16769,8 +16769,12 @@ function WorkerKioskApp({ onGoHome }) {
             <Users className="w-4 h-4 text-amber-400" />
             Worker Kiosk
           </p>
-          <button onClick={onGoHome} className="text-slate-400 hover:text-slate-200 text-sm">
-            Exit
+          <button
+            onClick={onRequestStaffLogin}
+            className="text-slate-600 hover:text-slate-400 text-xs flex items-center gap-1"
+          >
+            <Lock className="w-3 h-3" />
+            Staff login
           </button>
         </header>
         <main className="flex-1 max-w-md mx-auto w-full px-4 py-10">
@@ -17023,7 +17027,14 @@ export default function AuthGate() {
             setPendingJobAction(action || null);
             setAppSection("jobs");
           }}
-          onSelectKiosk={() => setAppSection("kiosk")}
+          onSelectKiosk={async () => {
+            // Entering Kiosk mode drops any owner/manager session first —
+            // the tablet has no privileged access at all while it's
+            // showing the kiosk, not just a UI screen that happens to
+            // hide the rest of the app.
+            if (session) await supabase.auth.signOut();
+            setAppSection("kiosk");
+          }}
           onRequestLogin={() => setShowLogin(true)}
           onSignOut={() => supabase.auth.signOut()}
         />
@@ -17034,7 +17045,7 @@ export default function AuthGate() {
           onGoHome={() => setAppSection(null)}
         />
       ) : appSection === "kiosk" ? (
-        <WorkerKioskApp onGoHome={() => setAppSection(null)} />
+        <WorkerKioskApp onRequestStaffLogin={() => setShowLogin(true)} />
       ) : (
         <WareHub
           isEditor={isOwner}
@@ -17060,6 +17071,9 @@ export default function AuthGate() {
               onSignedIn={(s) => {
                 setSession(s);
                 setShowLogin(false);
+                // Real credentials just got verified — that's the only way
+                // out of Kiosk mode back to the full app.
+                if (appSection === "kiosk") setAppSection(null);
               }}
             />
           </div>
