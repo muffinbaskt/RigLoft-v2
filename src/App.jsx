@@ -14910,8 +14910,19 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
     .map(([label]) => label)
     .sort((a, b) => a.localeCompare(b));
 
+  // "Ready to send" means the whole quantity is sitting staged, waiting to
+  // go out — not an item that's already partially shipped and is only
+  // parked at "staged" because it's short of the rest. That's a different
+  // situation (waiting on more stock to arrive, not waiting to be sent)
+  // and showing it here would say something that was never true.
   const readyToSend = visibleLists.flatMap((l) =>
-    l.items.filter((i) => i.status === "staged").map((i) => ({ list: l, item: i }))
+    l.items
+      .filter(
+        (i) =>
+          i.status === "staged" &&
+          (i.sentBatches || []).reduce((sum, b) => sum + (b.sentQty || 0), 0) === 0
+      )
+      .map((i) => ({ list: l, item: i }))
   );
   const readyByJob = [...new Map(readyToSend.map((r) => [r.list.jobLabel, r.list.jobLabel])).keys()].sort(
     (a, b) => a.localeCompare(b)
