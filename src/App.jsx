@@ -10695,7 +10695,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
     try {
       const workerTasksResult = await getWithRetry(WORKER_TASKS_KEY);
       if (workerTasksResult.ok && workerTasksResult.value) {
-        setWorkerTasks(JSON.parse(workerTasksResult.value));
+        setWorkerTasks(JSON.parse(workerTasksResult.value).map(migrateWorkerTask));
       }
     } catch {
       // corrupted stored data — just start empty
@@ -11471,7 +11471,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
     } catch {}
     try {
       const tasksResult = await getWithRetry(WORKER_TASKS_KEY);
-      if (tasksResult.ok && tasksResult.value) setWorkerTasks(JSON.parse(tasksResult.value));
+      if (tasksResult.ok && tasksResult.value) setWorkerTasks(JSON.parse(tasksResult.value).map(migrateWorkerTask));
     } catch {}
   };
 
@@ -12164,7 +12164,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   );
 }
 
-function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onRequestLogin, onSignOut }) {
+function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onSelectKiosk, onRequestLogin, onSignOut }) {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
@@ -12299,6 +12299,13 @@ function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onR
             <p className="text-xs text-slate-500 mt-1">Full job inventory tracking</p>
           </button>
         </div>
+        <button
+          onClick={onSelectKiosk}
+          className="w-full mt-4 flex items-center justify-center gap-2 bg-slate-900 border-2 border-slate-800 hover:border-slate-600 rounded-xl p-4 text-center transition-colors"
+        >
+          <Users className="w-5 h-5 text-slate-400" />
+          <span className="text-sm font-semibold text-slate-300">Worker Kiosk</span>
+        </button>
       </main>
     </div>
   );
@@ -15298,6 +15305,12 @@ function newWorkerTask(workerId, workerName, title, jobLabel, source = null) {
     id: uniqueId(),
     workerId,
     workerName, // snapshot at creation time, survives a later worker rename
+    // Item-assignment tasks (from a Job List/Love List item card) are
+    // always exactly one person — capacity 1, that one person already on
+    // it. The open/multi-person pool lives in the standalone Worker Tasks
+    // dashboard instead, via newSharedWorkerTask below.
+    capacity: 1,
+    assignedWorkerIds: workerId ? [workerId] : [],
     title,
     jobLabel: jobLabel || "",
     status: "not_started",
@@ -15312,12 +15325,74 @@ function newWorkerTask(workerId, workerName, title, jobLabel, source = null) {
   };
 }
 
-function WorkerRosterModal({ workers, onAddWorker, onRemoveWorker, onClose }) {
+// Standalone Worker Tasks dashboard tasks — capacity can be more than 1,
+// and assignedWorkers can be anywhere from empty (fully open, first-come)
+// to fully staffed (owner assigned everyone directly) to partial (owner
+// picked some, the rest is left open for someone else to claim/join).
+function newSharedWorkerTask({ title, jobLabel, capacity, assignedWorkers }) {
+  const workers = (assignedWorkers || []).slice(0, capacity);
+  return {
+    id: uniqueId(),
+    // workerId/workerName kept as a single-name fallback for any older
+    // display code that hasn't been touched — always the first assignee,
+    // or null if the task starts fully open.
+    workerId: workers[0]?.id || null,
+    workerName: workers[0]?.name || null,
+    capacity: Math.max(1, capacity || 1),
+    assignedWorkerIds: workers.map((w) => w.id),
+    title,
+    jobLabel: jobLabel || "",
+    status: workers.length > 0 ? "in_progress" : "not_started",
+    startedAt: workers.length > 0 ? new Date().toISOString() : null,
+    failReason: "",
+    createdAt: new Date().toISOString().slice(0, 10),
+    resolvedAt: null,
+    source: null,
+    archived: false,
+  };
+}
+
+// Normalizes tasks saved before capacity/assignedWorkerIds existed —
+// every read path runs tasks through this so old and new data behave
+// identically without a one-time destructive migration.
+function migrateWorkerTask(task) {
+  if (Array.isArray(task.assignedWorkerIds)) return task;
+  return {
+    ...task,
+    assignedWorkerIds: task.workerId ? [task.workerId] : [],
+    capacity: task.capacity || 1,
+  };
+}
+
+// "In Progress · Started 2:14 PM" — the actual display format the
+// standalone dashboard and kiosk use for a task's live status line.
+function formatTaskTimestamp(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso; // old date-only strings, e.g. "2025-01-01"
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function WorkerRosterModal({ workers, onAddWorker, onRemoveWorker, onUpdatePin, onClose }) {
   const [name, setName] = useState("");
+  const [editingPinFor, setEditingPinFor] = useState(null);
+  const [pinDraft, setPinDraft] = useState("");
   const addWorker = () => {
     if (!name.trim()) return;
     onAddWorker(name.trim());
     setName("");
+  };
+  const savePin = () => {
+    if (!editingPinFor) return;
+    const digits = pinDraft.replace(/\D/g, "").slice(0, 6);
+    onUpdatePin(editingPinFor.id, digits);
+    setEditingPinFor(null);
+    setPinDraft("");
   };
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
@@ -15345,6 +15420,9 @@ function WorkerRosterModal({ workers, onAddWorker, onRemoveWorker, onClose }) {
             Add
           </button>
         </div>
+        <p className="text-xs text-slate-500 px-5 pt-2 shrink-0">
+          Set a PIN for anyone who'll use the Worker Kiosk on the shop tablet.
+        </p>
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {workers.length === 0 ? (
             <p className="text-sm text-slate-500 text-center py-6">No workers added yet.</p>
@@ -15356,18 +15434,60 @@ function WorkerRosterModal({ workers, onAddWorker, onRemoveWorker, onClose }) {
                   className="flex items-center justify-between bg-slate-800/40 border border-slate-800 rounded-md px-3 py-2"
                 >
                   <p className="text-sm text-slate-100">{w.name}</p>
-                  <button
-                    onClick={() => onRemoveWorker(w.id)}
-                    className="text-slate-600 hover:text-red-400"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => {
+                        setEditingPinFor(w);
+                        setPinDraft(w.pin || "");
+                      }}
+                      className="text-xs text-slate-500 hover:text-amber-400"
+                    >
+                      {w.pin ? "PIN set" : "Set PIN"}
+                    </button>
+                    <button
+                      onClick={() => onRemoveWorker(w.id)}
+                      className="text-slate-600 hover:text-red-400"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </div>
       </div>
+
+      {editingPinFor && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-xs p-5">
+            <h3 className="text-slate-100 font-semibold mb-3">PIN for {editingPinFor.name}</h3>
+            <input
+              autoFocus
+              inputMode="numeric"
+              value={pinDraft}
+              onChange={(e) => setPinDraft(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              onKeyDown={(e) => e.key === "Enter" && savePin()}
+              placeholder="4-6 digits"
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-lg tracking-widest text-center rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => setEditingPinFor(null)}
+                className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={savePin}
+                className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -15435,19 +15555,32 @@ function AssignToWorkerModal({ workers, itemLabel, initiallySelectedWorkerIds = 
 
 function WorkerTaskAddForm({ workers, onSave, onCancel }) {
   const [selectedWorkerIds, setSelectedWorkerIds] = useState(new Set());
+  const [capacity, setCapacity] = useState(1);
   const [title, setTitle] = useState("");
   const [jobLabel, setJobLabel] = useState("");
 
   const toggleWorker = (id) => {
     setSelectedWorkerIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else if (next.size < capacity) {
+        next.add(id);
+      }
       return next;
     });
   };
 
-  const canSave = selectedWorkerIds.size > 0 && title.trim();
+  const setCapacityClamped = (n) => {
+    const num = Math.max(1, Math.min(20, n));
+    setCapacity(num);
+    // If shrinking capacity drops below however many are already picked,
+    // trim the extras off rather than leaving an invalid over-full state.
+    setSelectedWorkerIds((prev) => new Set([...prev].slice(0, num)));
+  };
+
+  const canSave = title.trim().length > 0;
+  const openSlots = capacity - selectedWorkerIds.size;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
@@ -15455,51 +15588,93 @@ function WorkerTaskAddForm({ workers, onSave, onCancel }) {
         <div className="px-5 pt-5 shrink-0">
           <h2 className="text-slate-100 font-semibold text-base mb-4">New task</h2>
         </div>
-        {workers.length === 0 ? (
-          <p className="text-sm text-slate-500 px-5 mb-4">
-            Add a worker to the roster first before assigning a task.
-          </p>
-        ) : (
-          <div className="flex-1 overflow-y-auto px-5">
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">
-              Assign to
-            </label>
-            <div className="space-y-1.5 mb-3">
-              {workers.map((w) => (
-                <label
-                  key={w.id}
-                  className="flex items-center gap-2.5 px-3 py-2 rounded-md border border-slate-800 bg-slate-800/40 cursor-pointer"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedWorkerIds.has(w.id)}
-                    onChange={() => toggleWorker(w.id)}
-                    className="w-4 h-4 rounded accent-amber-500 shrink-0"
-                  />
-                  <span className="text-sm text-slate-100">{w.name}</span>
-                </label>
-              ))}
-            </div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">
-              Task
-            </label>
+        <div className="flex-1 overflow-y-auto px-5">
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">Task</label>
+          <input
+            autoFocus
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="What needs to get done..."
+            className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-3 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+          />
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">
+            Job (optional)
+          </label>
+          <input
+            value={jobLabel}
+            onChange={(e) => setJobLabel(e.target.value)}
+            placeholder="e.g. 3052"
+            className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+          />
+
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">
+            How many people
+          </label>
+          <div className="flex items-center gap-2 mb-1">
+            <button
+              onClick={() => setCapacityClamped(capacity - 1)}
+              className="w-8 h-8 rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              −
+            </button>
             <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="What needs to get done..."
-              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-3 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              type="number"
+              min="1"
+              value={capacity}
+              onChange={(e) => setCapacityClamped(Number(e.target.value) || 1)}
+              className="w-14 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
             />
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">
-              Job (optional)
-            </label>
-            <input
-              value={jobLabel}
-              onChange={(e) => setJobLabel(e.target.value)}
-              placeholder="e.g. 3052"
-              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-            />
+            <button
+              onClick={() => setCapacityClamped(capacity + 1)}
+              className="w-8 h-8 rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              +
+            </button>
           </div>
-        )}
+          <p className="text-xs text-slate-500 mb-3">
+            {openSlots > 0
+              ? `${openSlots} open slot${openSlots === 1 ? "" : "s"} — anyone can claim it from the kiosk.`
+              : "Fully assigned — no open slots left."}
+          </p>
+
+          {workers.length === 0 ? (
+            <p className="text-sm text-slate-500 mb-3">
+              No one on the roster yet — you can still leave this fully open for whoever grabs
+              it from the kiosk, or add workers first to assign it directly.
+            </p>
+          ) : (
+            <>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                Assign directly (optional — leave unchecked to keep it open)
+              </label>
+              <div className="space-y-1.5 mb-1">
+                {workers.map((w) => {
+                  const checked = selectedWorkerIds.has(w.id);
+                  const disabled = !checked && selectedWorkerIds.size >= capacity;
+                  return (
+                    <label
+                      key={w.id}
+                      className={`flex items-center gap-2.5 px-3 py-2 rounded-md border cursor-pointer ${
+                        disabled
+                          ? "border-slate-800 bg-slate-800/20 opacity-40 cursor-not-allowed"
+                          : "border-slate-800 bg-slate-800/40"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={disabled}
+                        onChange={() => toggleWorker(w.id)}
+                        className="w-4 h-4 rounded accent-amber-500 shrink-0"
+                      />
+                      <span className="text-sm text-slate-100">{w.name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
         <div className="flex gap-3 p-5 pt-3 shrink-0">
           <button
             onClick={onCancel}
@@ -15507,32 +15682,37 @@ function WorkerTaskAddForm({ workers, onSave, onCancel }) {
           >
             Cancel
           </button>
-          {workers.length > 0 && (
-            <button
-              onClick={() => {
-                const tasks = [...selectedWorkerIds]
-                  .map((wid) => workers.find((w) => w.id === wid))
-                  .filter(Boolean)
-                  .map((w) => newWorkerTask(w.id, w.name, title.trim(), jobLabel.trim()));
-                onSave(tasks);
-              }}
-              disabled={!canSave}
-              className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
-            >
-              Add task{selectedWorkerIds.size > 1 ? "s" : ""}
-            </button>
-          )}
+          <button
+            onClick={() => {
+              const assignedWorkers = [...selectedWorkerIds]
+                .map((wid) => workers.find((w) => w.id === wid))
+                .filter(Boolean);
+              const task = newSharedWorkerTask({
+                title: title.trim(),
+                jobLabel: jobLabel.trim(),
+                capacity,
+                assignedWorkers,
+              });
+              onSave([task]);
+            }}
+            disabled={!canSave}
+            className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+          >
+            Add task
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
-function WorkerDetailPage({ worker, tasks, onUpdateTask, onBulkUpdateTasks, onDeleteTask, onBack }) {
+function WorkerDetailPage({ worker, tasks, allWorkers = [], onUpdateTask, onBulkUpdateTasks, onDeleteTask, onBack }) {
   const [failingTask, setFailingTask] = useState(null);
   const [failReasonDraft, setFailReasonDraft] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [showArchived, setShowArchived] = useState(false);
+
+  const nameFor = (id) => allWorkers.find((w) => w.id === id)?.name || "Someone";
 
   const setStatus = (task, status) => {
     if (status === "failed") {
@@ -15541,12 +15721,12 @@ function WorkerDetailPage({ worker, tasks, onUpdateTask, onBulkUpdateTasks, onDe
       return;
     }
     playSoftTap();
-    const today = new Date().toISOString().slice(0, 10);
+    const nowIso = new Date().toISOString();
     onUpdateTask({
       ...task,
       status,
-      startedAt: status === "in_progress" && !task.startedAt ? today : task.startedAt,
-      resolvedAt: status === "completed" ? today : null,
+      startedAt: status === "in_progress" && !task.startedAt ? nowIso : task.startedAt,
+      resolvedAt: status === "completed" ? nowIso : null,
       failReason: status === "completed" ? "" : task.failReason,
     });
   };
@@ -15557,7 +15737,7 @@ function WorkerDetailPage({ worker, tasks, onUpdateTask, onBulkUpdateTasks, onDe
     onUpdateTask({
       ...failingTask,
       status: "failed",
-      resolvedAt: new Date().toISOString().slice(0, 10),
+      resolvedAt: new Date().toISOString(),
       failReason: failReasonDraft.trim(),
     });
     setFailingTask(null);
@@ -15657,12 +15837,25 @@ function WorkerDetailPage({ worker, tasks, onUpdateTask, onBulkUpdateTasks, onDe
                       .map((task) => {
                         const meta = workerTaskStatusMeta(task.status);
                         const isResolved = task.status === "completed" || task.status === "failed";
+                        const teammates = (task.assignedWorkerIds || [])
+                          .filter((id) => id !== worker.id)
+                          .map(nameFor);
+                        const openSlots = (task.capacity || 1) - (task.assignedWorkerIds || []).length;
                         return (
                           <div key={task.id} className="border border-slate-800 rounded-lg p-3 bg-slate-900">
                             <div className="flex items-center justify-between gap-2 mb-1.5">
                               <div className="min-w-0">
                                 <p className="text-sm text-slate-100 truncate">{task.title}</p>
-                                <p className="text-xs text-slate-500">created {task.createdAt}</p>
+                                <p className="text-xs text-slate-500">
+                                  created {task.createdAt}
+                                  {teammates.length > 0 && ` · with ${teammates.join(", ")}`}
+                                  {openSlots > 0 && !isResolved && ` · ${openSlots} open slot${openSlots === 1 ? "" : "s"}`}
+                                </p>
+                                {task.status === "in_progress" && task.startedAt && (
+                                  <p className="text-xs text-amber-400">
+                                    In Progress · Started {formatTaskTimestamp(task.startedAt)}
+                                  </p>
+                                )}
                               </div>
                               <button
                                 onClick={() => setDeleteTarget(task)}
@@ -15769,9 +15962,9 @@ function WorkerDetailPage({ worker, tasks, onUpdateTask, onBulkUpdateTasks, onDe
   );
 }
 
-function WorkerTasksDashboard({ workers, tasks, onOpenWorker, onAddTask, onManageRoster, onClose }) {
+function WorkerTasksDashboard({ workers, tasks, hasUnreadActivity, onOpenWorker, onAddTask, onManageRoster, onOpenActivity, onClose }) {
   const statsFor = (workerId) => {
-    const wTasks = tasks.filter((t) => t.workerId === workerId);
+    const wTasks = tasks.filter((t) => (t.assignedWorkerIds || []).includes(workerId));
     const completed = wTasks.filter((t) => t.status === "completed").length;
     const failed = wTasks.filter((t) => t.status === "failed").length;
     const resolved = completed + failed;
@@ -15782,6 +15975,11 @@ function WorkerTasksDashboard({ workers, tasks, onOpenWorker, onAddTask, onManag
       rate: resolved > 0 ? Math.round((completed / resolved) * 100) : null,
     };
   };
+
+  const nameFor = (id) => workers.find((w) => w.id === id)?.name || "Someone";
+  const openTasks = tasks.filter(
+    (t) => !t.archived && t.status !== "completed" && (t.assignedWorkerIds || []).length < (t.capacity || 1)
+  );
 
   return (
     <div className="fixed inset-0 z-40 bg-slate-950 text-slate-100 overflow-y-auto">
@@ -15797,6 +15995,16 @@ function WorkerTasksDashboard({ workers, tasks, onOpenWorker, onAddTask, onManag
             </p>
           </div>
           <div className="flex gap-2">
+            <button
+              onClick={onOpenActivity}
+              title="Activity"
+              className="relative flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+            >
+              <Bell className="w-4 h-4" />
+              {hasUnreadActivity && (
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-rose-500 border-2 border-slate-900" />
+              )}
+            </button>
             <button
               onClick={onManageRoster}
               className="text-xs flex items-center gap-1 bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-3 py-2 hover:bg-slate-700"
@@ -15814,6 +16022,34 @@ function WorkerTasksDashboard({ workers, tasks, onOpenWorker, onAddTask, onManag
         </div>
       </header>
       <main className="max-w-2xl mx-auto px-4 py-5">
+        {openTasks.length > 0 && (
+          <div className="mb-5">
+            <p className="text-xs font-medium text-slate-400 mb-2">
+              Open on the kiosk ({openTasks.length})
+            </p>
+            <div className="space-y-1.5">
+              {openTasks.map((t) => {
+                const claimed = (t.assignedWorkerIds || []).map(nameFor);
+                const slotsLeft = (t.capacity || 1) - claimed.length;
+                return (
+                  <div
+                    key={t.id}
+                    className="bg-slate-900 border border-dashed border-amber-500/30 rounded-lg px-3 py-2"
+                  >
+                    <p className="text-sm text-slate-100">
+                      {t.title}
+                      {t.jobLabel && <span className="text-slate-500"> · {t.jobLabel}</span>}
+                    </p>
+                    <p className="text-xs text-amber-400/80">
+                      {claimed.length > 0 ? `${claimed.join(", ")} · ` : ""}
+                      {slotsLeft} open slot{slotsLeft === 1 ? "" : "s"} of {t.capacity || 1}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
         {workers.length === 0 ? (
           <p className="text-sm text-slate-500 text-center py-10">
             No workers on the roster yet — tap "Roster" to add one.
@@ -15860,6 +16096,74 @@ function WorkerTasksDashboard({ workers, tasks, onOpenWorker, onAddTask, onManag
 
 const WORKER_TASKS_KEY = "warehub-worker-tasks";
 const WORKERS_KEY = "warehub-workers";
+const WORKER_ACTIVITY_KEY = "warehub-worker-activity";
+const WORKER_ACTIVITY_LAST_SEEN_KEY = "warehub-worker-activity-last-seen";
+
+// Notification pipeline for the kiosk: every claim/join/start/complete/fail
+// action happening on the tablet gets logged here, so the owner has one
+// place to see everything going on without walking around checking in.
+function logWorkerActivity(entries) {
+  const list = Array.isArray(entries) ? entries : [entries];
+  return getWithRetry(WORKER_ACTIVITY_KEY).then((result) => {
+    const prior = result.ok && result.value ? JSON.parse(result.value) : [];
+    const next = [...list, ...prior].slice(0, 200);
+    return saveWithRetry(WORKER_ACTIVITY_KEY, JSON.stringify(next));
+  });
+}
+
+function WorkerActivityFeedModal({ onClose }) {
+  const [entries, setEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const result = await getWithRetry(WORKER_ACTIVITY_KEY);
+        if (result.ok && result.value) setEntries(JSON.parse(result.value));
+      } catch {}
+      setLoading(false);
+      // Mark everything as seen the moment this opens — the bell's unread
+      // dot is just "is there anything newer than the last time I looked."
+      saveWithRetry(WORKER_ACTIVITY_LAST_SEEN_KEY, JSON.stringify(new Date().toISOString())).catch(() => {});
+    })();
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <h2 className="text-slate-100 font-semibold text-base flex items-center gap-1.5">
+            <Bell className="w-4 h-4 text-amber-400" />
+            Activity
+          </h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {loading ? (
+            <div className="flex justify-center py-10">
+              <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
+            </div>
+          ) : entries.length === 0 ? (
+            <p className="text-sm text-slate-500 text-center py-10">
+              Nothing yet — claims, joins, and status changes from the kiosk show up here.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {entries.map((e) => (
+                <div key={e.id} className="border border-slate-800 rounded-md px-3 py-2">
+                  <p className="text-sm text-slate-100">{e.message}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">{formatTaskTimestamp(e.time)}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function WorkerTasksSection({ onClose }) {
   const [workers, setWorkers] = useState([]);
@@ -15868,6 +16172,8 @@ function WorkerTasksSection({ onClose }) {
   const [activeWorkerId, setActiveWorkerId] = useState(null);
   const [showAddTask, setShowAddTask] = useState(false);
   const [showRoster, setShowRoster] = useState(false);
+  const [showActivity, setShowActivity] = useState(false);
+  const [hasUnreadActivity, setHasUnreadActivity] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -15877,7 +16183,20 @@ function WorkerTasksSection({ onClose }) {
       } catch {}
       try {
         const tResult = await getWithRetry(WORKER_TASKS_KEY);
-        if (tResult.ok && tResult.value) setTasks(JSON.parse(tResult.value));
+        if (tResult.ok && tResult.value) setTasks(JSON.parse(tResult.value).map(migrateWorkerTask));
+      } catch {}
+      try {
+        const [activityResult, lastSeenResult] = await Promise.all([
+          getWithRetry(WORKER_ACTIVITY_KEY),
+          getWithRetry(WORKER_ACTIVITY_LAST_SEEN_KEY),
+        ]);
+        const latest =
+          activityResult.ok && activityResult.value ? JSON.parse(activityResult.value)[0] : null;
+        const lastSeen =
+          lastSeenResult.ok && lastSeenResult.value ? JSON.parse(lastSeenResult.value) : null;
+        if (latest && (!lastSeen || new Date(latest.time) > new Date(lastSeen))) {
+          setHasUnreadActivity(true);
+        }
       } catch {}
       setLoading(false);
     })();
@@ -15894,10 +16213,14 @@ function WorkerTasksSection({ onClose }) {
 
   const addWorker = (name) => {
     playSaveChime();
-    saveWorkers([...workers, { id: uniqueId(), name }]);
+    saveWorkers([...workers, { id: uniqueId(), name, pin: "" }]);
   };
   const removeWorker = (id) => {
     saveWorkers(workers.filter((w) => w.id !== id));
+  };
+  const updatePin = (id, pin) => {
+    playSaveChime();
+    saveWorkers(workers.map((w) => (w.id === id ? { ...w, pin } : w)));
   };
   const addTask = (newTasks) => {
     playSaveChime();
@@ -15933,7 +16256,8 @@ function WorkerTasksSection({ onClose }) {
     return (
       <WorkerDetailPage
         worker={activeWorker}
-        tasks={tasks.filter((t) => t.workerId === activeWorker.id)}
+        tasks={tasks.filter((t) => (t.assignedWorkerIds || []).includes(activeWorker.id))}
+        allWorkers={workers}
         onUpdateTask={updateTask}
         onBulkUpdateTasks={bulkUpdateTasks}
         onDeleteTask={deleteTask}
@@ -15947,9 +16271,14 @@ function WorkerTasksSection({ onClose }) {
       <WorkerTasksDashboard
         workers={workers}
         tasks={tasks}
+        hasUnreadActivity={hasUnreadActivity}
         onOpenWorker={(w) => setActiveWorkerId(w.id)}
         onAddTask={() => setShowAddTask(true)}
         onManageRoster={() => setShowRoster(true)}
+        onOpenActivity={() => {
+          setShowActivity(true);
+          setHasUnreadActivity(false);
+        }}
         onClose={onClose}
       />
       {showAddTask && (
@@ -15960,9 +16289,11 @@ function WorkerTasksSection({ onClose }) {
           workers={workers}
           onAddWorker={addWorker}
           onRemoveWorker={removeWorker}
+          onUpdatePin={updatePin}
           onClose={() => setShowRoster(false)}
         />
       )}
+      {showActivity && <WorkerActivityFeedModal onClose={() => setShowActivity(false)} />}
     </>
   );
 }
@@ -16003,7 +16334,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
       } catch {}
       try {
         const tasksResult = await getWithRetry(WORKER_TASKS_KEY);
-        if (tasksResult.ok && tasksResult.value) setWorkerTasks(JSON.parse(tasksResult.value));
+        if (tasksResult.ok && tasksResult.value) setWorkerTasks(JSON.parse(tasksResult.value).map(migrateWorkerTask));
       } catch {}
       try {
         const thresholdsResult = await getWithRetry(STALE_THRESHOLDS_KEY);
@@ -16056,7 +16387,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
     } catch {}
     try {
       const tasksResult = await getWithRetry(WORKER_TASKS_KEY);
-      if (tasksResult.ok && tasksResult.value) setWorkerTasks(JSON.parse(tasksResult.value));
+      if (tasksResult.ok && tasksResult.value) setWorkerTasks(JSON.parse(tasksResult.value).map(migrateWorkerTask));
     } catch {}
   };
 
@@ -16290,6 +16621,362 @@ function LoginScreen({ onSignedIn, embedded = false }) {
   );
 }
 
+// The shop-tablet kiosk: no owner/manager login involved at all — a worker
+// walks up, taps their name, enters their PIN, and sees only their own
+// stuff plus whatever's open for anyone to grab. Every claim/join/status
+// change gets logged to the owner's Activity feed with a real timestamp.
+function WorkerKioskApp({ onGoHome }) {
+  const [workers, setWorkers] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedWorker, setSelectedWorker] = useState(null);
+  const [pinDraft, setPinDraft] = useState("");
+  const [pinError, setPinError] = useState("");
+  const [failingTask, setFailingTask] = useState(null);
+  const [failReasonDraft, setFailReasonDraft] = useState("");
+
+  const load = async () => {
+    try {
+      const wResult = await getWithRetry(WORKERS_KEY);
+      if (wResult.ok && wResult.value) setWorkers(JSON.parse(wResult.value));
+    } catch {}
+    try {
+      const tResult = await getWithRetry(WORKER_TASKS_KEY);
+      if (tResult.ok && tResult.value) setTasks(JSON.parse(tResult.value).map(migrateWorkerTask));
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const nameFor = (id) => workers.find((w) => w.id === id)?.name || "Someone";
+
+  const saveTasks = async (next) => {
+    setTasks(next);
+    await saveWithRetry(WORKER_TASKS_KEY, JSON.stringify(next));
+  };
+
+  const tryPin = () => {
+    if (!selectedWorker) return;
+    if (!selectedWorker.pin) {
+      // No PIN set for this person yet — let them straight in rather than
+      // locking them out because the owner hasn't gotten to it.
+      setPinError("");
+      return;
+    }
+    if (pinDraft === selectedWorker.pin) {
+      setPinError("");
+    } else {
+      setPinError("Wrong PIN — try again.");
+      setPinDraft("");
+    }
+  };
+
+  const loggedIn = selectedWorker && (!selectedWorker.pin || pinDraft === selectedWorker.pin);
+
+  const logOut = () => {
+    setSelectedWorker(null);
+    setPinDraft("");
+    setPinError("");
+    load(); // fresh data for whoever's up next
+  };
+
+  // Claiming (task had no one yet) and joining (task already has someone,
+  // capacity allows one more) are the same action underneath — add this
+  // worker to the list, and if they're the very first person on it, that's
+  // also the moment it goes "In Progress · Started at <timestamp>".
+  const claimTask = async (task) => {
+    if ((task.assignedWorkerIds || []).includes(selectedWorker.id)) return;
+    const wasEmpty = (task.assignedWorkerIds || []).length === 0;
+    const nowIso = new Date().toISOString();
+    const updated = {
+      ...task,
+      assignedWorkerIds: [...(task.assignedWorkerIds || []), selectedWorker.id],
+      status: task.status === "not_started" ? "in_progress" : task.status,
+      startedAt: task.status === "not_started" && !task.startedAt ? nowIso : task.startedAt,
+    };
+    playSaveChime();
+    await saveTasks(tasks.map((t) => (t.id === task.id ? updated : t)));
+    logWorkerActivity({
+      id: uniqueId(),
+      time: nowIso,
+      message: `${selectedWorker.name} ${wasEmpty ? "claimed" : "joined"} "${task.title}"${
+        task.jobLabel ? ` (${task.jobLabel})` : ""
+      }${!wasEmpty ? ` — now In Progress, started at ${formatTaskTimestamp(nowIso)}` : ""}`,
+    }).catch(() => {});
+  };
+
+  const setStatus = async (task, status) => {
+    if (status === "failed") {
+      setFailingTask(task);
+      setFailReasonDraft("");
+      return;
+    }
+    const nowIso = new Date().toISOString();
+    const updated = {
+      ...task,
+      status,
+      startedAt: status === "in_progress" && !task.startedAt ? nowIso : task.startedAt,
+      resolvedAt: status === "completed" ? nowIso : null,
+      failReason: status === "completed" ? "" : task.failReason,
+    };
+    playSaveChime();
+    await saveTasks(tasks.map((t) => (t.id === task.id ? updated : t)));
+    logWorkerActivity({
+      id: uniqueId(),
+      time: nowIso,
+      message: `${selectedWorker.name} marked "${task.title}" ${workerTaskStatusMeta(status).label}${
+        task.jobLabel ? ` (${task.jobLabel})` : ""
+      }`,
+    }).catch(() => {});
+  };
+
+  const confirmFail = async () => {
+    if (!failingTask || !failReasonDraft.trim()) return;
+    const nowIso = new Date().toISOString();
+    const updated = {
+      ...failingTask,
+      status: "failed",
+      resolvedAt: nowIso,
+      failReason: failReasonDraft.trim(),
+    };
+    playSaveChime();
+    await saveTasks(tasks.map((t) => (t.id === failingTask.id ? updated : t)));
+    logWorkerActivity({
+      id: uniqueId(),
+      time: nowIso,
+      message: `${selectedWorker.name} marked "${failingTask.title}" Failed — ${failReasonDraft.trim()}`,
+    }).catch(() => {});
+    setFailingTask(null);
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  // Step 1 — tap your name
+  if (!selectedWorker) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+        <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between">
+          <p className="font-semibold flex items-center gap-1.5">
+            <Users className="w-4 h-4 text-amber-400" />
+            Worker Kiosk
+          </p>
+          <button onClick={onGoHome} className="text-slate-400 hover:text-slate-200 text-sm">
+            Exit
+          </button>
+        </header>
+        <main className="flex-1 max-w-md mx-auto w-full px-4 py-10">
+          <p className="text-sm text-slate-400 mb-4 text-center">Who's this?</p>
+          {workers.length === 0 ? (
+            <p className="text-sm text-slate-500 text-center">
+              No one's on the roster yet — ask the office to add workers first.
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {workers.map((w) => (
+                <button
+                  key={w.id}
+                  onClick={() => {
+                    setSelectedWorker(w);
+                    setPinDraft("");
+                    setPinError("");
+                  }}
+                  className="bg-slate-900 border-2 border-slate-800 hover:border-amber-500/60 rounded-xl py-6 text-center"
+                >
+                  <p className="text-base font-semibold text-slate-100">{w.name}</p>
+                </button>
+              ))}
+            </div>
+          )}
+        </main>
+      </div>
+    );
+  }
+
+  // Step 2 — PIN
+  if (!loggedIn) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center px-4">
+        <p className="text-lg font-semibold mb-1">{selectedWorker.name}</p>
+        <p className="text-xs text-slate-500 mb-5">Enter your PIN</p>
+        <input
+          autoFocus
+          type="password"
+          inputMode="numeric"
+          value={pinDraft}
+          onChange={(e) => setPinDraft(e.target.value.replace(/\D/g, "").slice(0, 6))}
+          onKeyDown={(e) => e.key === "Enter" && tryPin()}
+          className="w-40 bg-slate-800 border border-slate-700 text-slate-100 text-2xl tracking-[0.5em] text-center rounded-md px-3 py-3 mb-3 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+        />
+        {pinError && <p className="text-xs text-red-400 mb-3">{pinError}</p>}
+        <div className="flex gap-3">
+          <button
+            onClick={() => setSelectedWorker(null)}
+            className="text-sm rounded-md py-2.5 px-4 border border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            Not you? Go back
+          </button>
+          <button
+            onClick={tryPin}
+            className="text-sm rounded-md py-2.5 px-5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+          >
+            Enter
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Step 3 — their account: my tasks + open tasks to claim
+  const myTasks = tasks.filter(
+    (t) => !t.archived && (t.assignedWorkerIds || []).includes(selectedWorker.id)
+  );
+  const openTasks = tasks.filter(
+    (t) =>
+      !t.archived &&
+      t.status !== "completed" &&
+      !(t.assignedWorkerIds || []).includes(selectedWorker.id) &&
+      (t.assignedWorkerIds || []).length < (t.capacity || 1)
+  );
+
+  const TaskCard = ({ task, mode }) => {
+    const meta = workerTaskStatusMeta(task.status);
+    const claimedNames = (task.assignedWorkerIds || []).map(nameFor);
+    const slotsLeft = (task.capacity || 1) - (task.assignedWorkerIds || []).length;
+    const isResolved = task.status === "completed" || task.status === "failed";
+    return (
+      <div className="border border-slate-800 rounded-lg p-3 bg-slate-900">
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <p className="text-sm text-slate-100">{task.title}</p>
+          <span className={`text-xs rounded-full px-2 py-0.5 border shrink-0 ${meta.color}`}>
+            {meta.label}
+          </span>
+        </div>
+        {task.jobLabel && <p className="text-xs text-slate-500 mb-1">{task.jobLabel}</p>}
+        {claimedNames.length > 0 && (
+          <p className="text-xs text-slate-500 mb-1">With: {claimedNames.join(", ")}</p>
+        )}
+        {task.status === "in_progress" && task.startedAt && (
+          <p className="text-xs text-amber-400 mb-1">
+            In Progress · Started {formatTaskTimestamp(task.startedAt)}
+          </p>
+        )}
+        {task.status === "failed" && task.failReason && (
+          <p className="text-xs text-red-400 mb-1">⚠ {task.failReason}</p>
+        )}
+        {mode === "open" ? (
+          <button
+            onClick={() => claimTask(task)}
+            className="w-full mt-1 text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+          >
+            {claimedNames.length > 0 ? `Join (${slotsLeft} slot${slotsLeft === 1 ? "" : "s"} left)` : "Claim this task"}
+          </button>
+        ) : (
+          !isResolved && (
+            <div className="flex gap-1.5 mt-2">
+              {task.status !== "in_progress" && (
+                <button
+                  onClick={() => setStatus(task, "in_progress")}
+                  className="flex-1 text-xs rounded-md py-2 border border-slate-700 text-slate-200 hover:bg-slate-800"
+                >
+                  Start
+                </button>
+              )}
+              <button
+                onClick={() => setStatus(task, "completed")}
+                className="flex-1 text-xs rounded-md py-2 bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25"
+              >
+                Complete
+              </button>
+              <button
+                onClick={() => setStatus(task, "failed")}
+                className="flex-1 text-xs rounded-md py-2 bg-red-500/15 border border-red-500/40 text-red-300 hover:bg-red-500/25"
+              >
+                Failed
+              </button>
+            </div>
+          )
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
+        <p className="font-semibold">{selectedWorker.name}</p>
+        <button onClick={logOut} className="text-slate-400 hover:text-slate-200 text-sm">
+          Not you? Switch
+        </button>
+      </header>
+      <main className="max-w-md mx-auto px-4 py-5">
+        <p className="text-xs font-medium text-slate-400 mb-2">
+          My tasks ({myTasks.length})
+        </p>
+        <div className="space-y-2 mb-6">
+          {myTasks.length === 0 ? (
+            <p className="text-sm text-slate-500 py-4 text-center">Nothing assigned right now.</p>
+          ) : (
+            myTasks.map((t) => <TaskCard key={t.id} task={t} mode="mine" />)
+          )}
+        </div>
+
+        <p className="text-xs font-medium text-slate-400 mb-2">
+          Open tasks ({openTasks.length})
+        </p>
+        <div className="space-y-2">
+          {openTasks.length === 0 ? (
+            <p className="text-sm text-slate-500 py-4 text-center">Nothing open to grab right now.</p>
+          ) : (
+            openTasks.map((t) => <TaskCard key={t.id} task={t} mode="open" />)
+          )}
+        </div>
+      </main>
+
+      {failingTask && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-1">
+              Why did "{failingTask.title}" fail?
+            </h3>
+            <textarea
+              autoFocus
+              value={failReasonDraft}
+              onChange={(e) => setFailReasonDraft(e.target.value)}
+              placeholder="e.g. weather, waiting on parts..."
+              rows={3}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 mt-3 focus:outline-none focus:ring-2 focus:ring-red-500/60 resize-none"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => setFailingTask(null)}
+                className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmFail}
+                disabled={!failReasonDraft.trim()}
+                className="flex-1 text-sm rounded-md py-2.5 bg-red-500 text-slate-950 font-semibold hover:bg-red-400 disabled:opacity-40"
+              >
+                Mark Failed
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AuthGate() {
   const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
   const [showLogin, setShowLogin] = useState(false);
@@ -16336,6 +17023,7 @@ export default function AuthGate() {
             setPendingJobAction(action || null);
             setAppSection("jobs");
           }}
+          onSelectKiosk={() => setAppSection("kiosk")}
           onRequestLogin={() => setShowLogin(true)}
           onSignOut={() => supabase.auth.signOut()}
         />
@@ -16345,6 +17033,8 @@ export default function AuthGate() {
           isOwner={isOwner}
           onGoHome={() => setAppSection(null)}
         />
+      ) : appSection === "kiosk" ? (
+        <WorkerKioskApp onGoHome={() => setAppSection(null)} />
       ) : (
         <WareHub
           isEditor={isOwner}
