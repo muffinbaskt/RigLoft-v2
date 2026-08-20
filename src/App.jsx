@@ -15580,6 +15580,175 @@ function AssignToWorkerModal({ workers, itemLabel, initiallySelectedWorkerIds = 
   );
 }
 
+function WorkerTaskEditForm({ task, workers, onSave, onDelete, onCancel }) {
+  const [selectedWorkerIds, setSelectedWorkerIds] = useState(
+    new Set(task.assignedWorkerIds || [])
+  );
+  const [capacity, setCapacity] = useState(task.capacity || 1);
+  const [title, setTitle] = useState(task.title || "");
+  const [jobLabel, setJobLabel] = useState(task.jobLabel || "");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  const toggleWorker = (id) => {
+    setSelectedWorkerIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else if (next.size < capacity) {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const setCapacityClamped = (n) => {
+    const num = Math.max(1, Math.min(20, n));
+    setCapacity(num);
+    setSelectedWorkerIds((prev) => new Set([...prev].slice(0, num)));
+  };
+
+  const canSave = title.trim().length > 0;
+  const openSlots = capacity - selectedWorkerIds.size;
+
+  const save = () => {
+    onSave({
+      ...task,
+      title: title.trim(),
+      jobLabel: jobLabel.trim(),
+      capacity,
+      assignedWorkerIds: [...selectedWorkerIds],
+      workerId: [...selectedWorkerIds][0] || null,
+      workerName: workers.find((w) => w.id === [...selectedWorkerIds][0])?.name || null,
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+        <div className="px-5 pt-5 shrink-0">
+          <h2 className="text-slate-100 font-semibold text-base mb-4">Edit task</h2>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5">
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">Task</label>
+          <input
+            autoFocus
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="What needs to get done..."
+            className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-3 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+          />
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">
+            Job (optional)
+          </label>
+          <input
+            value={jobLabel}
+            onChange={(e) => setJobLabel(e.target.value)}
+            placeholder="e.g. 3052"
+            className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+          />
+
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">
+            How many people
+          </label>
+          <div className="flex items-center gap-2 mb-1">
+            <button
+              onClick={() => setCapacityClamped(capacity - 1)}
+              className="w-8 h-8 rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              −
+            </button>
+            <input
+              type="number"
+              min="1"
+              value={capacity}
+              onChange={(e) => setCapacityClamped(Number(e.target.value) || 1)}
+              className="w-14 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+            <button
+              onClick={() => setCapacityClamped(capacity + 1)}
+              className="w-8 h-8 rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              +
+            </button>
+          </div>
+          <p className="text-xs text-slate-500 mb-3">
+            {openSlots > 0
+              ? `${openSlots} open slot${openSlots === 1 ? "" : "s"} — anyone can claim it from the kiosk.`
+              : "Fully assigned — no open slots left."}
+          </p>
+
+          {workers.length === 0 ? (
+            <p className="text-sm text-slate-500 mb-3">No one on the roster yet.</p>
+          ) : (
+            <>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                Assigned
+              </label>
+              <div className="space-y-1.5 mb-1">
+                {workers.map((w) => {
+                  const checked = selectedWorkerIds.has(w.id);
+                  const disabled = !checked && selectedWorkerIds.size >= capacity;
+                  return (
+                    <label
+                      key={w.id}
+                      className={`flex items-center gap-2.5 px-3 py-2 rounded-md border cursor-pointer ${
+                        disabled
+                          ? "border-slate-800 bg-slate-800/20 opacity-40 cursor-not-allowed"
+                          : "border-slate-800 bg-slate-800/40"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={disabled}
+                        onChange={() => toggleWorker(w.id)}
+                        className="w-4 h-4 rounded accent-amber-500 shrink-0"
+                      />
+                      <span className="text-sm text-slate-100">{w.name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+        <div className="p-5 pt-3 shrink-0 space-y-2">
+          <div className="flex gap-3">
+            <button
+              onClick={onCancel}
+              className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={save}
+              disabled={!canSave}
+              className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+            >
+              Save
+            </button>
+          </div>
+          <button
+            onClick={() => setConfirmingDelete(true)}
+            className="w-full text-xs text-slate-500 hover:text-red-400"
+          >
+            Delete this task
+          </button>
+        </div>
+      </div>
+
+      {confirmingDelete && (
+        <ConfirmDelete
+          title="Delete this task?"
+          message={`"${task.title}" will be permanently removed for everyone assigned to it.`}
+          onConfirm={() => onDelete(task.id)}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 function WorkerTaskAddForm({ workers, onSave, onCancel }) {
   const [selectedWorkerIds, setSelectedWorkerIds] = useState(new Set());
   const [capacity, setCapacity] = useState(1);
@@ -15733,7 +15902,7 @@ function WorkerTaskAddForm({ workers, onSave, onCancel }) {
   );
 }
 
-function WorkerDetailPage({ worker, tasks, allWorkers = [], onUpdateTask, onBulkUpdateTasks, onDeleteTask, onBack }) {
+function WorkerDetailPage({ worker, tasks, allWorkers = [], onUpdateTask, onBulkUpdateTasks, onDeleteTask, onRequestEdit, onBack }) {
   const [failingTask, setFailingTask] = useState(null);
   const [failReasonDraft, setFailReasonDraft] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -15884,12 +16053,20 @@ function WorkerDetailPage({ worker, tasks, allWorkers = [], onUpdateTask, onBulk
                                   </p>
                                 )}
                               </div>
-                              <button
-                                onClick={() => setDeleteTarget(task)}
-                                className="text-slate-600 hover:text-red-400 shrink-0"
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <button
+                                  onClick={() => onRequestEdit(task)}
+                                  className="text-slate-600 hover:text-amber-400"
+                                >
+                                  <Pencil className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => setDeleteTarget(task)}
+                                  className="text-slate-600 hover:text-red-400"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
                             </div>
                             {task.status === "failed" && task.failReason && (
                               <p className="text-xs text-red-400 mb-2">⚠ {task.failReason}</p>
@@ -15989,7 +16166,7 @@ function WorkerDetailPage({ worker, tasks, allWorkers = [], onUpdateTask, onBulk
   );
 }
 
-function WorkerTasksDashboard({ workers, tasks, hasUnreadActivity, onOpenWorker, onAddTask, onManageRoster, onOpenActivity, onClose }) {
+function WorkerTasksDashboard({ workers, tasks, hasUnreadActivity, onOpenWorker, onAddTask, onManageRoster, onOpenActivity, onRequestEdit, onClose }) {
   const statsFor = (workerId) => {
     const wTasks = tasks.filter((t) => (t.assignedWorkerIds || []).includes(workerId));
     const completed = wTasks.filter((t) => t.status === "completed").length;
@@ -16059,9 +16236,10 @@ function WorkerTasksDashboard({ workers, tasks, hasUnreadActivity, onOpenWorker,
                 const claimed = (t.assignedWorkerIds || []).map(nameFor);
                 const slotsLeft = (t.capacity || 1) - claimed.length;
                 return (
-                  <div
+                  <button
                     key={t.id}
-                    className="bg-slate-900 border border-dashed border-amber-500/30 rounded-lg px-3 py-2"
+                    onClick={() => onRequestEdit(t)}
+                    className="w-full text-left bg-slate-900 border border-dashed border-amber-500/30 rounded-lg px-3 py-2 hover:border-amber-500/60"
                   >
                     <p className="text-sm text-slate-100">
                       {t.title}
@@ -16071,7 +16249,7 @@ function WorkerTasksDashboard({ workers, tasks, hasUnreadActivity, onOpenWorker,
                       {claimed.length > 0 ? `${claimed.join(", ")} · ` : ""}
                       {slotsLeft} open slot{slotsLeft === 1 ? "" : "s"} of {t.capacity || 1}
                     </p>
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -16141,6 +16319,8 @@ function logWorkerActivity(entries) {
 function WorkerActivityFeedModal({ onClose }) {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [confirmingClearAll, setConfirmingClearAll] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -16155,6 +16335,28 @@ function WorkerActivityFeedModal({ onClose }) {
     })();
   }, []);
 
+  const saveEntries = (next) => {
+    setEntries(next);
+    saveWithRetry(WORKER_ACTIVITY_KEY, JSON.stringify(next)).catch(() => {});
+  };
+
+  const archiveEntry = (id) => {
+    saveEntries(entries.map((e) => (e.id === id ? { ...e, archived: true } : e)));
+  };
+  const unarchiveEntry = (id) => {
+    saveEntries(entries.map((e) => (e.id === id ? { ...e, archived: false } : e)));
+  };
+  const deleteEntry = (id) => {
+    saveEntries(entries.filter((e) => e.id !== id));
+  };
+  const clearAll = () => {
+    saveEntries([]);
+    setConfirmingClearAll(false);
+  };
+
+  const visibleEntries = entries.filter((e) => showArchived || !e.archived);
+  const archivedCount = entries.filter((e) => e.archived).length;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
       <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
@@ -16167,27 +16369,83 @@ function WorkerActivityFeedModal({ onClose }) {
             <X className="w-5 h-5" />
           </button>
         </div>
+        {entries.length > 0 && (
+          <div className="flex items-center justify-between px-5 pt-3 shrink-0">
+            {archivedCount > 0 ? (
+              <button
+                onClick={() => setShowArchived((v) => !v)}
+                className="text-xs text-slate-500 hover:text-slate-300"
+              >
+                {showArchived ? "Hide" : "Show"} {archivedCount} archived
+              </button>
+            ) : (
+              <span />
+            )}
+            <button
+              onClick={() => setConfirmingClearAll(true)}
+              className="text-xs text-slate-500 hover:text-red-400"
+            >
+              Clear all
+            </button>
+          </div>
+        )}
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {loading ? (
             <div className="flex justify-center py-10">
               <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
             </div>
-          ) : entries.length === 0 ? (
+          ) : visibleEntries.length === 0 ? (
             <p className="text-sm text-slate-500 text-center py-10">
-              Nothing yet — claims, joins, and status changes from the kiosk show up here.
+              {entries.length === 0
+                ? "Nothing yet — claims, joins, and status changes from the kiosk show up here."
+                : "Nothing to show — everything's archived."}
             </p>
           ) : (
             <div className="space-y-2">
-              {entries.map((e) => (
+              {visibleEntries.map((e) => (
                 <div key={e.id} className="border border-slate-800 rounded-md px-3 py-2">
-                  <p className="text-sm text-slate-100">{e.message}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">{formatTaskTimestamp(e.time)}</p>
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-sm text-slate-100">{e.message}</p>
+                    <button
+                      onClick={() => deleteEntry(e.id)}
+                      className="text-slate-600 hover:text-red-400 shrink-0"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 mt-0.5">
+                    <p className="text-xs text-slate-500">{formatTaskTimestamp(e.time)}</p>
+                    {e.archived ? (
+                      <button
+                        onClick={() => unarchiveEntry(e.id)}
+                        className="text-xs text-slate-600 hover:text-slate-300"
+                      >
+                        Restore
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => archiveEntry(e.id)}
+                        className="text-xs text-slate-600 hover:text-slate-300"
+                      >
+                        Archive
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </div>
       </div>
+
+      {confirmingClearAll && (
+        <ConfirmDelete
+          title="Clear all activity?"
+          message="Every entry in this feed will be permanently deleted. This can't be undone."
+          onConfirm={clearAll}
+          onCancel={() => setConfirmingClearAll(false)}
+        />
+      )}
     </div>
   );
 }
@@ -16201,6 +16459,7 @@ function WorkerTasksSection({ onClose }) {
   const [showRoster, setShowRoster] = useState(false);
   const [showActivity, setShowActivity] = useState(false);
   const [hasUnreadActivity, setHasUnreadActivity] = useState(false);
+  const [editingTask, setEditingTask] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -16281,15 +16540,33 @@ function WorkerTasksSection({ onClose }) {
 
   if (activeWorker) {
     return (
-      <WorkerDetailPage
-        worker={activeWorker}
-        tasks={tasks.filter((t) => (t.assignedWorkerIds || []).includes(activeWorker.id))}
-        allWorkers={workers}
-        onUpdateTask={updateTask}
-        onBulkUpdateTasks={bulkUpdateTasks}
-        onDeleteTask={deleteTask}
-        onBack={() => setActiveWorkerId(null)}
-      />
+      <>
+        <WorkerDetailPage
+          worker={activeWorker}
+          tasks={tasks.filter((t) => (t.assignedWorkerIds || []).includes(activeWorker.id))}
+          allWorkers={workers}
+          onUpdateTask={updateTask}
+          onBulkUpdateTasks={bulkUpdateTasks}
+          onDeleteTask={deleteTask}
+          onRequestEdit={(t) => setEditingTask(t)}
+          onBack={() => setActiveWorkerId(null)}
+        />
+        {editingTask && (
+          <WorkerTaskEditForm
+            task={editingTask}
+            workers={workers}
+            onSave={(updated) => {
+              updateTask(updated);
+              setEditingTask(null);
+            }}
+            onDelete={(id) => {
+              deleteTask(id);
+              setEditingTask(null);
+            }}
+            onCancel={() => setEditingTask(null)}
+          />
+        )}
+      </>
     );
   }
 
@@ -16302,12 +16579,28 @@ function WorkerTasksSection({ onClose }) {
         onOpenWorker={(w) => setActiveWorkerId(w.id)}
         onAddTask={() => setShowAddTask(true)}
         onManageRoster={() => setShowRoster(true)}
+        onRequestEdit={(t) => setEditingTask(t)}
         onOpenActivity={() => {
           setShowActivity(true);
           setHasUnreadActivity(false);
         }}
         onClose={onClose}
       />
+      {editingTask && (
+        <WorkerTaskEditForm
+          task={editingTask}
+          workers={workers}
+          onSave={(updated) => {
+            updateTask(updated);
+            setEditingTask(null);
+          }}
+          onDelete={(id) => {
+            deleteTask(id);
+            setEditingTask(null);
+          }}
+          onCancel={() => setEditingTask(null)}
+        />
+      )}
       {showAddTask && (
         <WorkerTaskAddForm workers={workers} onSave={addTask} onCancel={() => setShowAddTask(false)} />
       )}
