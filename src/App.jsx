@@ -9704,6 +9704,24 @@ async function uploadLoveListScan(file) {
   }
 }
 
+// Optional "proof of done" photo a worker can attach when they complete a
+// task — same bucket, its own path prefix. Uploaded from the kiosk, which
+// runs signed-out, so this specifically needs its own storage policy
+// allowing anon uploads under this prefix (see the app's setup notes).
+async function uploadWorkerTaskPhoto(file) {
+  try {
+    const uploadFile = await resizeImageForUpload(file);
+    const safeName = (uploadFile.name || "photo.jpg").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const path = `worker-task-photos/${uniqueId()}-${safeName}`;
+    const { error } = await supabase.storage.from("job-documents").upload(path, uploadFile);
+    if (error) return { ok: false, error: error.message };
+    const { data } = supabase.storage.from("job-documents").getPublicUrl(path);
+    return { ok: true, url: data.publicUrl, path };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
 async function deleteReferenceDocument(path) {
   try {
     const { error } = await supabase.storage.from("job-documents").remove([path]);
@@ -15327,6 +15345,12 @@ const WORKER_TASK_STATUSES = [
 const workerTaskStatusMeta = (key) =>
   WORKER_TASK_STATUSES.find((s) => s.key === key) || WORKER_TASK_STATUSES[0];
 
+const TASK_URGENCY = {
+  low: { label: "Low", color: "bg-slate-800 text-slate-400 border-slate-700" },
+  normal: { label: "Normal", color: "bg-slate-800 text-slate-300 border-slate-700" },
+  urgent: { label: "Urgent", color: "bg-red-500/15 text-red-300 border-red-500/40" },
+};
+
 function newWorkerTask(workerId, workerName, title, jobLabel, source = null) {
   return {
     id: uniqueId(),
@@ -15340,11 +15364,14 @@ function newWorkerTask(workerId, workerName, title, jobLabel, source = null) {
     assignedWorkerIds: workerId ? [workerId] : [],
     title,
     jobLabel: jobLabel || "",
+    urgency: "normal",
+    dueDate: null,
     status: "not_started",
     failReason: "",
     createdAt: new Date().toISOString().slice(0, 10),
     startedAt: null,
     resolvedAt: null, // set when it becomes Completed or Failed
+    completionPhotoUrl: null,
     // When assigned from an item card, links back so the item can show
     // live status and so re-assigning doesn't create duplicate tasks.
     source, // { type: "job_item" | "love_list_item", itemId, containerId? }
@@ -15356,7 +15383,7 @@ function newWorkerTask(workerId, workerName, title, jobLabel, source = null) {
 // and assignedWorkers can be anywhere from empty (fully open, first-come)
 // to fully staffed (owner assigned everyone directly) to partial (owner
 // picked some, the rest is left open for someone else to claim/join).
-function newSharedWorkerTask({ title, jobLabel, capacity, assignedWorkers }) {
+function newSharedWorkerTask({ title, jobLabel, capacity, assignedWorkers, urgency, dueDate }) {
   const workers = (assignedWorkers || []).slice(0, capacity);
   return {
     id: uniqueId(),
@@ -15369,25 +15396,31 @@ function newSharedWorkerTask({ title, jobLabel, capacity, assignedWorkers }) {
     assignedWorkerIds: workers.map((w) => w.id),
     title,
     jobLabel: jobLabel || "",
+    urgency: urgency || "normal",
+    dueDate: dueDate || null,
     status: workers.length > 0 ? "in_progress" : "not_started",
     startedAt: workers.length > 0 ? new Date().toISOString() : null,
     failReason: "",
     createdAt: new Date().toISOString().slice(0, 10),
     resolvedAt: null,
+    completionPhotoUrl: null,
     source: null,
     archived: false,
   };
 }
 
-// Normalizes tasks saved before capacity/assignedWorkerIds existed —
-// every read path runs tasks through this so old and new data behave
-// identically without a one-time destructive migration.
+// Normalizes tasks saved before capacity/assignedWorkerIds/urgency/dueDate
+// existed — every read path runs tasks through this so old and new data
+// behave identically without a one-time destructive migration.
 function migrateWorkerTask(task) {
-  if (Array.isArray(task.assignedWorkerIds)) return task;
+  const withCapacity = Array.isArray(task.assignedWorkerIds)
+    ? task
+    : { ...task, assignedWorkerIds: task.workerId ? [task.workerId] : [], capacity: task.capacity || 1 };
   return {
-    ...task,
-    assignedWorkerIds: task.workerId ? [task.workerId] : [],
-    capacity: task.capacity || 1,
+    ...withCapacity,
+    urgency: withCapacity.urgency || "normal",
+    dueDate: withCapacity.dueDate || null,
+    completionPhotoUrl: withCapacity.completionPhotoUrl || null,
   };
 }
 
@@ -15403,6 +15436,46 @@ function formatTaskTimestamp(iso) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function isTaskOverdue(task) {
+  if (!task.dueDate || task.status === "completed") return false;
+  return new Date(task.dueDate + "T23:59:59") < new Date();
+}
+
+function formatDueDate(dueDate) {
+  if (!dueDate) return "";
+  const d = new Date(dueDate + "T00:00:00");
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// Small badge row used on task cards everywhere (dashboard, worker detail,
+// kiosk) — urgency pill plus a due-date pill that turns red once it's
+// actually overdue.
+function TaskMetaBadges({ task }) {
+  const urgencyMeta = TASK_URGENCY[task.urgency] || TASK_URGENCY.normal;
+  const overdue = isTaskOverdue(task);
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      {task.urgency && task.urgency !== "normal" && (
+        <span className={`text-[10px] rounded-full px-1.5 py-0.5 border ${urgencyMeta.color}`}>
+          {urgencyMeta.label}
+        </span>
+      )}
+      {task.dueDate && (
+        <span
+          className={`text-[10px] rounded-full px-1.5 py-0.5 border ${
+            overdue
+              ? "bg-red-500/15 text-red-300 border-red-500/40"
+              : "bg-slate-800 text-slate-500 border-slate-700"
+          }`}
+        >
+          {overdue ? "Overdue " : "Due "}
+          {formatDueDate(task.dueDate)}
+        </span>
+      )}
+    </div>
+  );
 }
 
 function WorkerRosterModal({ workers, onAddWorker, onRemoveWorker, onUpdatePin, onClose }) {
@@ -15587,6 +15660,8 @@ function WorkerTaskEditForm({ task, workers, onSave, onDelete, onCancel }) {
   const [capacity, setCapacity] = useState(task.capacity || 1);
   const [title, setTitle] = useState(task.title || "");
   const [jobLabel, setJobLabel] = useState(task.jobLabel || "");
+  const [urgency, setUrgency] = useState(task.urgency || "normal");
+  const [dueDate, setDueDate] = useState(task.dueDate || "");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const toggleWorker = (id) => {
@@ -15616,6 +15691,8 @@ function WorkerTaskEditForm({ task, workers, onSave, onDelete, onCancel }) {
       title: title.trim(),
       jobLabel: jobLabel.trim(),
       capacity,
+      urgency,
+      dueDate: dueDate || null,
       assignedWorkerIds: [...selectedWorkerIds],
       workerId: [...selectedWorkerIds][0] || null,
       workerName: workers.find((w) => w.id === [...selectedWorkerIds][0])?.name || null,
@@ -15644,6 +15721,31 @@ function WorkerTaskEditForm({ task, workers, onSave, onDelete, onCancel }) {
             value={jobLabel}
             onChange={(e) => setJobLabel(e.target.value)}
             placeholder="e.g. 3052"
+            className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+          />
+
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">Urgency</label>
+          <div className="flex gap-1.5 mb-4">
+            {Object.entries(TASK_URGENCY).map(([key, meta]) => (
+              <button
+                key={key}
+                onClick={() => setUrgency(key)}
+                className={`flex-1 text-xs rounded-md py-2 border ${
+                  urgency === key ? meta.color : "bg-slate-800 border-slate-700 text-slate-500 hover:text-slate-300"
+                }`}
+              >
+                {meta.label}
+              </button>
+            ))}
+          </div>
+
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">
+            Due date (optional)
+          </label>
+          <input
+            type="date"
+            value={dueDate}
+            onChange={(e) => setDueDate(e.target.value)}
             className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
           />
 
@@ -15754,6 +15856,8 @@ function WorkerTaskAddForm({ workers, onSave, onCancel }) {
   const [capacity, setCapacity] = useState(1);
   const [title, setTitle] = useState("");
   const [jobLabel, setJobLabel] = useState("");
+  const [urgency, setUrgency] = useState("normal");
+  const [dueDate, setDueDate] = useState("");
 
   const toggleWorker = (id) => {
     setSelectedWorkerIds((prev) => {
@@ -15800,6 +15904,31 @@ function WorkerTaskAddForm({ workers, onSave, onCancel }) {
             value={jobLabel}
             onChange={(e) => setJobLabel(e.target.value)}
             placeholder="e.g. 3052"
+            className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+          />
+
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">Urgency</label>
+          <div className="flex gap-1.5 mb-4">
+            {Object.entries(TASK_URGENCY).map(([key, meta]) => (
+              <button
+                key={key}
+                onClick={() => setUrgency(key)}
+                className={`flex-1 text-xs rounded-md py-2 border ${
+                  urgency === key ? meta.color : "bg-slate-800 border-slate-700 text-slate-500 hover:text-slate-300"
+                }`}
+              >
+                {meta.label}
+              </button>
+            ))}
+          </div>
+
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">
+            Due date (optional)
+          </label>
+          <input
+            type="date"
+            value={dueDate}
+            onChange={(e) => setDueDate(e.target.value)}
             className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
           />
 
@@ -15888,6 +16017,8 @@ function WorkerTaskAddForm({ workers, onSave, onCancel }) {
                 jobLabel: jobLabel.trim(),
                 capacity,
                 assignedWorkers,
+                urgency,
+                dueDate: dueDate || null,
               });
               onSave([task]);
             }}
@@ -16052,6 +16183,16 @@ function WorkerDetailPage({ worker, tasks, allWorkers = [], onUpdateTask, onBulk
                                     In Progress · Started {formatTaskTimestamp(task.startedAt)}
                                   </p>
                                 )}
+                                <div className="mt-1">
+                                  <TaskMetaBadges task={task} />
+                                </div>
+                                {task.completionPhotoUrl && (
+                                  <img
+                                    src={task.completionPhotoUrl}
+                                    alt=""
+                                    className="w-14 h-14 rounded-md object-cover mt-1.5 border border-slate-800"
+                                  />
+                                )}
                               </div>
                               <div className="flex items-center gap-2 shrink-0">
                                 <button
@@ -16167,6 +16308,8 @@ function WorkerDetailPage({ worker, tasks, allWorkers = [], onUpdateTask, onBulk
 }
 
 function WorkerTasksDashboard({ workers, tasks, hasUnreadActivity, onOpenWorker, onAddTask, onManageRoster, onOpenActivity, onRequestEdit, onClose }) {
+  const [tab, setTab] = useState("workers"); // "workers" | "today" | "jobs"
+
   const statsFor = (workerId) => {
     const wTasks = tasks.filter((t) => (t.assignedWorkerIds || []).includes(workerId));
     const completed = wTasks.filter((t) => t.status === "completed").length;
@@ -16184,6 +16327,60 @@ function WorkerTasksDashboard({ workers, tasks, hasUnreadActivity, onOpenWorker,
   const openTasks = tasks.filter(
     (t) => !t.archived && t.status !== "completed" && (t.assignedWorkerIds || []).length < (t.capacity || 1)
   );
+
+  // "Today" — everything currently active across the whole crew, in one
+  // flat list, urgent-and-overdue first. This is the one-glance view that
+  // per-worker or per-job browsing can't give you.
+  const urgencyRank = { urgent: 0, normal: 1, low: 2 };
+  const activeTasks = tasks.filter(
+    (t) => !t.archived && t.status !== "completed" && t.status !== "failed"
+  );
+  const todayTasks = [...activeTasks].sort((a, b) => {
+    const overdueDiff = Number(isTaskOverdue(b)) - Number(isTaskOverdue(a));
+    if (overdueDiff !== 0) return overdueDiff;
+    const urgDiff = (urgencyRank[a.urgency] ?? 1) - (urgencyRank[b.urgency] ?? 1);
+    if (urgDiff !== 0) return urgDiff;
+    if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+    if (a.dueDate) return -1;
+    if (b.dueDate) return 1;
+    return 0;
+  });
+
+  // "By job" — same active-task set, grouped by jobLabel instead of by
+  // person, for "what's going on with Job 3052" at a glance.
+  const jobGroups = activeTasks.reduce((acc, t) => {
+    const key = t.jobLabel || "No job";
+    (acc[key] = acc[key] || []).push(t);
+    return acc;
+  }, {});
+  const jobNames = Object.keys(jobGroups).sort((a, b) => a.localeCompare(b));
+
+  const TaskRow = ({ task }) => {
+    const names = (task.assignedWorkerIds || []).map(nameFor);
+    const slotsLeft = (task.capacity || 1) - (task.assignedWorkerIds || []).length;
+    const meta = workerTaskStatusMeta(task.status);
+    return (
+      <button
+        onClick={() => onRequestEdit(task)}
+        className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 hover:border-slate-700"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm text-slate-100 truncate">{task.title}</p>
+          <span className={`text-[10px] rounded-full px-2 py-0.5 border shrink-0 ${meta.color}`}>
+            {meta.label}
+          </span>
+        </div>
+        <p className="text-xs text-slate-500 mt-0.5">
+          {task.jobLabel ? `${task.jobLabel} · ` : ""}
+          {names.length > 0 ? names.join(", ") : "Open"}
+          {slotsLeft > 0 && ` · ${slotsLeft} open slot${slotsLeft === 1 ? "" : "s"}`}
+        </p>
+        <div className="mt-1">
+          <TaskMetaBadges task={task} />
+        </div>
+      </button>
+    );
+  };
 
   return (
     <div className="fixed inset-0 z-40 bg-slate-950 text-slate-100 overflow-y-auto">
@@ -16224,6 +16421,25 @@ function WorkerTasksDashboard({ workers, tasks, hasUnreadActivity, onOpenWorker,
             </button>
           </div>
         </div>
+        <div className="max-w-2xl mx-auto px-4 pb-3 flex gap-1.5">
+          {[
+            { key: "workers", label: "By worker" },
+            { key: "today", label: "Today" },
+            { key: "jobs", label: "By job" },
+          ].map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`text-xs rounded-md px-3 py-1.5 border ${
+                tab === t.key
+                  ? "bg-amber-500/15 border-amber-500/40 text-amber-300"
+                  : "border-slate-700 text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
       </header>
       <main className="max-w-2xl mx-auto px-4 py-5">
         {openTasks.length > 0 && (
@@ -16255,45 +16471,78 @@ function WorkerTasksDashboard({ workers, tasks, hasUnreadActivity, onOpenWorker,
             </div>
           </div>
         )}
-        {workers.length === 0 ? (
-          <p className="text-sm text-slate-500 text-center py-10">
-            No workers on the roster yet — tap "Roster" to add one.
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {workers.map((w) => {
-              const stats = statsFor(w.id);
-              return (
-                <button
-                  key={w.id}
-                  onClick={() => onOpenWorker(w)}
-                  className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-100">{w.name}</p>
-                    {stats.rate !== null && (
-                      <span
-                        className={`text-xs rounded-full px-2 py-0.5 border ${
-                          stats.rate >= 80
-                            ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
-                            : stats.rate >= 50
-                            ? "bg-amber-500/15 text-amber-300 border-amber-500/40"
-                            : "bg-red-500/15 text-red-300 border-red-500/40"
-                        }`}
-                      >
-                        {stats.rate}% completion
-                      </span>
-                    )}
+
+        {tab === "workers" &&
+          (workers.length === 0 ? (
+            <p className="text-sm text-slate-500 text-center py-10">
+              No workers on the roster yet — tap "Roster" to add one.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {workers.map((w) => {
+                const stats = statsFor(w.id);
+                return (
+                  <button
+                    key={w.id}
+                    onClick={() => onOpenWorker(w)}
+                    className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-slate-100">{w.name}</p>
+                      {stats.rate !== null && (
+                        <span
+                          className={`text-xs rounded-full px-2 py-0.5 border ${
+                            stats.rate >= 80
+                              ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                              : stats.rate >= 50
+                              ? "bg-amber-500/15 text-amber-300 border-amber-500/40"
+                              : "bg-red-500/15 text-red-300 border-red-500/40"
+                          }`}
+                        >
+                          {stats.rate}% completion
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-500 mt-1">
+                      {stats.total} task{stats.total === 1 ? "" : "s"} · {stats.completed} completed ·{" "}
+                      {stats.failed} failed
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+
+        {tab === "today" &&
+          (todayTasks.length === 0 ? (
+            <p className="text-sm text-slate-500 text-center py-10">
+              Nothing active right now — everything's either done or not started yet.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {todayTasks.map((t) => (
+                <TaskRow key={t.id} task={t} />
+              ))}
+            </div>
+          ))}
+
+        {tab === "jobs" &&
+          (jobNames.length === 0 ? (
+            <p className="text-sm text-slate-500 text-center py-10">Nothing active right now.</p>
+          ) : (
+            <div className="space-y-5">
+              {jobNames.map((job) => (
+                <div key={job}>
+                  <p className="font-semibold text-slate-100 mb-2">{job}</p>
+                  <div className="space-y-2">
+                    {jobGroups[job].map((t) => (
+                      <TaskRow key={t.id} task={t} />
+                    ))}
                   </div>
-                  <p className="text-xs text-slate-500 mt-1">
-                    {stats.total} task{stats.total === 1 ? "" : "s"} · {stats.completed} completed ·{" "}
-                    {stats.failed} failed
-                  </p>
-                </button>
-              );
-            })}
-          </div>
-        )}
+                </div>
+              ))}
+            </div>
+          ))}
       </main>
     </div>
   );
@@ -16954,6 +17203,9 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
   const [pinError, setPinError] = useState("");
   const [failingTask, setFailingTask] = useState(null);
   const [failReasonDraft, setFailReasonDraft] = useState("");
+  const [showHistory, setShowHistory] = useState(false);
+  const [uploadingPhotoFor, setUploadingPhotoFor] = useState(null);
+  const photoInputRef = useRef(null);
 
   const load = async () => {
     try {
@@ -17072,6 +17324,51 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
     setFailingTask(null);
   };
 
+  // Hand-off — a worker giving back a task they claimed but can't finish.
+  // Just removes them from the assignee list; if that leaves no one on it
+  // at all, it reopens fully (back to not_started, clock reset) since
+  // nobody's actually working it anymore. If others are still on it
+  // (multi-person task), it just stays in_progress for them.
+  const releaseTask = async (task) => {
+    const nowIso = new Date().toISOString();
+    const remaining = (task.assignedWorkerIds || []).filter((id) => id !== selectedWorker.id);
+    const nowEmpty = remaining.length === 0;
+    const updated = {
+      ...task,
+      assignedWorkerIds: remaining,
+      workerId: remaining[0] || null,
+      workerName: nameFor(remaining[0]) === "Someone" ? null : nameFor(remaining[0]),
+      status: nowEmpty ? "not_started" : task.status,
+      startedAt: nowEmpty ? null : task.startedAt,
+    };
+    playSoftTap();
+    await saveTasks(tasks.map((t) => (t.id === task.id ? updated : t)));
+    logWorkerActivity({
+      id: uniqueId(),
+      time: nowIso,
+      message: `${selectedWorker.name} gave back "${task.title}"${
+        task.jobLabel ? ` (${task.jobLabel})` : ""
+      }${nowEmpty ? " — now open again" : ""}`,
+    }).catch(() => {});
+  };
+
+  const attachPhoto = async (task, file) => {
+    setUploadingPhotoFor(task.id);
+    const result = await uploadWorkerTaskPhoto(file);
+    setUploadingPhotoFor(null);
+    if (!result.ok) return;
+    playSaveChime();
+    const updated = { ...task, completionPhotoUrl: result.url };
+    await saveTasks(tasks.map((t) => (t.id === task.id ? updated : t)));
+    logWorkerActivity({
+      id: uniqueId(),
+      time: new Date().toISOString(),
+      message: `${selectedWorker.name} attached a photo to "${task.title}"${
+        task.jobLabel ? ` (${task.jobLabel})` : ""
+      }`,
+    }).catch(() => {});
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -17161,7 +17458,11 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
 
   // Step 3 — their account: my tasks + open tasks to claim
   const myTasks = tasks.filter(
-    (t) => !t.archived && (t.assignedWorkerIds || []).includes(selectedWorker.id)
+    (t) =>
+      !t.archived &&
+      (t.assignedWorkerIds || []).includes(selectedWorker.id) &&
+      t.status !== "completed" &&
+      t.status !== "failed"
   );
   const openTasks = tasks.filter(
     (t) =>
@@ -17170,6 +17471,14 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
       !(t.assignedWorkerIds || []).includes(selectedWorker.id) &&
       (t.assignedWorkerIds || []).length < (t.capacity || 1)
   );
+  const historyTasks = tasks
+    .filter(
+      (t) =>
+        (t.assignedWorkerIds || []).includes(selectedWorker.id) &&
+        (t.status === "completed" || t.status === "failed")
+    )
+    .sort((a, b) => new Date(b.resolvedAt || 0) - new Date(a.resolvedAt || 0))
+    .slice(0, 15);
 
   const TaskCard = ({ task, mode }) => {
     const meta = workerTaskStatusMeta(task.status);
@@ -17185,6 +17494,9 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
           </span>
         </div>
         {task.jobLabel && <p className="text-xs text-slate-500 mb-1">{task.jobLabel}</p>}
+        <div className="mb-1">
+          <TaskMetaBadges task={task} />
+        </div>
         {claimedNames.length > 0 && (
           <p className="text-xs text-slate-500 mb-1">With: {claimedNames.join(", ")}</p>
         )}
@@ -17193,8 +17505,20 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
             In Progress · Started {formatTaskTimestamp(task.startedAt)}
           </p>
         )}
+        {mode === "history" && task.resolvedAt && (
+          <p className="text-xs text-slate-500 mb-1">
+            {meta.label} · {formatTaskTimestamp(task.resolvedAt)}
+          </p>
+        )}
         {task.status === "failed" && task.failReason && (
           <p className="text-xs text-red-400 mb-1">⚠ {task.failReason}</p>
+        )}
+        {task.completionPhotoUrl && (
+          <img
+            src={task.completionPhotoUrl}
+            alt=""
+            className="w-16 h-16 rounded-md object-cover mb-1 border border-slate-800"
+          />
         )}
         {mode === "open" ? (
           <button
@@ -17203,8 +17527,8 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
           >
             {claimedNames.length > 0 ? `Join (${slotsLeft} slot${slotsLeft === 1 ? "" : "s"} left)` : "Claim this task"}
           </button>
-        ) : (
-          !isResolved && (
+        ) : mode === "mine" ? (
+          <>
             <div className="flex gap-1.5 mt-2">
               {task.status !== "in_progress" && (
                 <button
@@ -17227,6 +17551,30 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
                 Failed
               </button>
             </div>
+            <button
+              onClick={() => releaseTask(task)}
+              className="w-full mt-1.5 text-xs text-slate-500 hover:text-amber-400"
+            >
+              Give this back
+            </button>
+          </>
+        ) : (
+          isResolved && (
+            <button
+              onClick={() => {
+                setUploadingPhotoFor(task);
+                photoInputRef.current?.click();
+              }}
+              disabled={uploadingPhotoFor === task.id}
+              className="w-full mt-1 text-xs text-slate-500 hover:text-amber-400 flex items-center justify-center gap-1"
+            >
+              <Camera className="w-3.5 h-3.5" />
+              {uploadingPhotoFor === task.id
+                ? "Uploading..."
+                : task.completionPhotoUrl
+                ? "Replace photo"
+                : "Add photo"}
+            </button>
           )
         )}
       </div>
@@ -17235,6 +17583,18 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
+      <input
+        ref={photoInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files && e.target.files[0];
+          e.target.value = "";
+          if (file && uploadingPhotoFor) attachPhoto(uploadingPhotoFor, file);
+        }}
+      />
       <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
         <p className="font-semibold">{selectedWorker.name}</p>
         <button onClick={logOut} className="text-slate-400 hover:text-slate-200 text-sm">
@@ -17256,13 +17616,30 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
         <p className="text-xs font-medium text-slate-400 mb-2">
           Open tasks ({openTasks.length})
         </p>
-        <div className="space-y-2">
+        <div className="space-y-2 mb-6">
           {openTasks.length === 0 ? (
             <p className="text-sm text-slate-500 py-4 text-center">Nothing open to grab right now.</p>
           ) : (
             openTasks.map((t) => <TaskCard key={t.id} task={t} mode="open" />)
           )}
         </div>
+
+        <button
+          onClick={() => setShowHistory((v) => !v)}
+          className="w-full text-left text-xs font-medium text-slate-400 mb-2 flex items-center gap-1.5"
+        >
+          <History className="w-3.5 h-3.5" />
+          My history ({historyTasks.length}) {showHistory ? "▲" : "▼"}
+        </button>
+        {showHistory && (
+          <div className="space-y-2">
+            {historyTasks.length === 0 ? (
+              <p className="text-sm text-slate-500 py-4 text-center">Nothing finished yet.</p>
+            ) : (
+              historyTasks.map((t) => <TaskCard key={t.id} task={t} mode="history" />)
+            )}
+          </div>
+        )}
       </main>
 
       {failingTask && (
