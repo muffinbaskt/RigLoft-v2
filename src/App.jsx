@@ -7038,7 +7038,7 @@ function JobPicker({
         </div>
       )}
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
-        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between flex-wrap gap-y-2">
           <div className="flex items-center gap-2.5">
             <button
               onClick={onGoToLanding}
@@ -7066,7 +7066,7 @@ function JobPicker({
               <p className="text-xs text-slate-500 leading-tight">Select a job 🌐</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             {isEditor && (
               <button
                 onClick={onOpenSuggestions}
@@ -9999,6 +9999,11 @@ function threeWayMergeJobs(baseJobs, mineJobs, theirJobs) {
     const activityLog = unionById(theirs.activityLog, mine.activityLog)
       .sort((a, b) => (b.id || 0) - (a.id || 0))
       .slice(0, 50);
+    // referenceDocuments was missing from this list entirely — meaning it
+    // never merged at all, it just silently took whichever side "mine"
+    // happened to be during a conflict, dropping anything uploaded on the
+    // other side. Same union-by-id treatment as todos/activityLog fixes it.
+    const referenceDocuments = unionById(theirs.referenceDocuments, mine.referenceDocuments);
 
     itemMerge.conflicts.forEach((c) =>
       itemConflicts.push({ jobId: id, jobName: mine.name || theirs.name, ...c })
@@ -10030,6 +10035,7 @@ function threeWayMergeJobs(baseJobs, mineJobs, theirJobs) {
       containerOptions,
       todos,
       activityLog,
+      referenceDocuments,
     };
 
     if (metaConflict) jobConflicts.push(metaConflict);
