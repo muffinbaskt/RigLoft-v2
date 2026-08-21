@@ -302,6 +302,7 @@ function emptyItem(defaultStorage) {
     serials: [],
     needsTransfer: false,
     notes: "",
+    backorderQty: 0, // still outstanding from a supplier, set/updated via Receiving
   };
 }
 
@@ -6549,6 +6550,11 @@ function ItemCard({ item, selectMode, selected, isEditor, workerTasks = [], onTo
             Transferred
           </span>
         )}
+        {item.backorderQty > 0 && (
+          <span className="text-xs rounded-full px-2.5 py-1 border border-red-500/40 bg-red-500/10 text-red-300">
+            {item.backorderQty} on backorder
+          </span>
+        )}
         {(() => {
           const assignedTaskIds = item.assignedTaskIds || [];
           const assignedTasks = assignedTaskIds
@@ -10008,6 +10014,23 @@ async function uploadWorkerTaskPhoto(file) {
   }
 }
 
+// Keeps the original receipt photo attached to its queue entry — same
+// bucket, its own path prefix, so it can be pulled back up during review
+// or later if a shipment ever needs double-checking against the paper.
+async function uploadReceiptScan(file) {
+  try {
+    const uploadFile = await resizeImageForUpload(file);
+    const safeName = (uploadFile.name || "receipt.jpg").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const path = `receipt-scans/${uniqueId()}-${safeName}`;
+    const { error } = await supabase.storage.from("job-documents").upload(path, uploadFile);
+    if (error) return { ok: false, error: error.message };
+    const { data } = supabase.storage.from("job-documents").getPublicUrl(path);
+    return { ok: true, url: data.publicUrl, path };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
 async function deleteReferenceDocument(path) {
   try {
     const { error } = await supabase.storage.from("job-documents").remove([path]);
@@ -12474,7 +12497,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   );
 }
 
-function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onSelectKiosk, onRequestLogin, onSignOut }) {
+function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onSelectKiosk, onSelectReceiving, onRequestLogin, onSignOut }) {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
@@ -12616,6 +12639,15 @@ function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onS
           <Users className="w-5 h-5 text-slate-400" />
           <span className="text-sm font-semibold text-slate-300">Worker Kiosk</span>
         </button>
+        {isEditor && (
+          <button
+            onClick={onSelectReceiving}
+            className="w-full mt-3 flex items-center justify-center gap-2 bg-slate-900 border-2 border-slate-800 hover:border-slate-600 rounded-xl p-4 text-center transition-colors"
+          >
+            <Inbox className="w-5 h-5 text-slate-400" />
+            <span className="text-sm font-semibold text-slate-300">Receiving</span>
+          </button>
+        )}
       </main>
     </div>
   );
@@ -12749,6 +12781,7 @@ function newLoveListItem(name, qty, extra = {}) {
     sentBatches: [],
     receivedBatches: [],
     stagedBatches: [],
+    backorderQty: extra.backorderQty || 0, // still outstanding from a supplier, set/updated via Receiving
   };
 }
 
@@ -14521,6 +14554,11 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                             placeholder="unit"
                             className="w-16 min-w-0 bg-slate-800 border border-slate-700 text-slate-500 text-xs rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-rose-500/60"
                           />
+                          {item.backorderQty > 0 && (
+                            <span className="text-[10px] rounded-full px-1.5 py-0.5 border bg-red-500/15 text-red-300 border-red-500/40 shrink-0">
+                              {item.backorderQty} backorder
+                            </span>
+                          )}
                         </div>
                       </>
                     ) : (
@@ -14529,6 +14567,11 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                         <span className="text-slate-500">
                           {item.qtyHave ?? 0}/{item.qty}{item.qtyUnit ? ` ${item.qtyUnit}` : ""}
                         </span>
+                        {item.backorderQty > 0 && (
+                          <span className="ml-1.5 text-[10px] rounded-full px-1.5 py-0.5 border bg-red-500/15 text-red-300 border-red-500/40">
+                            {item.backorderQty} backorder
+                          </span>
+                        )}
                       </p>
                     )}
                     {subline && <p className="text-xs text-slate-500 truncate">{subline}</p>}
@@ -17979,6 +18022,655 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
   );
 }
 
+const RECEIVING_QUEUE_KEY = "warehub-receiving-queue";
+
+function newReceiptBatch(photoUrl, path, lines) {
+  return {
+    id: uniqueId(),
+    photoUrl,
+    photoPath: path,
+    scannedAt: new Date().toISOString(),
+    status: "pending", // "pending" | "approved" | "discarded"
+    targetType: null, // "job" | "love_list"
+    targetId: null,
+    lines,
+    approvedAt: null,
+  };
+}
+
+// Scanning + verifying incoming shipments against what's on the receipt,
+// before anything actually gets added to a job or Love List. Nothing here
+// touches real inventory until a batch is explicitly approved — the whole
+// point is a safe holding area to check the paper against the pallet
+// first, since a wrong or duplicate scan should never silently corrupt a
+// job's real numbers.
+function ReceivingApp({ onGoHome }) {
+  const [queue, setQueue] = useState([]);
+  const [jobs, setJobs] = useState([]);
+  const [lists, setLists] = useState([]);
+  const [catalog, setCatalog] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState("");
+  const [activeBatchId, setActiveBatchId] = useState(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [viewingPhoto, setViewingPhoto] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const load = async () => {
+    try {
+      const [qResult, jResult, lResult, cResult] = await Promise.all([
+        getWithRetry(RECEIVING_QUEUE_KEY),
+        getWithRetry(JOBS_KEY),
+        getWithRetry(LOVE_LISTS_KEY),
+        getWithRetry(CATALOG_KEY),
+      ]);
+      if (qResult.ok && qResult.value) setQueue(JSON.parse(qResult.value));
+      if (jResult.ok && jResult.value) setJobs(JSON.parse(jResult.value));
+      if (lResult.ok && lResult.value) setLists(JSON.parse(lResult.value));
+      if (cResult.ok && cResult.value) setCatalog(JSON.parse(cResult.value));
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const saveQueue = (next) => {
+    setQueue(next);
+    saveWithRetry(RECEIVING_QUEUE_KEY, JSON.stringify(next)).catch(() => {});
+  };
+
+  const runScan = async (file) => {
+    setScanning(true);
+    setScanError("");
+    try {
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(",")[1]);
+        reader.onerror = () => reject(new Error("Couldn't read that image."));
+        reader.readAsDataURL(file);
+      });
+
+      let photoUrl = null;
+      let photoPath = null;
+      const uploadResult = await uploadReceiptScan(file);
+      if (uploadResult.ok) {
+        photoUrl = uploadResult.url;
+        photoPath = uploadResult.path;
+      }
+
+      const res = await fetch(
+        "https://vwvppivdpxjvmaazcmmg.supabase.co/functions/v1/scan-receipt",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageBase64: base64, mediaType: file.type || "image/jpeg" }),
+        }
+      );
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Scan failed.");
+
+      const lines = (data.items || []).map((it) => {
+        const match = findCatalogMatch(it.name || "", catalog);
+        return {
+          id: uniqueId(),
+          name: it.name || "",
+          catalogId: match ? match.id : null,
+          backorderQty: Number(it.backorderQty) > 0 ? Number(it.backorderQty) : 0,
+          shippedQty: Number(it.shippedQty) > 0 ? Number(it.shippedQty) : 0,
+        };
+      });
+
+      const batch = newReceiptBatch(photoUrl, photoPath, lines);
+      playSaveChime();
+      saveQueue([batch, ...queue]);
+      setActiveBatchId(batch.id);
+    } catch (err) {
+      setScanError(err.message || String(err));
+    }
+    setScanning(false);
+  };
+
+  const updateBatch = (updated) => {
+    saveQueue(queue.map((b) => (b.id === updated.id ? updated : b)));
+  };
+
+  const discardBatch = async (batch) => {
+    if (batch.photoPath) deleteReferenceDocument(batch.photoPath).catch(() => {});
+    saveQueue(queue.map((b) => (b.id === batch.id ? { ...b, status: "discarded" } : b)));
+    setActiveBatchId(null);
+  };
+
+  // Applying an approved line to a Job — items are matched by catalogId;
+  // an existing match gets the shipped amount added into an "Unassigned"
+  // container (since Receiving doesn't know which gangbox/conex it'll
+  // eventually land in — that's a normal follow-up sort, not a blocker
+  // here), and the backorder figure is set to whatever this receipt says
+  // is still outstanding. No match at all means a brand new item, using
+  // the catalog entry's usual defaults if one was linked.
+  const applyLineToJob = (job, line) => {
+    const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
+    const items = job.items || [];
+    const idx = line.catalogId ? items.findIndex((i) => i.catalogId === line.catalogId) : -1;
+
+    if (idx !== -1) {
+      const existing = items[idx];
+      const containers = [...(existing.containers || [])];
+      const unassignedIdx = containers.findIndex((c) => c.name === "Unassigned");
+      if (line.shippedQty > 0) {
+        if (unassignedIdx !== -1) {
+          containers[unassignedIdx] = {
+            ...containers[unassignedIdx],
+            qty: containers[unassignedIdx].qty + line.shippedQty,
+          };
+        } else {
+          containers.push({ name: "Unassigned", qty: line.shippedQty });
+        }
+      }
+      const updated = {
+        ...existing,
+        containers,
+        qtyHave: totalHave(containers),
+        ordered: true,
+        received: line.backorderQty > 0 ? "partial" : "yes",
+        backorderQty: line.backorderQty,
+      };
+      const nextItems = [...items];
+      nextItems[idx] = updated;
+      return { ...job, items: nextItems };
+    }
+
+    const fresh = {
+      ...emptyItem(match ? match.storage : "Unassigned"),
+      id: uniqueId(),
+      name: line.name,
+      qtyNeeded: String(line.shippedQty + line.backorderQty || 1),
+      catalogId: line.catalogId,
+      gang: match ? match.gang : "Unassigned",
+      storageDetail: match ? match.storageDetail || "" : "",
+      category: match ? match.category || "" : "",
+      needsTransfer: match ? !!match.needsTransfer : false,
+      containers: line.shippedQty > 0 ? [{ name: "Unassigned", qty: line.shippedQty }] : [],
+      qtyHave: line.shippedQty,
+      ordered: true,
+      received: line.backorderQty > 0 ? "partial" : line.shippedQty > 0 ? "yes" : "no",
+      backorderQty: line.backorderQty,
+    };
+    return { ...job, items: [...items, fresh] };
+  };
+
+  // Same idea for a Love List — existing item gets Have bumped (with the
+  // same "catch up the received-batch history" treatment the qty box
+  // already does elsewhere, so the delivery record stays honest even
+  // though this arrived through Receiving instead of the usual stepper),
+  // status only advances if something actually showed up.
+  const applyLineToLoveList = (list, line) => {
+    const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
+    const items = list.items || [];
+    const idx = line.catalogId ? items.findIndex((i) => i.catalogId === line.catalogId) : -1;
+
+    if (idx !== -1) {
+      const existing = items[idx];
+      const currentHave = existing.qtyHave || 0;
+      const newHave = currentHave + line.shippedQty;
+      let receivedBatches = existing.receivedBatches || [];
+      if (line.shippedQty > 0) {
+        receivedBatches = [
+          ...receivedBatches,
+          { receivedQty: line.shippedQty, serials: [], timestamp: new Date().toISOString() },
+        ];
+      }
+      const statusOrder = ["requested", "ordered", "received", "staged", "sent"];
+      const shouldAdvance = line.shippedQty > 0 && statusOrder.indexOf(existing.status) < statusOrder.indexOf("received");
+      const updated = {
+        ...existing,
+        qtyHave: newHave,
+        receivedBatches,
+        backorderQty: line.backorderQty,
+        status: shouldAdvance ? "received" : existing.status,
+        statusDates: shouldAdvance
+          ? { ...existing.statusDates, received: new Date().toISOString().slice(0, 10) }
+          : existing.statusDates,
+      };
+      const nextItems = [...items];
+      nextItems[idx] = updated;
+      return { ...list, items: nextItems };
+    }
+
+    const fresh = newLoveListItem(line.name, line.shippedQty + line.backorderQty || 1, {
+      catalogId: line.catalogId,
+      storage: match ? match.storage : "",
+      storageDetail: match ? match.storageDetail || "" : "",
+      needsTransfer: match ? !!match.needsTransfer : false,
+      backorderQty: line.backorderQty,
+    });
+    fresh.qtyHave = line.shippedQty;
+    if (line.shippedQty > 0) {
+      fresh.status = "received";
+      fresh.statusDates.received = new Date().toISOString().slice(0, 10);
+      fresh.receivedBatches = [
+        { receivedQty: line.shippedQty, serials: [], timestamp: new Date().toISOString() },
+      ];
+    }
+    return { ...list, items: [...items, fresh] };
+  };
+
+  const approveBatch = async (batch) => {
+    if (!batch.targetType || !batch.targetId) return;
+    const validLines = batch.lines.filter((l) => l.name.trim());
+    if (batch.targetType === "job") {
+      const job = jobs.find((j) => j.id === batch.targetId);
+      if (!job) return;
+      let updatedJob = job;
+      validLines.forEach((line) => {
+        updatedJob = applyLineToJob(updatedJob, line);
+      });
+      const nextJobs = jobs.map((j) => (j.id === updatedJob.id ? updatedJob : j));
+      setJobs(nextJobs);
+      await saveWithRetry(JOBS_KEY, JSON.stringify(nextJobs));
+    } else {
+      const list = lists.find((l) => l.id === batch.targetId);
+      if (!list) return;
+      let updatedList = list;
+      validLines.forEach((line) => {
+        updatedList = applyLineToLoveList(updatedList, line);
+      });
+      const nextLists = lists.map((l) => (l.id === updatedList.id ? updatedList : l));
+      setLists(nextLists);
+      await saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(nextLists));
+    }
+    playSaveChime();
+    saveQueue(
+      queue.map((b) =>
+        b.id === batch.id ? { ...b, status: "approved", approvedAt: new Date().toISOString() } : b
+      )
+    );
+    setActiveBatchId(null);
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  const pending = queue.filter((b) => b.status === "pending");
+  const history = queue.filter((b) => b.status !== "pending");
+  const activeBatch = queue.find((b) => b.id === activeBatchId) || null;
+
+  if (activeBatch) {
+    return (
+      <ReceivingBatchReview
+        batch={activeBatch}
+        jobs={jobs}
+        lists={lists}
+        catalog={catalog}
+        onUpdateBatch={updateBatch}
+        onApprove={approveBatch}
+        onDiscard={discardBatch}
+        onViewPhoto={setViewingPhoto}
+        onBack={() => setActiveBatchId(null)}
+      />
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files && e.target.files[0];
+          e.target.value = "";
+          if (file) runScan(file);
+        }}
+      />
+      <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
+        <div className="flex items-center gap-2">
+          <button onClick={onGoHome} className="text-slate-400 hover:text-slate-200">
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <p className="font-semibold flex items-center gap-1.5">
+            <Inbox className="w-4 h-4 text-amber-400" />
+            Receiving
+          </p>
+        </div>
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={scanning}
+          className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400 disabled:opacity-50"
+        >
+          <Camera className="w-4 h-4" />
+          {scanning ? "Scanning..." : "Scan a receipt"}
+        </button>
+      </header>
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        {scanError && <p className="text-sm text-red-400 mb-4">Couldn't scan that: {scanError}</p>}
+        <p className="text-xs font-medium text-slate-400 mb-2">
+          Awaiting review ({pending.length})
+        </p>
+        <div className="space-y-2 mb-6">
+          {pending.length === 0 ? (
+            <p className="text-sm text-slate-500 text-center py-8">
+              Nothing waiting on you — scan a receipt to get started.
+            </p>
+          ) : (
+            pending.map((b) => (
+              <button
+                key={b.id}
+                onClick={() => setActiveBatchId(b.id)}
+                className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700 flex items-center gap-3"
+              >
+                {b.photoUrl && (
+                  <img src={b.photoUrl} alt="" className="w-12 h-12 rounded-md object-cover border border-slate-800 shrink-0" />
+                )}
+                <div className="min-w-0">
+                  <p className="text-sm text-slate-100">
+                    {b.lines.length} item{b.lines.length === 1 ? "" : "s"} scanned
+                  </p>
+                  <p className="text-xs text-slate-500">{formatTaskTimestamp(b.scannedAt)}</p>
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+
+        <button
+          onClick={() => setShowHistory((v) => !v)}
+          className="w-full text-left text-xs font-medium text-slate-400 mb-2 flex items-center gap-1.5"
+        >
+          <History className="w-3.5 h-3.5" />
+          History ({history.length}) {showHistory ? "▲" : "▼"}
+        </button>
+        {showHistory && (
+          <div className="space-y-2">
+            {history.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-4">Nothing yet.</p>
+            ) : (
+              history.map((b) => (
+                <div key={b.id} className="bg-slate-900 border border-slate-800 rounded-lg p-3 flex items-center gap-3">
+                  {b.photoUrl && (
+                    <img src={b.photoUrl} alt="" className="w-10 h-10 rounded-md object-cover border border-slate-800 shrink-0" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-slate-100">
+                      {b.lines.length} item{b.lines.length === 1 ? "" : "s"} ·{" "}
+                      <span className={b.status === "approved" ? "text-emerald-400" : "text-slate-500"}>
+                        {b.status === "approved" ? "Approved" : "Discarded"}
+                      </span>
+                    </p>
+                    <p className="text-xs text-slate-500">{formatTaskTimestamp(b.approvedAt || b.scannedAt)}</p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </main>
+
+      {viewingPhoto && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
+          onClick={() => setViewingPhoto(null)}
+        >
+          <button
+            onClick={() => setViewingPhoto(null)}
+            className="absolute top-4 right-4 text-slate-300 hover:text-white"
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <ZoomableImage key={viewingPhoto} src={viewingPhoto} alt="Receipt" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The review screen for one scanned receipt — verify against the pallet,
+// fix up anything OCR misread, link unmatched names to the catalog, pick
+// which Job or Love List this shipment belongs to, then approve.
+function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onApprove, onDiscard, onViewPhoto, onBack }) {
+  const [targetType, setTargetType] = useState(batch.targetType);
+  const [targetId, setTargetId] = useState(batch.targetId);
+  const [targetSearch, setTargetSearch] = useState("");
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const [confirmingApprove, setConfirmingApprove] = useState(false);
+
+  const updateLine = (lineId, changes) => {
+    onUpdateBatch({
+      ...batch,
+      lines: batch.lines.map((l) => (l.id === lineId ? { ...l, ...changes } : l)),
+    });
+  };
+  const removeLine = (lineId) => {
+    onUpdateBatch({ ...batch, lines: batch.lines.filter((l) => l.id !== lineId) });
+  };
+  const cloneLine = (lineId) => {
+    const idx = batch.lines.findIndex((l) => l.id === lineId);
+    if (idx === -1) return;
+    const clone = { ...batch.lines[idx], id: uniqueId() };
+    const nextLines = [...batch.lines.slice(0, idx + 1), clone, ...batch.lines.slice(idx + 1)];
+    onUpdateBatch({ ...batch, lines: nextLines });
+  };
+
+  const jobOptions = jobs.filter((j) => !j.archived);
+  const listOptions = lists.filter((l) => !l.archived);
+  const filteredTargets = (targetType === "job" ? jobOptions : listOptions).filter((t) => {
+    const label = targetType === "job" ? t.name : t.jobLabel;
+    return !targetSearch.trim() || (label || "").toLowerCase().includes(targetSearch.toLowerCase());
+  });
+
+  const chooseTarget = (id) => {
+    setTargetId(id);
+    onUpdateBatch({ ...batch, targetType, targetId: id });
+  };
+
+  const canApprove = targetType && targetId && batch.lines.some((l) => l.name.trim());
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
+        <button onClick={onBack} className="text-slate-400 hover:text-slate-200 flex items-center gap-1.5">
+          <ChevronLeft className="w-5 h-5" />
+          <span className="text-sm">Back</span>
+        </button>
+        <button onClick={() => setConfirmingDiscard(true)} className="text-xs text-slate-500 hover:text-red-400">
+          Discard
+        </button>
+      </header>
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        {batch.photoUrl && (
+          <button
+            onClick={() => onViewPhoto(batch.photoUrl)}
+            className="w-full mb-4 rounded-lg overflow-hidden border border-slate-800"
+          >
+            <img src={batch.photoUrl} alt="Receipt" className="w-full max-h-48 object-cover" />
+          </button>
+        )}
+
+        <p className="text-xs font-medium text-slate-400 mb-2">Apply this receipt to</p>
+        <div className="flex gap-2 mb-3">
+          <button
+            onClick={() => {
+              setTargetType("job");
+              setTargetId(null);
+              onUpdateBatch({ ...batch, targetType: "job", targetId: null });
+            }}
+            className={`flex-1 text-sm rounded-md py-2 border ${
+              targetType === "job" ? "bg-amber-500/15 border-amber-500/40 text-amber-300" : "border-slate-700 text-slate-400"
+            }`}
+          >
+            Job
+          </button>
+          <button
+            onClick={() => {
+              setTargetType("love_list");
+              setTargetId(null);
+              onUpdateBatch({ ...batch, targetType: "love_list", targetId: null });
+            }}
+            className={`flex-1 text-sm rounded-md py-2 border ${
+              targetType === "love_list" ? "bg-rose-500/15 border-rose-500/40 text-rose-300" : "border-slate-700 text-slate-400"
+            }`}
+          >
+            Love List
+          </button>
+        </div>
+
+        {targetType && (
+          <>
+            <input
+              value={targetSearch}
+              onChange={(e) => setTargetSearch(e.target.value)}
+              placeholder={targetType === "job" ? "Search jobs..." : "Search Love Lists..."}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+            <div className="max-h-40 overflow-y-auto space-y-1 mb-4 border border-slate-800 rounded-md p-1.5">
+              {filteredTargets.length === 0 ? (
+                <p className="text-xs text-slate-500 text-center py-3">No matches.</p>
+              ) : (
+                filteredTargets.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => chooseTarget(t.id)}
+                    className={`w-full text-left text-sm rounded-md px-2.5 py-1.5 ${
+                      targetId === t.id ? "bg-amber-500/15 text-amber-300" : "text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    {targetType === "job" ? t.name : t.jobLabel}
+                    {targetType === "love_list" && t.subJobLabel ? ` — ${t.subJobLabel}` : ""}
+                  </button>
+                ))
+              )}
+            </div>
+          </>
+        )}
+
+        <p className="text-xs font-medium text-slate-400 mb-2">
+          Line items ({batch.lines.length})
+        </p>
+        <div className="space-y-2 mb-6">
+          {batch.lines.map((line) => {
+            const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
+            return (
+              <div key={line.id} className="border border-slate-800 rounded-lg p-2.5 bg-slate-900/60">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <input
+                    value={line.name}
+                    onChange={(e) => updateLine(line.id, { name: e.target.value })}
+                    className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                  />
+                  <button
+                    onClick={() => cloneLine(line.id)}
+                    title="Clone this line"
+                    className="text-slate-500 hover:text-amber-400 shrink-0 p-1"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => removeLine(line.id)}
+                    className="text-slate-500 hover:text-red-400 shrink-0 p-1"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <div className="flex-1">
+                    <label className="block text-[10px] text-slate-500 mb-0.5">Shipped</label>
+                    <input
+                      type="number"
+                      min="0"
+                      onFocus={selectOnFocus}
+                      onClick={selectOnFocus}
+                      value={line.shippedQty}
+                      onChange={(e) => updateLine(line.id, { shippedQty: Number(e.target.value) || 0 })}
+                      className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-emerald-500/60"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-[10px] text-slate-500 mb-0.5">Backorder</label>
+                    <input
+                      type="number"
+                      min="0"
+                      onFocus={selectOnFocus}
+                      onClick={selectOnFocus}
+                      value={line.backorderQty}
+                      onChange={(e) => updateLine(line.id, { backorderQty: Number(e.target.value) || 0 })}
+                      className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-red-500/60"
+                    />
+                  </div>
+                </div>
+                {match ? (
+                  <p className="text-[11px] text-emerald-400">🔗 linked to "{match.name}"</p>
+                ) : (
+                  <p className="text-[11px] text-slate-600">No catalog match — will create a new item</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </main>
+
+      <div className="sticky bottom-0 bg-slate-950/95 backdrop-blur border-t border-slate-800 px-4 py-4">
+        <div className="max-w-2xl mx-auto">
+          <button
+            onClick={() => setConfirmingApprove(true)}
+            disabled={!canApprove}
+            className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+          >
+            Approve &amp; add to {targetType === "job" ? "job" : "Love List"}
+          </button>
+        </div>
+      </div>
+
+      {confirmingDiscard && (
+        <ConfirmDelete
+          title="Discard this receipt?"
+          message="This scan and everything on it will be discarded — nothing gets added anywhere. This can't be undone."
+          onConfirm={() => onDiscard(batch)}
+          onCancel={() => setConfirmingDiscard(false)}
+        />
+      )}
+
+      {confirmingApprove && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-1.5">Approve this receipt?</h3>
+            <p className="text-slate-400 text-sm mb-5">
+              {batch.lines.filter((l) => l.name.trim()).length} item(s) will be added to the
+              selected {targetType === "job" ? "job" : "Love List"}. Review carefully — this
+              writes real inventory changes.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmingApprove(false)}
+                className="flex-1 text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setConfirmingApprove(false);
+                  onApprove(batch);
+                }}
+                className="flex-1 text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Approve
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AuthGate() {
   const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
   const [showLogin, setShowLogin] = useState(false);
@@ -18033,9 +18725,12 @@ export default function AuthGate() {
             if (session) await supabase.auth.signOut();
             setAppSection("kiosk");
           }}
+          onSelectReceiving={() => setAppSection("receiving")}
           onRequestLogin={() => setShowLogin(true)}
           onSignOut={() => supabase.auth.signOut()}
         />
+      ) : appSection === "receiving" ? (
+        <ReceivingApp onGoHome={() => setAppSection(null)} />
       ) : appSection === "love" ? (
         <LoveListsApp
           isEditor={isOwner || isManager}
