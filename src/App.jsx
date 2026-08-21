@@ -4012,6 +4012,7 @@ const REQUISITION_TEMPLATES = {
 function ZoomableImage({ src, alt = "" }) {
   const [scale, setScale] = useState(1);
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
   const gesture = useRef({ startDist: 0, startScale: 1, startTranslate: { x: 0, y: 0 }, panStart: null });
   const lastTap = useRef(0);
 
@@ -4078,22 +4079,59 @@ function ZoomableImage({ src, alt = "" }) {
     scale > 1 ? reset() : setScale(2);
   };
 
+  // Mouse click-and-drag panning (desktop) — mirrors the single-finger
+  // touch pan above, but tracked on window rather than the image itself,
+  // so dragging still works smoothly even if the cursor slides off the
+  // shrunk-down image edge mid-drag.
+  const handleMouseDown = (e) => {
+    if (scale <= 1) return;
+    e.stopPropagation();
+    e.preventDefault();
+    gesture.current.panStart = { x: e.clientX - translate.x, y: e.clientY - translate.y };
+    setDragging(true);
+  };
+
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = (e) => {
+      if (!gesture.current.panStart) return;
+      setTranslate({
+        x: e.clientX - gesture.current.panStart.x,
+        y: e.clientY - gesture.current.panStart.y,
+      });
+    };
+    const onUp = () => {
+      gesture.current.panStart = null;
+      setDragging(false);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [dragging]);
+
   return (
     <img
       src={src}
       alt={alt}
       draggable={false}
+      onDragStart={(e) => e.preventDefault()}
       onClick={(e) => e.stopPropagation()}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       onWheel={handleWheel}
       onDoubleClick={handleDoubleClick}
+      onMouseDown={handleMouseDown}
       style={{
         transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
         transition: scale === 1 ? "transform 0.15s ease" : "none",
         touchAction: "none",
-        cursor: scale > 1 ? "grab" : "zoom-in",
+        cursor: scale > 1 ? (dragging ? "grabbing" : "grab") : "zoom-in",
+        WebkitUserDrag: "none",
+        userSelect: "none",
       }}
       className="max-w-full max-h-full rounded-lg select-none"
     />
