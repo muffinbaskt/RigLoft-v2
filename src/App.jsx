@@ -4003,6 +4003,103 @@ const REQUISITION_TEMPLATES = {
   "Safety Post": ["#7 (Hook Pole)", "#9 (Rectangle)", "#10 (V)"],
 };
 
+// Pinch-to-zoom / double-tap / scroll-wheel zoomable image, used anywhere
+// a photo opens inline in a fullscreen overlay (Reference Documents, Love
+// List photos) rather than in the browser's own PDF viewer — those get
+// native pinch-zoom for free, this is what gives inline photos the same
+// ability. Pass a fresh `key` (usually the photo's URL) from the caller
+// so zoom/pan resets whenever a different photo is shown.
+function ZoomableImage({ src, alt = "" }) {
+  const [scale, setScale] = useState(1);
+  const [translate, setTranslate] = useState({ x: 0, y: 0 });
+  const gesture = useRef({ startDist: 0, startScale: 1, startTranslate: { x: 0, y: 0 }, panStart: null });
+  const lastTap = useRef(0);
+
+  const clampScale = (s) => Math.min(4, Math.max(1, s));
+  const reset = () => {
+    setScale(1);
+    setTranslate({ x: 0, y: 0 });
+  };
+  const dist = (a, b) => Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+
+  const handleTouchStart = (e) => {
+    e.stopPropagation();
+    if (e.touches.length === 2) {
+      gesture.current.startDist = dist(e.touches[0], e.touches[1]);
+      gesture.current.startScale = scale;
+      gesture.current.startTranslate = translate;
+    } else if (e.touches.length === 1) {
+      const now = Date.now();
+      if (now - lastTap.current < 300) {
+        scale > 1 ? reset() : setScale(2);
+        lastTap.current = 0;
+      } else {
+        lastTap.current = now;
+      }
+      if (scale > 1) {
+        gesture.current.panStart = {
+          x: e.touches[0].clientX - translate.x,
+          y: e.touches[0].clientY - translate.y,
+        };
+      }
+    }
+  };
+
+  const handleTouchMove = (e) => {
+    e.stopPropagation();
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      const ratio = dist(e.touches[0], e.touches[1]) / (gesture.current.startDist || 1);
+      setScale(clampScale(gesture.current.startScale * ratio));
+    } else if (e.touches.length === 1 && scale > 1 && gesture.current.panStart) {
+      e.preventDefault();
+      setTranslate({
+        x: e.touches[0].clientX - gesture.current.panStart.x,
+        y: e.touches[0].clientY - gesture.current.panStart.y,
+      });
+    }
+  };
+
+  const handleTouchEnd = (e) => {
+    e.stopPropagation();
+    gesture.current.panStart = null;
+  };
+
+  const handleWheel = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const next = clampScale(scale + (e.deltaY < 0 ? 0.2 : -0.2));
+    setScale(next);
+    if (next === 1) setTranslate({ x: 0, y: 0 });
+  };
+
+  const handleDoubleClick = (e) => {
+    e.stopPropagation();
+    scale > 1 ? reset() : setScale(2);
+  };
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      draggable={false}
+      onClick={(e) => e.stopPropagation()}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onWheel={handleWheel}
+      onDoubleClick={handleDoubleClick}
+      style={{
+        transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
+        transition: scale === 1 ? "transform 0.15s ease" : "none",
+        touchAction: "none",
+        cursor: scale > 1 ? "grab" : "zoom-in",
+      }}
+      className="max-w-full max-h-full rounded-lg select-none"
+    />
+  );
+}
+
 function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
   const docs = job.referenceDocuments || [];
   const photoDocs = docs.filter((d) => (d.type || "").startsWith("image/"));
@@ -4073,12 +4170,7 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
         >
           <X className="w-6 h-6" />
         </button>
-        <img
-          src={viewingUrl}
-          alt="Reference photo"
-          className="max-w-full max-h-full rounded-lg"
-          onClick={(e) => e.stopPropagation()}
-        />
+        <ZoomableImage key={viewingUrl} src={viewingUrl} alt="Reference photo" />
       </div>
     );
   }
@@ -13292,12 +13384,7 @@ function LoveListPhotosModal({ list, isEditor, onAddPhoto, onRemovePhoto, onClos
         >
           <X className="w-6 h-6" />
         </button>
-        <img
-          src={viewingUrl}
-          alt="Reference photo"
-          className="max-w-full max-h-full rounded-lg"
-          onClick={(e) => e.stopPropagation()}
-        />
+        <ZoomableImage key={viewingUrl} src={viewingUrl} alt="Reference photo" />
       </div>
     );
   }
