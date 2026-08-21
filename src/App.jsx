@@ -18023,6 +18023,11 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
 }
 
 const RECEIVING_QUEUE_KEY = "warehub-receiving-queue";
+// Remembers the exact confirmed name for a specific raw OCR string, once
+// you've typed and linked it — separate from catalog matching itself.
+// This is what lets a size-specific line ("...4LB SLEDGE...") auto-fill
+// correctly next time without ever guessing at a size from the text.
+const RECEIVING_NAME_MEMORY_KEY = "warehub-receiving-name-memory";
 
 function newReceiptBatch(photoUrl, path, lines) {
   return {
@@ -18049,6 +18054,7 @@ function ReceivingApp({ onGoHome }) {
   const [jobs, setJobs] = useState([]);
   const [lists, setLists] = useState([]);
   const [catalog, setCatalog] = useState([]);
+  const [nameMemory, setNameMemory] = useState({}); // normalized raw text -> confirmed final name
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState("");
@@ -18059,16 +18065,18 @@ function ReceivingApp({ onGoHome }) {
 
   const load = async () => {
     try {
-      const [qResult, jResult, lResult, cResult] = await Promise.all([
+      const [qResult, jResult, lResult, cResult, nResult] = await Promise.all([
         getWithRetry(RECEIVING_QUEUE_KEY),
         getWithRetry(JOBS_KEY),
         getWithRetry(LOVE_LISTS_KEY),
         getWithRetry(CATALOG_KEY),
+        getWithRetry(RECEIVING_NAME_MEMORY_KEY),
       ]);
       if (qResult.ok && qResult.value) setQueue(JSON.parse(qResult.value));
       if (jResult.ok && jResult.value) setJobs(JSON.parse(jResult.value));
       if (lResult.ok && lResult.value) setLists(JSON.parse(lResult.value));
       if (cResult.ok && cResult.value) setCatalog(JSON.parse(cResult.value));
+      if (nResult.ok && nResult.value) setNameMemory(JSON.parse(nResult.value));
     } catch {}
     setLoading(false);
   };
@@ -18113,10 +18121,20 @@ function ReceivingApp({ onGoHome }) {
       if (!data.ok) throw new Error(data.error || "Scan failed.");
 
       const lines = (data.items || []).map((it) => {
-        const match = findCatalogMatch(it.name || "", catalog);
+        const rawName = it.name || "";
+        const match = findCatalogMatch(rawName, catalog);
+        const remembered = nameMemory[normalizeText(rawName)];
+        // The catalog match drives storage/gang/category defaults, but
+        // never the display name itself — plenty of catalog entries are
+        // shared across multiple real variants (different sizes sharing
+        // the same gang/storage) with no reliable flag distinguishing
+        // that, so the only safe default is the raw OCR text, unless
+        // this exact SKU string has already been confirmed once before.
+        const suggestedName = remembered || rawName;
         return {
           id: uniqueId(),
-          name: it.name || "",
+          rawName,
+          name: suggestedName,
           catalogId: match ? match.id : null,
           backorderQty: Number(it.backorderQty) > 0 ? Number(it.backorderQty) : 0,
           shippedQty: Number(it.shippedQty) > 0 ? Number(it.shippedQty) : 0,
@@ -18135,6 +18153,26 @@ function ReceivingApp({ onGoHome }) {
 
   const updateBatch = (updated) => {
     saveQueue(queue.map((b) => (b.id === updated.id ? updated : b)));
+  };
+
+  // Same alias-learning as Love List's scan review — linking a garbled OCR
+  // string to a catalog item teaches that exact phrase for next time, so
+  // future receipts from the same supplier auto-match instead of needing
+  // a manual link again.
+  const learnAlias = (catalogId, aliasText) => {
+    if (!catalogId || !aliasText || !aliasText.trim()) return;
+    const normAlias = normalizeText(aliasText.trim());
+    setCatalog((prev) => {
+      const next = prev.map((c) => {
+        if (c.id !== catalogId) return c;
+        if (normalizeText(c.name) === normAlias) return c;
+        const existing = c.aliases || [];
+        if (existing.some((a) => normalizeText(a) === normAlias)) return c;
+        return { ...c, aliases: [...existing, aliasText.trim()] };
+      });
+      saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
   };
 
   const discardBatch = async (batch) => {
@@ -18281,6 +18319,18 @@ function ReceivingApp({ onGoHome }) {
       setLists(nextLists);
       await saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(nextLists));
     }
+
+    // Remember exactly what each line ended up named, keyed to its raw
+    // OCR text — this is what lets a size-specific item (a particular
+    // "Beater, 4lb" SKU string, say) come back auto-filled correctly next
+    // time, instead of needing the size retyped every single receipt.
+    const nextMemory = { ...nameMemory };
+    validLines.forEach((line) => {
+      if (line.rawName) nextMemory[normalizeText(line.rawName)] = line.name.trim();
+    });
+    setNameMemory(nextMemory);
+    saveWithRetry(RECEIVING_NAME_MEMORY_KEY, JSON.stringify(nextMemory)).catch(() => {});
+
     playSaveChime();
     saveQueue(
       queue.map((b) =>
@@ -18310,6 +18360,7 @@ function ReceivingApp({ onGoHome }) {
         lists={lists}
         catalog={catalog}
         onUpdateBatch={updateBatch}
+        onLearnAlias={learnAlias}
         onApprove={approveBatch}
         onDiscard={discardBatch}
         onViewPhoto={setViewingPhoto}
@@ -18436,12 +18487,14 @@ function ReceivingApp({ onGoHome }) {
 // The review screen for one scanned receipt — verify against the pallet,
 // fix up anything OCR misread, link unmatched names to the catalog, pick
 // which Job or Love List this shipment belongs to, then approve.
-function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onApprove, onDiscard, onViewPhoto, onBack }) {
+function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLearnAlias, onApprove, onDiscard, onViewPhoto, onBack }) {
   const [targetType, setTargetType] = useState(batch.targetType);
   const [targetId, setTargetId] = useState(batch.targetId);
   const [targetSearch, setTargetSearch] = useState("");
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const [confirmingApprove, setConfirmingApprove] = useState(false);
+  const [relinkingLine, setRelinkingLine] = useState(null);
+  const [catalogSearch, setCatalogSearch] = useState("");
 
   const updateLine = (lineId, changes) => {
     onUpdateBatch({
@@ -18607,9 +18660,25 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onAp
                   </div>
                 </div>
                 {match ? (
-                  <p className="text-[11px] text-emerald-400">🔗 linked to "{match.name}"</p>
+                  <button
+                    onClick={() => {
+                      setRelinkingLine(line);
+                      setCatalogSearch("");
+                    }}
+                    className="text-[11px] text-emerald-400 hover:underline decoration-dotted"
+                  >
+                    🔗 linked to "{match.name}" · Change
+                  </button>
                 ) : (
-                  <p className="text-[11px] text-slate-600">No catalog match — will create a new item</p>
+                  <button
+                    onClick={() => {
+                      setRelinkingLine(line);
+                      setCatalogSearch("");
+                    }}
+                    className="text-[11px] text-slate-500 hover:text-slate-300 hover:underline decoration-dotted"
+                  >
+                    No catalog match — 🔍 link manually
+                  </button>
                 )}
               </div>
             );
@@ -18663,6 +18732,82 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onAp
               >
                 Approve
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {relinkingLine && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4 py-8">
+          <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold text-sm truncate">
+                Link "{relinkingLine.name}" to...
+              </h3>
+              <button
+                onClick={() => {
+                  setRelinkingLine(null);
+                  setCatalogSearch("");
+                }}
+                className="text-slate-400 hover:text-slate-200 shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-5 pt-4 shrink-0">
+              <input
+                autoFocus
+                value={catalogSearch}
+                onChange={(e) => setCatalogSearch(e.target.value)}
+                placeholder="Search catalog..."
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {relinkingLine.catalogId && (
+                <button
+                  onClick={() => {
+                    // Unlinking reverts to whatever OCR actually read —
+                    // gives a clean slate to retype or relink to
+                    // something else, rather than keeping a catalog name
+                    // that no longer has anything backing it.
+                    updateLine(relinkingLine.id, { catalogId: null, name: relinkingLine.rawName });
+                    setRelinkingLine(null);
+                    setCatalogSearch("");
+                  }}
+                  className="w-full text-left text-sm rounded-md px-3 py-2 border border-red-800/40 text-red-400 hover:bg-red-500/10 mb-2"
+                >
+                  Unlink from catalog
+                </button>
+              )}
+              {catalog
+                .filter((c) => c.name.toLowerCase().includes(catalogSearch.trim().toLowerCase()))
+                .slice(0, 50)
+                .map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => {
+                      // Linking sets which catalog entry this is (for
+                      // storage/gang defaults) but deliberately leaves the
+                      // name field alone — plenty of catalog entries cover
+                      // several real variants that just happen to share
+                      // the same storage/gang, so the specific wording on
+                      // this line (the size, the spec) is exactly what
+                      // shouldn't get collapsed away automatically.
+                      updateLine(relinkingLine.id, { catalogId: c.id });
+                      onLearnAlias && onLearnAlias(c.id, relinkingLine.rawName);
+                      setRelinkingLine(null);
+                      setCatalogSearch("");
+                    }}
+                    className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-800 hover:border-slate-700 mb-1.5"
+                  >
+                    <p className="text-slate-100">{c.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {c.storage}
+                      {c.needsTransfer ? " · 🚚 needs transfer" : ""}
+                    </p>
+                  </button>
+                ))}
             </div>
           </div>
         </div>
