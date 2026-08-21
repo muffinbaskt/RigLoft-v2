@@ -19003,7 +19003,12 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
     onUpdateBatch({ ...batch, lines: nextLines });
   };
 
-  const jobOptions = jobs.filter((j) => !j.archived);
+  // Quick Transfers live in this same jobs array under the hood — they're
+  // shipment manifests, not real jobs to receive inventory into, so they
+  // never belong in this picker. Sealed jobs are excluded too, since
+  // they're locked/read-only by design — adding new items there would
+  // fight that on purpose.
+  const jobOptions = jobs.filter((j) => !j.archived && !j.isQuickTransfer && !j.sealed);
   const listOptions = lists.filter((l) => !l.archived);
   const filteredTargets = (assignTargetType === "job" ? jobOptions : listOptions).filter((t) => {
     const q = targetSearch.trim().toLowerCase();
