@@ -115,6 +115,17 @@ function uniqueId() {
   return id;
 }
 
+// Tapping into a number field (Qty, capacity, etc.) selects the existing
+// value instead of just placing a cursor — so typing a new number
+// immediately overwrites whatever was there (often a "0"), rather than
+// needing to manually clear or position the cursor first. Both handlers
+// are needed: onFocus covers the first tap into an unfocused field,
+// onClick covers re-tapping a field that's already focused (which
+// doesn't re-fire onFocus in most browsers).
+function selectOnFocus(e) {
+  e.target.select();
+}
+
 function timeStamp() {
   return new Date().toLocaleString([], {
     month: "short",
@@ -905,6 +916,8 @@ function ItemForm({
               <label className="block text-xs font-medium text-slate-400 mb-1.5">QTY</label>
               <input
                 type="number"
+                onFocus={selectOnFocus}
+                onClick={selectOnFocus}
                 min="0"
                 value={item.qtyNeeded}
                 onChange={(e) => set("qtyNeeded")(e.target.value)}
@@ -1096,6 +1109,8 @@ function ItemForm({
               <label className="block text-xs font-medium text-slate-400 mb-1.5">Qty needed</label>
               <input
                 type="number"
+                onFocus={selectOnFocus}
+                onClick={selectOnFocus}
                 min="0"
                 value={item.qtyNeeded}
                 onChange={(e) => set("qtyNeeded")(e.target.value)}
@@ -1259,6 +1274,8 @@ function ItemForm({
                     </div>
                     <input
                       type="number"
+                      onFocus={selectOnFocus}
+                      onClick={selectOnFocus}
                       min="0"
                       value={c.qty}
                       onChange={(e) =>
@@ -3327,10 +3344,12 @@ function ContainerDetailModal({
                       </div>
                       <input
                         type="number"
+                        onClick={selectOnFocus}
                         min="0"
                         value={qtyOverrides[item.id] ?? remaining}
                         onChange={(e) => setQty(item.id, e.target.value)}
-                        onFocus={() => {
+                        onFocus={(e) => {
+                          selectOnFocus(e);
                           if (!selected[item.id]) toggleSelect(item.id);
                         }}
                         className="w-16 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60 shrink-0"
@@ -4501,6 +4520,8 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
             />
             <input
               type="number"
+              onFocus={selectOnFocus}
+              onClick={selectOnFocus}
               min="0"
               value={qty}
               onChange={(e) => setQty(e.target.value)}
@@ -4919,6 +4940,8 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
                             />
                             <input
                               type="number"
+                              onFocus={selectOnFocus}
+                              onClick={selectOnFocus}
                               value={editingEntry.qty}
                               onChange={(e) =>
                                 setEditingEntry({
@@ -4992,6 +5015,7 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
                             <input
                               ref={(el) => (qtyInputRefs.current[r.id] = el)}
                               type="number"
+                              onClick={selectOnFocus}
                               min="0"
                               value={r.qty}
                               disabled={!isEditor || r.fulfilled}
@@ -5041,6 +5065,8 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
                           />
                           <input
                             type="number"
+                            onFocus={selectOnFocus}
+                            onClick={selectOnFocus}
                             value={newQty}
                             onChange={(e) => setNewQty(e.target.value)}
                             onKeyDown={(e) => e.key === "Enter" && addEntry(cat)}
@@ -6019,6 +6045,8 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
                       <span className="text-xs text-slate-500">QTY</span>
                       <input
                         type="number"
+                        onFocus={selectOnFocus}
+                        onClick={selectOnFocus}
                         min="1"
                         value={p.qtyNeeded}
                         onChange={(e) => updateQty(p.lineId, e.target.value)}
@@ -6203,6 +6231,8 @@ function SuggestEditModal({ job, item, managerName, onSubmit, onClose }) {
               <label className="block text-xs font-medium text-slate-400 mb-1.5">Qty have</label>
               <input
                 type="number"
+                onFocus={selectOnFocus}
+                onClick={selectOnFocus}
                 min="0"
                 value={qtyHave}
                 onChange={(e) => setQtyHave(e.target.value)}
@@ -6248,6 +6278,8 @@ function SuggestEditModal({ job, item, managerName, onSubmit, onClose }) {
               </label>
               <input
                 type="number"
+                onFocus={selectOnFocus}
+                onClick={selectOnFocus}
                 min="0"
                 value={containerQty}
                 onChange={(e) => setContainerQty(e.target.value)}
@@ -6370,6 +6402,8 @@ function SuggestNewItemModal({ job, managerName, onClose }) {
               </label>
               <input
                 type="number"
+                onFocus={selectOnFocus}
+                onClick={selectOnFocus}
                 min="1"
                 value={qtyNeeded}
                 onChange={(e) => setQtyNeeded(e.target.value)}
@@ -12792,6 +12826,8 @@ function LoveListItemEntry({ catalog, allLists = [], currentListId, onLearnAlias
         />
         <input
           type="number"
+          onFocus={selectOnFocus}
+          onClick={selectOnFocus}
           min="1"
           value={qty}
           onChange={(e) => setQty(e.target.value)}
@@ -13213,6 +13249,8 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
                       />
                       <input
                         type="number"
+                        onFocus={selectOnFocus}
+                        onClick={selectOnFocus}
                         min="1"
                         value={item.qty}
                         onChange={(e) => updateReviewItem(item.id, { qty: Number(e.target.value) || 1 })}
@@ -14457,6 +14495,8 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                           <input
                             key={`have-${item.id}-${item.qtyHave}`}
                             type="number"
+                            onFocus={selectOnFocus}
+                            onClick={selectOnFocus}
                             min="0"
                             defaultValue={item.qtyHave ?? 0}
                             onBlur={(e) => updateItemQtyField(item, "qtyHave", e.target.value)}
@@ -14467,6 +14507,8 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                           <input
                             key={`need-${item.id}-${item.qty}`}
                             type="number"
+                            onFocus={selectOnFocus}
+                            onClick={selectOnFocus}
                             min="1"
                             defaultValue={item.qty}
                             onBlur={(e) => updateItemQtyField(item, "qty", e.target.value)}
@@ -15111,6 +15153,8 @@ function StaleThresholdsModal({ thresholds, onSave, onClose }) {
                 <div className="flex items-center gap-2">
                   <input
                     type="number"
+                    onFocus={selectOnFocus}
+                    onClick={selectOnFocus}
                     min="1"
                     value={draft[s.key] ?? ""}
                     onChange={(e) =>
@@ -16014,6 +16058,8 @@ function WorkerTaskEditForm({ task, workers, onSave, onDelete, onCancel }) {
             </button>
             <input
               type="number"
+              onFocus={selectOnFocus}
+              onClick={selectOnFocus}
               min="1"
               value={capacity}
               onChange={(e) => setCapacityClamped(Number(e.target.value) || 1)}
@@ -16197,6 +16243,8 @@ function WorkerTaskAddForm({ workers, onSave, onCancel }) {
             </button>
             <input
               type="number"
+              onFocus={selectOnFocus}
+              onClick={selectOnFocus}
               min="1"
               value={capacity}
               onChange={(e) => setCapacityClamped(Number(e.target.value) || 1)}
