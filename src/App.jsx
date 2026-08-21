@@ -4146,21 +4146,11 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
   const [uploadError, setUploadError] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [viewingUrl, setViewingUrl] = useState(null);
+  const [pdfPrompt, setPdfPrompt] = useState(null); // the PDF file, while asking convert-vs-keep
   const photoInputRef = useRef(null);
   const fileInputRef = useRef(null);
 
-  const handleFileChosen = async (e) => {
-    const file = e.target.files && e.target.files[0];
-    e.target.value = ""; // allow choosing the same file again later
-    if (!file) return;
-    setUploadError(null);
-    setUploading(true);
-    const result = await uploadReferenceDocument(job.id, file);
-    setUploading(false);
-    if (!result.ok) {
-      setUploadError(result.error || "Upload failed");
-      return;
-    }
+  const addDoc = (result) => {
     const isPhoto = (result.type || "").startsWith("image/");
     onUpdateJob((prevJob) => ({
       ...prevJob,
@@ -4184,6 +4174,57 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
         ...prevJob.activityLog,
       ].slice(0, 50),
     }));
+  };
+
+  const doUpload = async (file) => {
+    setUploadError(null);
+    setUploading(true);
+    const result = await uploadReferenceDocument(job.id, file);
+    setUploading(false);
+    if (!result.ok) {
+      setUploadError(result.error || "Upload failed");
+      return;
+    }
+    addDoc(result);
+  };
+
+  const handleFileChosen = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // allow choosing the same file again later
+    if (!file) return;
+    if (file.type === "application/pdf") {
+      // Ask rather than assume — a scanned receipt should probably become
+      // photos, but a real multi-page document (a spec sheet, a signed
+      // order) might genuinely need to stay a navigable PDF.
+      setPdfPrompt(file);
+      return;
+    }
+    await doUpload(file);
+  };
+
+  const keepPdfAsIs = async () => {
+    const file = pdfPrompt;
+    setPdfPrompt(null);
+    await doUpload(file);
+  };
+
+  const convertPdfToPhotos = async () => {
+    const file = pdfPrompt;
+    setPdfPrompt(null);
+    setUploadError(null);
+    setUploading(true);
+    try {
+      const imageFiles = await pdfToImageFiles(file);
+      for (const imgFile of imageFiles) {
+        const result = await uploadReferenceDocument(job.id, imgFile);
+        if (result.ok) addDoc(result);
+      }
+    } catch (err) {
+      setUploadError(
+        "Couldn't convert that PDF — " + (err && err.message ? err.message : String(err))
+      );
+    }
+    setUploading(false);
   };
 
   const confirmDelete = async () => {
@@ -4339,6 +4380,39 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
           onConfirm={confirmDelete}
           onCancel={() => setDeleteTarget(null)}
         />
+      )}
+
+      {pdfPrompt && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-1">That's a PDF</h3>
+            <p className="text-xs text-slate-500 mb-4">
+              A phone's "scan to PDF" is usually just a photo wrapped in a PDF — converting
+              keeps it easy to zoom into and cuts the file size, with one photo per page. If
+              this is a real multi-page document, keeping it as a PDF makes more sense.
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={convertPdfToPhotos}
+                className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Convert to photo(s)
+              </button>
+              <button
+                onClick={keepPdfAsIs}
+                className="w-full text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Keep as PDF
+              </button>
+              <button
+                onClick={() => setPdfPrompt(null)}
+                className="w-full text-xs text-slate-500 hover:text-slate-300"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );
@@ -9802,6 +9876,54 @@ function storagePathFromPublicUrl(url) {
   } catch {
     return url.slice(idx + marker.length);
   }
+}
+
+// pdf.js loaded on demand from a CDN, only when someone actually picks a
+// PDF to convert — no reason to make everyone's bundle bigger for a
+// feature most uploads never touch.
+let pdfjsLibPromise = null;
+function loadPdfJs() {
+  if (!pdfjsLibPromise) {
+    pdfjsLibPromise = import(
+      "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.min.mjs"
+    ).then((lib) => {
+      lib.GlobalWorkerOptions.workerSrc =
+        "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.worker.min.mjs";
+      return lib;
+    });
+  }
+  return pdfjsLibPromise;
+}
+
+// A phone's "scan to PDF" feature is really just a photo wrapped in a PDF
+// container — this unwraps it, rendering each page back out as its own
+// JPEG so it can go through the same resize/compress pipeline as any
+// other photo instead of storing the PDF wrapper (and its larger file
+// size) as-is.
+async function pdfToImageFiles(file) {
+  const pdfjsLib = await loadPdfJs();
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const baseName = (file.name || "scan").replace(/\.pdf$/i, "");
+  const files = [];
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    // Scale 2 renders at roughly double the PDF's native point size —
+    // plenty sharp for a scanned document without going overboard, since
+    // resizeImageForUpload will cap the final dimensions anyway.
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext("2d");
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+    if (blob) {
+      const pageSuffix = pdf.numPages > 1 ? `-p${pageNum}` : "";
+      files.push(new File([blob], `${baseName}${pageSuffix}.jpg`, { type: "image/jpeg" }));
+    }
+  }
+  return files;
 }
 
 async function uploadReferenceDocument(jobId, file) {
