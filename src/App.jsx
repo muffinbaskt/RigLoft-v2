@@ -7894,6 +7894,7 @@ function JobInventory({
   const [assigningItem, setAssigningItem] = useState(null);
   const [logOpen, setLogOpen] = useState(false);
   const [referenceDocsOpen, setReferenceDocsOpen] = useState(false);
+  const [pullFromReceivingOpen, setPullFromReceivingOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [containersOpen, setContainersOpen] = useState(false);
@@ -8845,6 +8846,18 @@ function JobInventory({
                   {isEditor && (
                     <button
                       onClick={() => {
+                        setPullFromReceivingOpen(true);
+                        setMenuOpen(false);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                    >
+                      <Inbox className="w-4 h-4 text-slate-400" />
+                      Pull from Receiving
+                    </button>
+                  )}
+                  {isEditor && (
+                    <button
+                      onClick={() => {
                         setCategorySync({ preview: buildCategorySyncPreview(), applied: false });
                         setMenuOpen(false);
                       }}
@@ -9642,6 +9655,16 @@ function JobInventory({
           isEditor={isEditor}
           onUpdateJob={onUpdateJob}
           onClose={() => setReferenceDocsOpen(false)}
+        />
+      )}
+
+      {pullFromReceivingOpen && (
+        <PullFromReceivingModal
+          targetType="job"
+          targetLabel={job.name}
+          target={job}
+          onApplyToTarget={(updatedJob) => onUpdateJob(() => updatedJob)}
+          onClose={() => setPullFromReceivingOpen(false)}
         />
       )}
 
@@ -13698,6 +13721,7 @@ function LoveListPhotosModal({ list, isEditor, onAddPhoto, onRemovePhoto, onClos
 
 function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onBack, onGoHome }) {
   const [addingItem, setAddingItem] = useState(false);
+  const [showPullFromReceiving, setShowPullFromReceiving] = useState(false);
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
   const [showPhotosModal, setShowPhotosModal] = useState(false);
@@ -14328,12 +14352,21 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           ) : (
             <button
               onClick={() => setAddingItem(true)}
-              className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 mb-4 border border-slate-700 text-slate-200 hover:bg-slate-800"
+              className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 mb-2 border border-slate-700 text-slate-200 hover:bg-slate-800"
             >
               <Plus className="w-4 h-4" />
               Add item
             </button>
           ))}
+        {isEditor && (
+          <button
+            onClick={() => setShowPullFromReceiving(true)}
+            className="w-full flex items-center justify-center gap-1.5 text-xs rounded-md py-2 mb-4 text-slate-500 hover:text-slate-300"
+          >
+            <Inbox className="w-3.5 h-3.5" />
+            Pull from Receiving
+          </button>
+        )}
         <div className="relative mb-4">
           <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
@@ -15161,6 +15194,16 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
             </div>
           </div>
         </div>
+      )}
+
+      {showPullFromReceiving && (
+        <PullFromReceivingModal
+          targetType="love_list"
+          targetLabel={list.jobLabel}
+          target={list}
+          onApplyToTarget={onUpdateList}
+          onClose={() => setShowPullFromReceiving(false)}
+        />
       )}
     </div>
   );
@@ -18029,15 +18072,513 @@ const RECEIVING_QUEUE_KEY = "warehub-receiving-queue";
 // correctly next time without ever guessing at a size from the text.
 const RECEIVING_NAME_MEMORY_KEY = "warehub-receiving-name-memory";
 
+// Shared apply-logic for a single receipt line, used both by the
+// standalone Receiving screen and by pulling a receipt directly from
+// inside a Job or Love List — same rules, same code, no matter which
+// screen someone approves from.
+function applyReceiptLineToJob(job, line, catalog) {
+  const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
+  const items = job.items || [];
+  const idx = line.catalogId ? items.findIndex((i) => i.catalogId === line.catalogId) : -1;
+
+  if (idx !== -1) {
+    const existing = items[idx];
+    const containers = [...(existing.containers || [])];
+    const unassignedIdx = containers.findIndex((c) => c.name === "Unassigned");
+    if (line.shippedQty > 0) {
+      if (unassignedIdx !== -1) {
+        containers[unassignedIdx] = {
+          ...containers[unassignedIdx],
+          qty: containers[unassignedIdx].qty + line.shippedQty,
+        };
+      } else {
+        containers.push({ name: "Unassigned", qty: line.shippedQty });
+      }
+    }
+    const updated = {
+      ...existing,
+      containers,
+      qtyHave: totalHave(containers),
+      ordered: true,
+      received: line.backorderQty > 0 ? "partial" : "yes",
+      backorderQty: line.backorderQty,
+    };
+    const nextItems = [...items];
+    nextItems[idx] = updated;
+    return { ...job, items: nextItems };
+  }
+
+  const fresh = {
+    ...emptyItem(match ? match.storage : "Unassigned"),
+    id: uniqueId(),
+    name: line.name,
+    qtyNeeded: String(line.shippedQty + line.backorderQty || 1),
+    catalogId: line.catalogId,
+    gang: match ? match.gang : "Unassigned",
+    storageDetail: match ? match.storageDetail || "" : "",
+    category: match ? match.category || "" : "",
+    needsTransfer: match ? !!match.needsTransfer : false,
+    containers: line.shippedQty > 0 ? [{ name: "Unassigned", qty: line.shippedQty }] : [],
+    qtyHave: line.shippedQty,
+    ordered: true,
+    received: line.backorderQty > 0 ? "partial" : line.shippedQty > 0 ? "yes" : "no",
+    backorderQty: line.backorderQty,
+  };
+  return { ...job, items: [...items, fresh] };
+}
+
+function applyReceiptLineToLoveList(list, line, catalog) {
+  const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
+  const items = list.items || [];
+  const idx = line.catalogId ? items.findIndex((i) => i.catalogId === line.catalogId) : -1;
+
+  if (idx !== -1) {
+    const existing = items[idx];
+    const currentHave = existing.qtyHave || 0;
+    const newHave = currentHave + line.shippedQty;
+    let receivedBatches = existing.receivedBatches || [];
+    if (line.shippedQty > 0) {
+      receivedBatches = [
+        ...receivedBatches,
+        { receivedQty: line.shippedQty, serials: [], timestamp: new Date().toISOString() },
+      ];
+    }
+    const statusOrder = ["requested", "ordered", "received", "staged", "sent"];
+    const shouldAdvance = line.shippedQty > 0 && statusOrder.indexOf(existing.status) < statusOrder.indexOf("received");
+    const updated = {
+      ...existing,
+      qtyHave: newHave,
+      receivedBatches,
+      backorderQty: line.backorderQty,
+      status: shouldAdvance ? "received" : existing.status,
+      statusDates: shouldAdvance
+        ? { ...existing.statusDates, received: new Date().toISOString().slice(0, 10) }
+        : existing.statusDates,
+    };
+    const nextItems = [...items];
+    nextItems[idx] = updated;
+    return { ...list, items: nextItems };
+  }
+
+  const fresh = newLoveListItem(line.name, line.shippedQty + line.backorderQty || 1, {
+    catalogId: line.catalogId,
+    storage: match ? match.storage : "",
+    storageDetail: match ? match.storageDetail || "" : "",
+    needsTransfer: match ? !!match.needsTransfer : false,
+    backorderQty: line.backorderQty,
+  });
+  fresh.qtyHave = line.shippedQty;
+  if (line.shippedQty > 0) {
+    fresh.status = "received";
+    fresh.statusDates.received = new Date().toISOString().slice(0, 10);
+    fresh.receivedBatches = [
+      { receivedQty: line.shippedQty, serials: [], timestamp: new Date().toISOString() },
+    ];
+  }
+  return { ...list, items: [...items, fresh] };
+}
+
+// Lets a Job or Love List pull a receipt straight in, without going
+// through the standalone Receiving section at all — same review/approve
+// mechanics, same shared apply-logic, just scoped to whichever job/list
+// you're already looking at, with the target implied instead of picked.
+function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarget, onClose }) {
+  const [queue, setQueue] = useState([]);
+  const [catalog, setCatalog] = useState([]);
+  const [nameMemory, setNameMemory] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [selectedBatchId, setSelectedBatchId] = useState(null);
+  const [relinkingLine, setRelinkingLine] = useState(null);
+  const [catalogSearch, setCatalogSearch] = useState("");
+  const [confirmingApprove, setConfirmingApprove] = useState(false);
+  const [viewingPhoto, setViewingPhoto] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [qResult, cResult, nResult] = await Promise.all([
+          getWithRetry(RECEIVING_QUEUE_KEY),
+          getWithRetry(CATALOG_KEY),
+          getWithRetry(RECEIVING_NAME_MEMORY_KEY),
+        ]);
+        if (qResult.ok && qResult.value) setQueue(JSON.parse(qResult.value));
+        if (cResult.ok && cResult.value) setCatalog(JSON.parse(cResult.value));
+        if (nResult.ok && nResult.value) setNameMemory(JSON.parse(nResult.value));
+      } catch {}
+      setLoading(false);
+    })();
+  }, []);
+
+  const saveQueue = (next) => {
+    setQueue(next);
+    saveWithRetry(RECEIVING_QUEUE_KEY, JSON.stringify(next)).catch(() => {});
+  };
+
+  const learnAlias = (catalogId, aliasText) => {
+    if (!catalogId || !aliasText || !aliasText.trim()) return;
+    const normAlias = normalizeText(aliasText.trim());
+    setCatalog((prev) => {
+      const next = prev.map((c) => {
+        if (c.id !== catalogId) return c;
+        if (normalizeText(c.name) === normAlias) return c;
+        const existing = c.aliases || [];
+        if (existing.some((a) => normalizeText(a) === normAlias)) return c;
+        return { ...c, aliases: [...existing, aliasText.trim()] };
+      });
+      saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
+  const pending = queue.filter((b) => b.status === "pending");
+  const selectedBatch = queue.find((b) => b.id === selectedBatchId) || null;
+
+  const updateSelectedBatch = (changes) => {
+    const updated = { ...selectedBatch, ...changes };
+    saveQueue(queue.map((b) => (b.id === updated.id ? updated : b)));
+  };
+  const updateLine = (lineId, changes) => {
+    updateSelectedBatch({
+      lines: selectedBatch.lines.map((l) => (l.id === lineId ? { ...l, ...changes } : l)),
+    });
+  };
+  const removeLine = (lineId) => {
+    updateSelectedBatch({ lines: selectedBatch.lines.filter((l) => l.id !== lineId) });
+  };
+  const cloneLine = (lineId) => {
+    const idx = selectedBatch.lines.findIndex((l) => l.id === lineId);
+    if (idx === -1) return;
+    const clone = { ...selectedBatch.lines[idx], id: uniqueId() };
+    const nextLines = [
+      ...selectedBatch.lines.slice(0, idx + 1),
+      clone,
+      ...selectedBatch.lines.slice(idx + 1),
+    ];
+    updateSelectedBatch({ lines: nextLines });
+  };
+
+  // Only lines nobody's already claimed for a different job/list show up
+  // here — this is a claiming action scoped to whatever job/list you
+  // opened this from, not a takeover of the whole receipt.
+  const availableLines = selectedBatch ? selectedBatch.lines.filter((l) => !l.targetId) : [];
+
+  const approve = () => {
+    const validLines = availableLines.filter((l) => l.name.trim());
+    let updatedTarget = target;
+    validLines.forEach((line) => {
+      updatedTarget =
+        targetType === "job"
+          ? applyReceiptLineToJob(updatedTarget, line, catalog)
+          : applyReceiptLineToLoveList(updatedTarget, line, catalog);
+    });
+    onApplyToTarget(updatedTarget);
+
+    const nextMemory = { ...nameMemory };
+    validLines.forEach((line) => {
+      if (line.rawName) nextMemory[normalizeText(line.rawName)] = line.name.trim();
+    });
+    saveWithRetry(RECEIVING_NAME_MEMORY_KEY, JSON.stringify(nextMemory)).catch(() => {});
+
+    playSaveChime();
+    // Claimed lines come off the batch; anything else (already claimed
+    // elsewhere, or still genuinely unassigned) stays in the queue for
+    // the standalone Receiving screen or another job/list to pick up.
+    const remainingLines = selectedBatch.lines.filter((l) => !validLines.includes(l));
+    const updatedBatch =
+      remainingLines.length === 0
+        ? { ...selectedBatch, lines: remainingLines, status: "approved", approvedAt: new Date().toISOString() }
+        : { ...selectedBatch, lines: remainingLines };
+    saveQueue(queue.map((b) => (b.id === selectedBatch.id ? updatedBatch : b)));
+    setConfirmingApprove(false);
+    onClose();
+  };
+
+  if (loading) {
+    return (
+      <div className="fixed inset-0 z-[70] bg-black/70 flex items-center justify-center">
+        <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  // Step 1 — pick which pending receipt this is
+  if (!selectedBatch) {
+    return (
+      <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4 py-8">
+        <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+            <h2 className="text-slate-100 font-semibold text-base">Pull from Receiving</h2>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            {pending.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-8">
+                Nothing waiting in Receiving right now.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {pending.map((b) => (
+                  <button
+                    key={b.id}
+                    onClick={() => setSelectedBatchId(b.id)}
+                    className="w-full text-left bg-slate-800/40 border border-slate-800 rounded-lg p-3 hover:border-slate-700 flex items-center gap-3"
+                  >
+                    {b.photoUrl && (
+                      <img src={b.photoUrl} alt="" className="w-11 h-11 rounded-md object-cover border border-slate-800 shrink-0" />
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-sm text-slate-100 truncate">
+                        {b.label ? b.label : `${b.lines.length} item${b.lines.length === 1 ? "" : "s"} scanned`}
+                      </p>
+                      <p className="text-xs text-slate-500">{formatTaskTimestamp(b.scannedAt)}</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Step 2 — edit lines, then approve straight into this job/list
+  return (
+    <div className="fixed inset-0 z-[70] bg-slate-950 text-slate-100 overflow-y-auto">
+      <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
+        <button
+          onClick={() => setSelectedBatchId(null)}
+          className="text-slate-400 hover:text-slate-200 flex items-center gap-1.5"
+        >
+          <ChevronLeft className="w-5 h-5" />
+          <span className="text-sm">Back</span>
+        </button>
+        <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+          <X className="w-5 h-5" />
+        </button>
+      </header>
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        <p className="text-xs text-slate-500 mb-4">
+          Adding to <span className="text-slate-300">{targetLabel}</span> — nothing's added
+          until you approve below.
+        </p>
+        {selectedBatch.photoUrl && (
+          <button
+            onClick={() => setViewingPhoto(selectedBatch.photoUrl)}
+            className="w-full mb-4 rounded-lg overflow-hidden border border-slate-800"
+          >
+            <img src={selectedBatch.photoUrl} alt="Receipt" className="w-full max-h-48 object-cover" />
+          </button>
+        )}
+        <div className="space-y-2 mb-6">
+          {availableLines.map((line) => {
+            const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
+            return (
+              <div key={line.id} className="border border-slate-800 rounded-lg p-2.5 bg-slate-900/60">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <input
+                    value={line.name}
+                    onChange={(e) => updateLine(line.id, { name: e.target.value })}
+                    className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                  />
+                  <button
+                    onClick={() => cloneLine(line.id)}
+                    title="Clone this line"
+                    className="text-slate-500 hover:text-amber-400 shrink-0 p-1"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => removeLine(line.id)}
+                    className="text-slate-500 hover:text-red-400 shrink-0 p-1"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <div className="flex-1">
+                    <label className="block text-[10px] text-slate-500 mb-0.5">Shipped</label>
+                    <input
+                      type="number"
+                      min="0"
+                      onFocus={selectOnFocus}
+                      onClick={selectOnFocus}
+                      value={line.shippedQty}
+                      onChange={(e) => updateLine(line.id, { shippedQty: Number(e.target.value) || 0 })}
+                      className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-emerald-500/60"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-[10px] text-slate-500 mb-0.5">Backorder</label>
+                    <input
+                      type="number"
+                      min="0"
+                      onFocus={selectOnFocus}
+                      onClick={selectOnFocus}
+                      value={line.backorderQty}
+                      onChange={(e) => updateLine(line.id, { backorderQty: Number(e.target.value) || 0 })}
+                      className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-red-500/60"
+                    />
+                  </div>
+                </div>
+                {match ? (
+                  <button
+                    onClick={() => {
+                      setRelinkingLine(line);
+                      setCatalogSearch("");
+                    }}
+                    className="text-[11px] text-emerald-400 hover:underline decoration-dotted"
+                  >
+                    🔗 linked to "{match.name}" · Change
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setRelinkingLine(line);
+                      setCatalogSearch("");
+                    }}
+                    className="text-[11px] text-slate-500 hover:text-slate-300 hover:underline decoration-dotted"
+                  >
+                    No catalog match — 🔍 link manually
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </main>
+
+      <div className="sticky bottom-0 bg-slate-950/95 backdrop-blur border-t border-slate-800 px-4 py-4">
+        <div className="max-w-2xl mx-auto">
+          <button
+            onClick={() => setConfirmingApprove(true)}
+            disabled={!availableLines.some((l) => l.name.trim())}
+            className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+          >
+            Approve &amp; add to {targetLabel}
+          </button>
+        </div>
+      </div>
+
+      {relinkingLine && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 px-4 py-8">
+          <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold text-sm truncate">
+                Link "{relinkingLine.name}" to...
+              </h3>
+              <button
+                onClick={() => {
+                  setRelinkingLine(null);
+                  setCatalogSearch("");
+                }}
+                className="text-slate-400 hover:text-slate-200 shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-5 pt-4 shrink-0">
+              <input
+                autoFocus
+                value={catalogSearch}
+                onChange={(e) => setCatalogSearch(e.target.value)}
+                placeholder="Search catalog..."
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {relinkingLine.catalogId && (
+                <button
+                  onClick={() => {
+                    updateLine(relinkingLine.id, { catalogId: null });
+                    setRelinkingLine(null);
+                    setCatalogSearch("");
+                  }}
+                  className="w-full text-left text-sm rounded-md px-3 py-2 border border-red-800/40 text-red-400 hover:bg-red-500/10 mb-2"
+                >
+                  Unlink from catalog
+                </button>
+              )}
+              {catalog
+                .filter((c) => c.name.toLowerCase().includes(catalogSearch.trim().toLowerCase()))
+                .slice(0, 50)
+                .map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => {
+                      updateLine(relinkingLine.id, { catalogId: c.id });
+                      learnAlias(c.id, relinkingLine.rawName);
+                      setRelinkingLine(null);
+                      setCatalogSearch("");
+                    }}
+                    className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-800 hover:border-slate-700 mb-1.5"
+                  >
+                    <p className="text-slate-100">{c.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {c.storage}
+                      {c.needsTransfer ? " · 🚚 needs transfer" : ""}
+                    </p>
+                  </button>
+                ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {viewingPhoto && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
+          onClick={() => setViewingPhoto(null)}
+        >
+          <button
+            onClick={() => setViewingPhoto(null)}
+            className="absolute top-4 right-4 text-slate-300 hover:text-white"
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <ZoomableImage key={viewingPhoto} src={viewingPhoto} alt="Receipt" />
+        </div>
+      )}
+
+      {confirmingApprove && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-1.5">Approve this receipt?</h3>
+            <p className="text-slate-400 text-sm mb-5">
+              {availableLines.filter((l) => l.name.trim()).length} item(s) will be added to{" "}
+              {targetLabel}. Review carefully — this writes real inventory changes.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmingApprove(false)}
+                className="flex-1 text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={approve}
+                className="flex-1 text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Approve
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function newReceiptBatch(photoUrl, path, lines) {
   return {
     id: uniqueId(),
+    label: "", // optional placeholder name — "Pallet 2", "Beater Pallet", etc.
     photoUrl,
     photoPath: path,
     scannedAt: new Date().toISOString(),
-    status: "pending", // "pending" | "approved" | "discarded"
-    targetType: null, // "job" | "love_list"
-    targetId: null,
+    status: "pending", // "pending" | "approved" | "discarded" — approved once every line's been applied somewhere
     lines,
     approvedAt: null,
   };
@@ -18138,6 +18679,12 @@ function ReceivingApp({ onGoHome }) {
           catalogId: match ? match.id : null,
           backorderQty: Number(it.backorderQty) > 0 ? Number(it.backorderQty) : 0,
           shippedQty: Number(it.shippedQty) > 0 ? Number(it.shippedQty) : 0,
+          // Target lives on the LINE, not the whole receipt — a single PO
+          // can genuinely cover materials for two different Love Lists
+          // and a job all at once, so each line needs to be routable on
+          // its own rather than the whole batch pointing one place.
+          targetType: null,
+          targetId: null,
         };
       });
 
@@ -18188,134 +18735,54 @@ function ReceivingApp({ onGoHome }) {
   // here), and the backorder figure is set to whatever this receipt says
   // is still outstanding. No match at all means a brand new item, using
   // the catalog entry's usual defaults if one was linked.
-  const applyLineToJob = (job, line) => {
-    const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
-    const items = job.items || [];
-    const idx = line.catalogId ? items.findIndex((i) => i.catalogId === line.catalogId) : -1;
-
-    if (idx !== -1) {
-      const existing = items[idx];
-      const containers = [...(existing.containers || [])];
-      const unassignedIdx = containers.findIndex((c) => c.name === "Unassigned");
-      if (line.shippedQty > 0) {
-        if (unassignedIdx !== -1) {
-          containers[unassignedIdx] = {
-            ...containers[unassignedIdx],
-            qty: containers[unassignedIdx].qty + line.shippedQty,
-          };
-        } else {
-          containers.push({ name: "Unassigned", qty: line.shippedQty });
-        }
-      }
-      const updated = {
-        ...existing,
-        containers,
-        qtyHave: totalHave(containers),
-        ordered: true,
-        received: line.backorderQty > 0 ? "partial" : "yes",
-        backorderQty: line.backorderQty,
-      };
-      const nextItems = [...items];
-      nextItems[idx] = updated;
-      return { ...job, items: nextItems };
-    }
-
-    const fresh = {
-      ...emptyItem(match ? match.storage : "Unassigned"),
-      id: uniqueId(),
-      name: line.name,
-      qtyNeeded: String(line.shippedQty + line.backorderQty || 1),
-      catalogId: line.catalogId,
-      gang: match ? match.gang : "Unassigned",
-      storageDetail: match ? match.storageDetail || "" : "",
-      category: match ? match.category || "" : "",
-      needsTransfer: match ? !!match.needsTransfer : false,
-      containers: line.shippedQty > 0 ? [{ name: "Unassigned", qty: line.shippedQty }] : [],
-      qtyHave: line.shippedQty,
-      ordered: true,
-      received: line.backorderQty > 0 ? "partial" : line.shippedQty > 0 ? "yes" : "no",
-      backorderQty: line.backorderQty,
-    };
-    return { ...job, items: [...items, fresh] };
-  };
+  const applyLineToJob = (job, line) => applyReceiptLineToJob(job, line, catalog);
 
   // Same idea for a Love List — existing item gets Have bumped (with the
   // same "catch up the received-batch history" treatment the qty box
   // already does elsewhere, so the delivery record stays honest even
   // though this arrived through Receiving instead of the usual stepper),
   // status only advances if something actually showed up.
-  const applyLineToLoveList = (list, line) => {
-    const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
-    const items = list.items || [];
-    const idx = line.catalogId ? items.findIndex((i) => i.catalogId === line.catalogId) : -1;
+  const applyLineToLoveList = (list, line) => applyReceiptLineToLoveList(list, line, catalog);
 
-    if (idx !== -1) {
-      const existing = items[idx];
-      const currentHave = existing.qtyHave || 0;
-      const newHave = currentHave + line.shippedQty;
-      let receivedBatches = existing.receivedBatches || [];
-      if (line.shippedQty > 0) {
-        receivedBatches = [
-          ...receivedBatches,
-          { receivedQty: line.shippedQty, serials: [], timestamp: new Date().toISOString() },
-        ];
-      }
-      const statusOrder = ["requested", "ordered", "received", "staged", "sent"];
-      const shouldAdvance = line.shippedQty > 0 && statusOrder.indexOf(existing.status) < statusOrder.indexOf("received");
-      const updated = {
-        ...existing,
-        qtyHave: newHave,
-        receivedBatches,
-        backorderQty: line.backorderQty,
-        status: shouldAdvance ? "received" : existing.status,
-        statusDates: shouldAdvance
-          ? { ...existing.statusDates, received: new Date().toISOString().slice(0, 10) }
-          : existing.statusDates,
-      };
-      const nextItems = [...items];
-      nextItems[idx] = updated;
-      return { ...list, items: nextItems };
-    }
-
-    const fresh = newLoveListItem(line.name, line.shippedQty + line.backorderQty || 1, {
-      catalogId: line.catalogId,
-      storage: match ? match.storage : "",
-      storageDetail: match ? match.storageDetail || "" : "",
-      needsTransfer: match ? !!match.needsTransfer : false,
-      backorderQty: line.backorderQty,
-    });
-    fresh.qtyHave = line.shippedQty;
-    if (line.shippedQty > 0) {
-      fresh.status = "received";
-      fresh.statusDates.received = new Date().toISOString().slice(0, 10);
-      fresh.receivedBatches = [
-        { receivedQty: line.shippedQty, serials: [], timestamp: new Date().toISOString() },
-      ];
-    }
-    return { ...list, items: [...items, fresh] };
-  };
-
+  // Only processes lines that actually have a target assigned — lines
+  // still waiting on a decision stay behind in the batch untouched. That
+  // means one receipt covering two Love Lists and a job can be approved
+  // in pieces as each line gets sorted out, rather than all-or-nothing.
   const approveBatch = async (batch) => {
-    if (!batch.targetType || !batch.targetId) return;
-    const validLines = batch.lines.filter((l) => l.name.trim());
-    if (batch.targetType === "job") {
-      const job = jobs.find((j) => j.id === batch.targetId);
-      if (!job) return;
-      let updatedJob = job;
-      validLines.forEach((line) => {
-        updatedJob = applyLineToJob(updatedJob, line);
+    const assignedLines = batch.lines.filter((l) => l.name.trim() && l.targetType && l.targetId);
+    if (assignedLines.length === 0) return;
+
+    const jobGroups = {};
+    const listGroups = {};
+    assignedLines.forEach((line) => {
+      const bucket = line.targetType === "job" ? jobGroups : listGroups;
+      (bucket[line.targetId] = bucket[line.targetId] || []).push(line);
+    });
+
+    if (Object.keys(jobGroups).length > 0) {
+      const nextJobs = jobs.map((j) => {
+        const jobLines = jobGroups[j.id];
+        if (!jobLines) return j;
+        let updated = j;
+        jobLines.forEach((line) => {
+          updated = applyLineToJob(updated, line);
+        });
+        return updated;
       });
-      const nextJobs = jobs.map((j) => (j.id === updatedJob.id ? updatedJob : j));
       setJobs(nextJobs);
       await saveWithRetry(JOBS_KEY, JSON.stringify(nextJobs));
-    } else {
-      const list = lists.find((l) => l.id === batch.targetId);
-      if (!list) return;
-      let updatedList = list;
-      validLines.forEach((line) => {
-        updatedList = applyLineToLoveList(updatedList, line);
+    }
+
+    if (Object.keys(listGroups).length > 0) {
+      const nextLists = lists.map((l) => {
+        const listLines = listGroups[l.id];
+        if (!listLines) return l;
+        let updated = l;
+        listLines.forEach((line) => {
+          updated = applyLineToLoveList(updated, line);
+        });
+        return updated;
       });
-      const nextLists = lists.map((l) => (l.id === updatedList.id ? updatedList : l));
       setLists(nextLists);
       await saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(nextLists));
     }
@@ -18325,19 +18792,24 @@ function ReceivingApp({ onGoHome }) {
     // "Beater, 4lb" SKU string, say) come back auto-filled correctly next
     // time, instead of needing the size retyped every single receipt.
     const nextMemory = { ...nameMemory };
-    validLines.forEach((line) => {
+    assignedLines.forEach((line) => {
       if (line.rawName) nextMemory[normalizeText(line.rawName)] = line.name.trim();
     });
     setNameMemory(nextMemory);
     saveWithRetry(RECEIVING_NAME_MEMORY_KEY, JSON.stringify(nextMemory)).catch(() => {});
 
     playSaveChime();
-    saveQueue(
-      queue.map((b) =>
-        b.id === batch.id ? { ...b, status: "approved", approvedAt: new Date().toISOString() } : b
-      )
-    );
-    setActiveBatchId(null);
+
+    // Applied lines come off the batch entirely — whatever's left (never
+    // assigned, or intentionally left for later) stays pending. Only once
+    // nothing's left does the whole receipt move to history.
+    const remainingLines = batch.lines.filter((l) => !assignedLines.includes(l));
+    const updatedBatch =
+      remainingLines.length === 0
+        ? { ...batch, lines: remainingLines, status: "approved", approvedAt: new Date().toISOString() }
+        : { ...batch, lines: remainingLines };
+    saveQueue(queue.map((b) => (b.id === batch.id ? updatedBatch : b)));
+    if (remainingLines.length === 0) setActiveBatchId(null);
   };
 
   if (loading) {
@@ -18352,20 +18824,42 @@ function ReceivingApp({ onGoHome }) {
   const history = queue.filter((b) => b.status !== "pending");
   const activeBatch = queue.find((b) => b.id === activeBatchId) || null;
 
+  // Defined once, rendered in both return paths below — this used to
+  // live only in the list-view return, which meant opening a photo while
+  // reviewing a receipt set state with nowhere to actually display until
+  // you left that screen.
+  const photoViewerOverlay = viewingPhoto && (
+    <div
+      className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
+      onClick={() => setViewingPhoto(null)}
+    >
+      <button
+        onClick={() => setViewingPhoto(null)}
+        className="absolute top-4 right-4 text-slate-300 hover:text-white"
+      >
+        <X className="w-6 h-6" />
+      </button>
+      <ZoomableImage key={viewingPhoto} src={viewingPhoto} alt="Receipt" />
+    </div>
+  );
+
   if (activeBatch) {
     return (
-      <ReceivingBatchReview
-        batch={activeBatch}
-        jobs={jobs}
-        lists={lists}
-        catalog={catalog}
-        onUpdateBatch={updateBatch}
-        onLearnAlias={learnAlias}
-        onApprove={approveBatch}
-        onDiscard={discardBatch}
-        onViewPhoto={setViewingPhoto}
-        onBack={() => setActiveBatchId(null)}
-      />
+      <>
+        <ReceivingBatchReview
+          batch={activeBatch}
+          jobs={jobs}
+          lists={lists}
+          catalog={catalog}
+          onUpdateBatch={updateBatch}
+          onLearnAlias={learnAlias}
+          onApprove={approveBatch}
+          onDiscard={discardBatch}
+          onViewPhoto={setViewingPhoto}
+          onBack={() => setActiveBatchId(null)}
+        />
+        {photoViewerOverlay}
+      </>
     );
   }
 
@@ -18423,9 +18917,14 @@ function ReceivingApp({ onGoHome }) {
                   <img src={b.photoUrl} alt="" className="w-12 h-12 rounded-md object-cover border border-slate-800 shrink-0" />
                 )}
                 <div className="min-w-0">
-                  <p className="text-sm text-slate-100">
-                    {b.lines.length} item{b.lines.length === 1 ? "" : "s"} scanned
+                  <p className="text-sm text-slate-100 truncate">
+                    {b.label ? b.label : `${b.lines.length} item${b.lines.length === 1 ? "" : "s"} scanned`}
                   </p>
+                  {b.label && (
+                    <p className="text-xs text-slate-600">
+                      {b.lines.length} item{b.lines.length === 1 ? "" : "s"}
+                    </p>
+                  )}
                   <p className="text-xs text-slate-500">{formatTaskTimestamp(b.scannedAt)}</p>
                 </div>
               </button>
@@ -18451,7 +18950,8 @@ function ReceivingApp({ onGoHome }) {
                     <img src={b.photoUrl} alt="" className="w-10 h-10 rounded-md object-cover border border-slate-800 shrink-0" />
                   )}
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm text-slate-100">
+                    <p className="text-sm text-slate-100 truncate">
+                      {b.label ? `${b.label} · ` : ""}
                       {b.lines.length} item{b.lines.length === 1 ? "" : "s"} ·{" "}
                       <span className={b.status === "approved" ? "text-emerald-400" : "text-slate-500"}>
                         {b.status === "approved" ? "Approved" : "Discarded"}
@@ -18466,20 +18966,7 @@ function ReceivingApp({ onGoHome }) {
         )}
       </main>
 
-      {viewingPhoto && (
-        <div
-          className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
-          onClick={() => setViewingPhoto(null)}
-        >
-          <button
-            onClick={() => setViewingPhoto(null)}
-            className="absolute top-4 right-4 text-slate-300 hover:text-white"
-          >
-            <X className="w-6 h-6" />
-          </button>
-          <ZoomableImage key={viewingPhoto} src={viewingPhoto} alt="Receipt" />
-        </div>
-      )}
+      {photoViewerOverlay}
     </div>
   );
 }
@@ -18488,13 +18975,16 @@ function ReceivingApp({ onGoHome }) {
 // fix up anything OCR misread, link unmatched names to the catalog, pick
 // which Job or Love List this shipment belongs to, then approve.
 function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLearnAlias, onApprove, onDiscard, onViewPhoto, onBack }) {
-  const [targetType, setTargetType] = useState(batch.targetType);
-  const [targetId, setTargetId] = useState(batch.targetId);
-  const [targetSearch, setTargetSearch] = useState("");
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const [confirmingApprove, setConfirmingApprove] = useState(false);
   const [relinkingLine, setRelinkingLine] = useState(null);
   const [catalogSearch, setCatalogSearch] = useState("");
+  // Assigning a target opens the same picker whether it's for one line or
+  // "everything unassigned" — this tracks which mode/line it's currently
+  // working on.
+  const [assigningLine, setAssigningLine] = useState(null); // a line object, or "bulk" for the shortcut
+  const [assignTargetType, setAssignTargetType] = useState(null);
+  const [targetSearch, setTargetSearch] = useState("");
 
   const updateLine = (lineId, changes) => {
     onUpdateBatch({
@@ -18515,30 +19005,66 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
 
   const jobOptions = jobs.filter((j) => !j.archived);
   const listOptions = lists.filter((l) => !l.archived);
-  const filteredTargets = (targetType === "job" ? jobOptions : listOptions).filter((t) => {
-    const label = targetType === "job" ? t.name : t.jobLabel;
-    return !targetSearch.trim() || (label || "").toLowerCase().includes(targetSearch.toLowerCase());
+  const filteredTargets = (assignTargetType === "job" ? jobOptions : listOptions).filter((t) => {
+    const q = targetSearch.trim().toLowerCase();
+    if (!q) return true;
+    if (assignTargetType === "job") return (t.name || "").toLowerCase().includes(q);
+    const haystack = [t.jobLabel, t.subJobLabel, t.submittedBy, t.dateReceived]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(q);
   });
 
-  const chooseTarget = (id) => {
-    setTargetId(id);
-    onUpdateBatch({ ...batch, targetType, targetId: id });
+  const targetLabelFor = (line) => {
+    if (!line.targetId) return null;
+    if (line.targetType === "job") {
+      const j = jobs.find((x) => x.id === line.targetId);
+      return j ? j.name : null;
+    }
+    const l = lists.find((x) => x.id === line.targetId);
+    return l ? `${l.jobLabel}${l.subJobLabel ? ` — ${l.subJobLabel}` : ""}` : null;
   };
 
-  const canApprove = targetType && targetId && batch.lines.some((l) => l.name.trim());
+  const chooseTarget = (t) => {
+    if (assigningLine === "bulk") {
+      // Only fills in lines that don't already have a target — this is a
+      // shortcut for the common "whole receipt goes one place" case, not
+      // a bulk override of things already deliberately assigned elsewhere.
+      onUpdateBatch({
+        ...batch,
+        lines: batch.lines.map((l) =>
+          l.targetId ? l : { ...l, targetType: assignTargetType, targetId: t.id }
+        ),
+      });
+    } else if (assigningLine) {
+      updateLine(assigningLine.id, { targetType: assignTargetType, targetId: t.id });
+    }
+    setAssigningLine(null);
+    setAssignTargetType(null);
+    setTargetSearch("");
+  };
+
+  const assignedCount = batch.lines.filter((l) => l.name.trim() && l.targetId).length;
+  const canApprove = assignedCount > 0;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
         <button onClick={onBack} className="text-slate-400 hover:text-slate-200 flex items-center gap-1.5">
           <ChevronLeft className="w-5 h-5" />
-          <span className="text-sm">Back</span>
+          <span className="text-sm">Back — saves automatically</span>
         </button>
         <button onClick={() => setConfirmingDiscard(true)} className="text-xs text-slate-500 hover:text-red-400">
           Discard
         </button>
       </header>
       <main className="max-w-2xl mx-auto px-4 py-5">
+        <p className="text-xs text-slate-500 mb-4">
+          Every line picks its own destination — one receipt can split across several jobs and
+          Love Lists. Nothing gets added anywhere until you tap Approve, and only lines with a
+          destination chosen get applied.
+        </p>
         {batch.photoUrl && (
           <button
             onClick={() => onViewPhoto(batch.photoUrl)}
@@ -18548,69 +19074,30 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
           </button>
         )}
 
-        <p className="text-xs font-medium text-slate-400 mb-2">Apply this receipt to</p>
-        <div className="flex gap-2 mb-3">
-          <button
-            onClick={() => {
-              setTargetType("job");
-              setTargetId(null);
-              onUpdateBatch({ ...batch, targetType: "job", targetId: null });
-            }}
-            className={`flex-1 text-sm rounded-md py-2 border ${
-              targetType === "job" ? "bg-amber-500/15 border-amber-500/40 text-amber-300" : "border-slate-700 text-slate-400"
-            }`}
-          >
-            Job
-          </button>
-          <button
-            onClick={() => {
-              setTargetType("love_list");
-              setTargetId(null);
-              onUpdateBatch({ ...batch, targetType: "love_list", targetId: null });
-            }}
-            className={`flex-1 text-sm rounded-md py-2 border ${
-              targetType === "love_list" ? "bg-rose-500/15 border-rose-500/40 text-rose-300" : "border-slate-700 text-slate-400"
-            }`}
-          >
-            Love List
-          </button>
-        </div>
+        <label className="block text-xs font-medium text-slate-400 mb-1.5">
+          Name this receipt (optional)
+        </label>
+        <input
+          value={batch.label || ""}
+          onChange={(e) => onUpdateBatch({ ...batch, label: e.target.value })}
+          placeholder="e.g. Pallet 2, Beater Pallet..."
+          className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+        />
 
-        {targetType && (
-          <>
-            <input
-              value={targetSearch}
-              onChange={(e) => setTargetSearch(e.target.value)}
-              placeholder={targetType === "job" ? "Search jobs..." : "Search Love Lists..."}
-              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-            />
-            <div className="max-h-40 overflow-y-auto space-y-1 mb-4 border border-slate-800 rounded-md p-1.5">
-              {filteredTargets.length === 0 ? (
-                <p className="text-xs text-slate-500 text-center py-3">No matches.</p>
-              ) : (
-                filteredTargets.map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => chooseTarget(t.id)}
-                    className={`w-full text-left text-sm rounded-md px-2.5 py-1.5 ${
-                      targetId === t.id ? "bg-amber-500/15 text-amber-300" : "text-slate-300 hover:bg-slate-800"
-                    }`}
-                  >
-                    {targetType === "job" ? t.name : t.jobLabel}
-                    {targetType === "love_list" && t.subJobLabel ? ` — ${t.subJobLabel}` : ""}
-                  </button>
-                ))
-              )}
-            </div>
-          </>
-        )}
+        <button
+          onClick={() => setAssigningLine("bulk")}
+          className="w-full text-left text-xs text-slate-400 hover:text-slate-200 border border-dashed border-slate-700 rounded-md px-3 py-2 mb-4"
+        >
+          Assign everything still unassigned to one job or Love List →
+        </button>
 
         <p className="text-xs font-medium text-slate-400 mb-2">
-          Line items ({batch.lines.length})
+          Line items ({batch.lines.length}) — {assignedCount} assigned
         </p>
         <div className="space-y-2 mb-6">
           {batch.lines.map((line) => {
             const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
+            const targetLabel = targetLabelFor(line);
             return (
               <div key={line.id} className="border border-slate-800 rounded-lg p-2.5 bg-slate-900/60">
                 <div className="flex items-center gap-2 mb-1.5">
@@ -18665,7 +19152,7 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
                       setRelinkingLine(line);
                       setCatalogSearch("");
                     }}
-                    className="text-[11px] text-emerald-400 hover:underline decoration-dotted"
+                    className="text-[11px] text-emerald-400 hover:underline decoration-dotted block mb-1"
                   >
                     🔗 linked to "{match.name}" · Change
                   </button>
@@ -18675,11 +19162,23 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
                       setRelinkingLine(line);
                       setCatalogSearch("");
                     }}
-                    className="text-[11px] text-slate-500 hover:text-slate-300 hover:underline decoration-dotted"
+                    className="text-[11px] text-slate-500 hover:text-slate-300 hover:underline decoration-dotted block mb-1"
                   >
                     No catalog match — 🔍 link manually
                   </button>
                 )}
+                <button
+                  onClick={() => {
+                    setAssigningLine(line);
+                    setAssignTargetType(line.targetType || null);
+                    setTargetSearch("");
+                  }}
+                  className={`text-[11px] hover:underline decoration-dotted block ${
+                    targetLabel ? "text-sky-400" : "text-amber-400"
+                  }`}
+                >
+                  {targetLabel ? `→ ${targetLabel} · Change` : "Not assigned yet — 📍 pick a destination"}
+                </button>
               </div>
             );
           })}
@@ -18693,7 +19192,7 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
             disabled={!canApprove}
             className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
           >
-            Approve &amp; add to {targetType === "job" ? "job" : "Love List"}
+            Approve {assignedCount} assigned item{assignedCount === 1 ? "" : "s"}
           </button>
         </div>
       </div>
@@ -18710,11 +19209,11 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
       {confirmingApprove && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
           <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
-            <h3 className="text-slate-100 font-semibold mb-1.5">Approve this receipt?</h3>
+            <h3 className="text-slate-100 font-semibold mb-1.5">Approve assigned items?</h3>
             <p className="text-slate-400 text-sm mb-5">
-              {batch.lines.filter((l) => l.name.trim()).length} item(s) will be added to the
-              selected {targetType === "job" ? "job" : "Love List"}. Review carefully — this
-              writes real inventory changes.
+              {assignedCount} item(s) will be added to whatever job or Love List each one is
+              assigned to. Anything still unassigned stays in the queue for later. Review
+              carefully — this writes real inventory changes.
             </p>
             <div className="flex gap-3">
               <button
@@ -18809,6 +19308,107 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
                   </button>
                 ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {assigningLine && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4 py-8">
+          <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold text-sm truncate">
+                {assigningLine === "bulk" ? "Assign unassigned lines to..." : `Send "${assigningLine.name}" to...`}
+              </h3>
+              <button
+                onClick={() => {
+                  setAssigningLine(null);
+                  setAssignTargetType(null);
+                  setTargetSearch("");
+                }}
+                className="text-slate-400 hover:text-slate-200 shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-5 pt-4 shrink-0">
+              <div className="flex gap-2 mb-3">
+                <button
+                  onClick={() => {
+                    setAssignTargetType("job");
+                    setTargetSearch("");
+                  }}
+                  className={`flex-1 text-sm rounded-md py-2 border ${
+                    assignTargetType === "job"
+                      ? "bg-amber-500/15 border-amber-500/40 text-amber-300"
+                      : "border-slate-700 text-slate-400"
+                  }`}
+                >
+                  Job
+                </button>
+                <button
+                  onClick={() => {
+                    setAssignTargetType("love_list");
+                    setTargetSearch("");
+                  }}
+                  className={`flex-1 text-sm rounded-md py-2 border ${
+                    assignTargetType === "love_list"
+                      ? "bg-rose-500/15 border-rose-500/40 text-rose-300"
+                      : "border-slate-700 text-slate-400"
+                  }`}
+                >
+                  Love List
+                </button>
+              </div>
+              {assignTargetType && (
+                <input
+                  autoFocus
+                  value={targetSearch}
+                  onChange={(e) => setTargetSearch(e.target.value)}
+                  placeholder={
+                    assignTargetType === "job" ? "Search jobs..." : "Search by nickname, submitter, or date..."
+                  }
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-1 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                />
+              )}
+            </div>
+            {assignTargetType && (
+              <div className="flex-1 overflow-y-auto px-5 py-4">
+                {filteredTargets.length === 0 ? (
+                  <p className="text-xs text-slate-500 text-center py-3">No matches.</p>
+                ) : (
+                  filteredTargets.map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => chooseTarget(t)}
+                      className="w-full text-left text-sm rounded-md px-2.5 py-1.5 text-slate-300 hover:bg-slate-800 mb-1"
+                    >
+                      {assignTargetType === "job" ? (
+                        t.name
+                      ) : (
+                        <>
+                          <p>
+                            {t.jobLabel}
+                            {t.subJobLabel ? ` — ${t.subJobLabel}` : ""}
+                          </p>
+                          {/* Most Love Lists share the same jobLabel — this
+                              line is what actually tells identical-looking
+                              options apart. */}
+                          <p className="text-xs opacity-70">
+                            {[
+                              t.submittedBy && `Submitted by ${t.submittedBy}`,
+                              t.dateReceived,
+                              `${(t.items || []).length} item${(t.items || []).length === 1 ? "" : "s"}`,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </p>
+                        </>
+                      )}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
