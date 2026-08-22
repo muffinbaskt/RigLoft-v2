@@ -18602,6 +18602,8 @@ function ReceivingApp({ onGoHome }) {
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
   const [viewingPhoto, setViewingPhoto] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [confirmingClearDiscarded, setConfirmingClearDiscarded] = useState(false);
   const fileInputRef = useRef(null);
 
   const load = async () => {
@@ -18726,6 +18728,16 @@ function ReceivingApp({ onGoHome }) {
     if (batch.photoPath) deleteReferenceDocument(batch.photoPath).catch(() => {});
     saveQueue(queue.map((b) => (b.id === batch.id ? { ...b, status: "discarded" } : b)));
     setActiveBatchId(null);
+  };
+
+  // Fully removes a history entry — discardBatch above already deletes
+  // the photo file itself; this just clears the leftover queue record so
+  // discarded (or old approved) receipts don't pile up forever.
+  const deleteBatch = (id) => {
+    saveQueue(queue.filter((b) => b.id !== id));
+  };
+  const clearDiscarded = () => {
+    saveQueue(queue.filter((b) => b.status !== "discarded"));
   };
 
   // Applying an approved line to a Job — items are matched by catalogId;
@@ -18932,13 +18944,23 @@ function ReceivingApp({ onGoHome }) {
           )}
         </div>
 
-        <button
-          onClick={() => setShowHistory((v) => !v)}
-          className="w-full text-left text-xs font-medium text-slate-400 mb-2 flex items-center gap-1.5"
-        >
-          <History className="w-3.5 h-3.5" />
-          History ({history.length}) {showHistory ? "▲" : "▼"}
-        </button>
+        <div className="flex items-center justify-between mb-2">
+          <button
+            onClick={() => setShowHistory((v) => !v)}
+            className="text-left text-xs font-medium text-slate-400 flex items-center gap-1.5"
+          >
+            <History className="w-3.5 h-3.5" />
+            History ({history.length}) {showHistory ? "▲" : "▼"}
+          </button>
+          {showHistory && history.some((b) => b.status === "discarded") && (
+            <button
+              onClick={() => setConfirmingClearDiscarded(true)}
+              className="text-xs text-slate-500 hover:text-red-400"
+            >
+              Clear discarded
+            </button>
+          )}
+        </div>
         {showHistory && (
           <div className="space-y-2">
             {history.length === 0 ? (
@@ -18959,12 +18981,42 @@ function ReceivingApp({ onGoHome }) {
                     </p>
                     <p className="text-xs text-slate-500">{formatTaskTimestamp(b.approvedAt || b.scannedAt)}</p>
                   </div>
+                  <button
+                    onClick={() => setDeleteTarget(b)}
+                    className="text-slate-600 hover:text-red-400 shrink-0"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
               ))
             )}
           </div>
         )}
       </main>
+
+      {deleteTarget && (
+        <ConfirmDelete
+          title="Delete this receipt record?"
+          message="This just removes it from history — it doesn't touch any items that were already added anywhere. This can't be undone."
+          onConfirm={() => {
+            deleteBatch(deleteTarget.id);
+            setDeleteTarget(null);
+          }}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+
+      {confirmingClearDiscarded && (
+        <ConfirmDelete
+          title="Clear all discarded receipts?"
+          message="Every discarded receipt in history will be permanently removed. Approved ones are left alone. This can't be undone."
+          onConfirm={() => {
+            clearDiscarded();
+            setConfirmingClearDiscarded(false);
+          }}
+          onCancel={() => setConfirmingClearDiscarded(false)}
+        />
+      )}
 
       {photoViewerOverlay}
     </div>
