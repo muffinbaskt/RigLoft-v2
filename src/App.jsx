@@ -4166,7 +4166,8 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
   const [uploadError, setUploadError] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [viewingUrl, setViewingUrl] = useState(null);
-  const [pdfPrompt, setPdfPrompt] = useState(null); // the PDF file, while asking convert-vs-keep
+  const [pdfQueue, setPdfQueue] = useState([]); // PDFs still waiting on a convert-vs-keep decision
+  const pdfPrompt = pdfQueue[0] || null;
   const photoInputRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -4197,40 +4198,50 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
   };
 
   const doUpload = async (file) => {
-    setUploadError(null);
-    setUploading(true);
     const result = await uploadReferenceDocument(job.id, file);
-    setUploading(false);
     if (!result.ok) {
-      setUploadError(result.error || "Upload failed");
+      setUploadError((prev) => (prev ? `${prev} · ${result.error}` : result.error || "Upload failed"));
       return;
     }
     addDoc(result);
   };
 
-  const handleFileChosen = async (e) => {
-    const file = e.target.files && e.target.files[0];
-    e.target.value = ""; // allow choosing the same file again later
-    if (!file) return;
-    if (file.type === "application/pdf") {
-      // Ask rather than assume — a scanned receipt should probably become
-      // photos, but a real multi-page document (a spec sheet, a signed
-      // order) might genuinely need to stay a navigable PDF.
-      setPdfPrompt(file);
-      return;
+  // Handles any number of selected files at once — images upload straight
+  // away in sequence, and any PDFs get queued up for their own
+  // convert-vs-keep decision, one at a time, since that choice genuinely
+  // depends on what each specific PDF actually is.
+  const handleFilesChosen = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = ""; // allow choosing the same files again later
+    if (files.length === 0) return;
+
+    const pdfs = files.filter((f) => f.type === "application/pdf");
+    const others = files.filter((f) => f.type !== "application/pdf");
+
+    if (others.length > 0) {
+      setUploadError(null);
+      setUploading(true);
+      for (const file of others) {
+        await doUpload(file);
+      }
+      setUploading(false);
     }
-    await doUpload(file);
+    if (pdfs.length > 0) setPdfQueue((prev) => [...prev, ...pdfs]);
   };
 
   const keepPdfAsIs = async () => {
-    const file = pdfPrompt;
-    setPdfPrompt(null);
-    await doUpload(file);
+    if (!pdfPrompt) return;
+    setPdfQueue((prev) => prev.slice(1));
+    setUploadError(null);
+    setUploading(true);
+    await doUpload(pdfPrompt);
+    setUploading(false);
   };
 
   const convertPdfToPhotos = async () => {
+    if (!pdfPrompt) return;
     const file = pdfPrompt;
-    setPdfPrompt(null);
+    setPdfQueue((prev) => prev.slice(1));
     setUploadError(null);
     setUploading(true);
     try {
@@ -4362,7 +4373,7 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
                 type="file"
                 accept="image/*"
                 capture="environment"
-                onChange={handleFileChosen}
+                onChange={handleFilesChosen}
                 className="hidden"
               />
               <button
@@ -4377,7 +4388,8 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
                 ref={fileInputRef}
                 type="file"
                 accept="application/pdf,image/*"
-                onChange={handleFileChosen}
+                multiple
+                onChange={handleFilesChosen}
                 className="hidden"
               />
               <button
@@ -4405,11 +4417,14 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
       {pdfPrompt && (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 px-4">
           <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
-            <h3 className="text-slate-100 font-semibold mb-1">That's a PDF</h3>
+            <h3 className="text-slate-100 font-semibold mb-1">
+              That's a PDF{pdfQueue.length > 1 ? ` (1 of ${pdfQueue.length})` : ""}
+            </h3>
             <p className="text-xs text-slate-500 mb-4">
               A phone's "scan to PDF" is usually just a photo wrapped in a PDF — converting
               keeps it easy to zoom into and cuts the file size, with one photo per page. If
               this is a real multi-page document, keeping it as a PDF makes more sense.
+              {pdfQueue.length > 1 && " You'll get this same choice for each PDF you picked."}
             </p>
             <div className="flex flex-col gap-2">
               <button
@@ -4425,10 +4440,10 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
                 Keep as PDF
               </button>
               <button
-                onClick={() => setPdfPrompt(null)}
+                onClick={() => setPdfQueue((prev) => prev.slice(1))}
                 className="w-full text-xs text-slate-500 hover:text-slate-300"
               >
-                Cancel
+                Skip this one
               </button>
             </div>
           </div>
