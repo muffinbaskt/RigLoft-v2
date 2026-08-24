@@ -18598,6 +18598,7 @@ function ReceivingApp({ onGoHome }) {
   const [nameMemory, setNameMemory] = useState({}); // normalized raw text -> confirmed final name
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState(null); // { current, total } while scanning several
   const [scanError, setScanError] = useState("");
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
@@ -18633,71 +18634,96 @@ function ReceivingApp({ onGoHome }) {
     saveWithRetry(RECEIVING_QUEUE_KEY, JSON.stringify(next)).catch(() => {});
   };
 
-  const runScan = async (file) => {
+  // Scans exactly one file and returns the finished batch object — doesn't
+  // touch the queue itself, so it can be called in a loop for multiple
+  // receipts without each one stepping on the others' state updates.
+  const scanOneFile = async (file) => {
+    const base64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(",")[1]);
+      reader.onerror = () => reject(new Error("Couldn't read that image."));
+      reader.readAsDataURL(file);
+    });
+
+    let photoUrl = null;
+    let photoPath = null;
+    const uploadResult = await uploadReceiptScan(file);
+    if (uploadResult.ok) {
+      photoUrl = uploadResult.url;
+      photoPath = uploadResult.path;
+    }
+
+    const res = await fetch(
+      "https://vwvppivdpxjvmaazcmmg.supabase.co/functions/v1/scan-receipt",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64: base64, mediaType: file.type || "image/jpeg" }),
+      }
+    );
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Scan failed.");
+
+    const lines = (data.items || []).map((it) => {
+      const rawName = it.name || "";
+      const match = findCatalogMatch(rawName, catalog);
+      const remembered = nameMemory[normalizeText(rawName)];
+      // The catalog match drives storage/gang/category defaults, but
+      // never the display name itself — plenty of catalog entries are
+      // shared across multiple real variants (different sizes sharing
+      // the same gang/storage) with no reliable flag distinguishing
+      // that, so the only safe default is the raw OCR text, unless
+      // this exact SKU string has already been confirmed once before.
+      const suggestedName = remembered || rawName;
+      return {
+        id: uniqueId(),
+        rawName,
+        name: suggestedName,
+        catalogId: match ? match.id : null,
+        backorderQty: Number(it.backorderQty) > 0 ? Number(it.backorderQty) : 0,
+        shippedQty: Number(it.shippedQty) > 0 ? Number(it.shippedQty) : 0,
+        // Target lives on the LINE, not the whole receipt — a single PO
+        // can genuinely cover materials for two different Love Lists
+        // and a job all at once, so each line needs to be routable on
+        // its own rather than the whole batch pointing one place.
+        targetType: null,
+        targetId: null,
+      };
+    });
+
+    return newReceiptBatch(photoUrl, photoPath, lines);
+  };
+
+  // Runs one photo at a time (not in parallel) — keeps the OCR endpoint
+  // from getting hammered with a burst of simultaneous requests, and
+  // means a progress count ("Scanning 2 of 5...") is actually meaningful.
+  // A single receipt still auto-opens for review, same as before; several
+  // at once just drop into the pending queue for you to work through
+  // later — which is the point, since scanning a whole stack and setting
+  // it aside is exactly the workflow this is for.
+  const runScans = async (fileList) => {
     setScanning(true);
     setScanError("");
-    try {
-      const base64 = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result.split(",")[1]);
-        reader.onerror = () => reject(new Error("Couldn't read that image."));
-        reader.readAsDataURL(file);
-      });
-
-      let photoUrl = null;
-      let photoPath = null;
-      const uploadResult = await uploadReceiptScan(file);
-      if (uploadResult.ok) {
-        photoUrl = uploadResult.url;
-        photoPath = uploadResult.path;
+    const files = Array.from(fileList);
+    const newBatches = [];
+    const errors = [];
+    for (let i = 0; i < files.length; i++) {
+      setScanProgress({ current: i + 1, total: files.length });
+      try {
+        const batch = await scanOneFile(files[i]);
+        newBatches.push(batch);
+      } catch (err) {
+        errors.push(`"${files[i].name}" — ${err.message || String(err)}`);
       }
-
-      const res = await fetch(
-        "https://vwvppivdpxjvmaazcmmg.supabase.co/functions/v1/scan-receipt",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ imageBase64: base64, mediaType: file.type || "image/jpeg" }),
-        }
-      );
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || "Scan failed.");
-
-      const lines = (data.items || []).map((it) => {
-        const rawName = it.name || "";
-        const match = findCatalogMatch(rawName, catalog);
-        const remembered = nameMemory[normalizeText(rawName)];
-        // The catalog match drives storage/gang/category defaults, but
-        // never the display name itself — plenty of catalog entries are
-        // shared across multiple real variants (different sizes sharing
-        // the same gang/storage) with no reliable flag distinguishing
-        // that, so the only safe default is the raw OCR text, unless
-        // this exact SKU string has already been confirmed once before.
-        const suggestedName = remembered || rawName;
-        return {
-          id: uniqueId(),
-          rawName,
-          name: suggestedName,
-          catalogId: match ? match.id : null,
-          backorderQty: Number(it.backorderQty) > 0 ? Number(it.backorderQty) : 0,
-          shippedQty: Number(it.shippedQty) > 0 ? Number(it.shippedQty) : 0,
-          // Target lives on the LINE, not the whole receipt — a single PO
-          // can genuinely cover materials for two different Love Lists
-          // and a job all at once, so each line needs to be routable on
-          // its own rather than the whole batch pointing one place.
-          targetType: null,
-          targetId: null,
-        };
-      });
-
-      const batch = newReceiptBatch(photoUrl, photoPath, lines);
-      playSaveChime();
-      saveQueue([batch, ...queue]);
-      setActiveBatchId(batch.id);
-    } catch (err) {
-      setScanError(err.message || String(err));
     }
+    if (newBatches.length > 0) {
+      playSaveChime();
+      saveQueue([...newBatches, ...queue]);
+      if (newBatches.length === 1) setActiveBatchId(newBatches[0].id);
+    }
+    if (errors.length > 0) setScanError(errors.join(" · "));
     setScanning(false);
+    setScanProgress(null);
   };
 
   const updateBatch = (updated) => {
@@ -18881,12 +18907,12 @@ function ReceivingApp({ onGoHome }) {
         ref={fileInputRef}
         type="file"
         accept="image/*"
-        capture="environment"
+        multiple
         className="hidden"
         onChange={(e) => {
-          const file = e.target.files && e.target.files[0];
+          const files = e.target.files;
           e.target.value = "";
-          if (file) runScan(file);
+          if (files && files.length > 0) runScans(files);
         }}
       />
       <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
@@ -18905,7 +18931,11 @@ function ReceivingApp({ onGoHome }) {
           className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400 disabled:opacity-50"
         >
           <Camera className="w-4 h-4" />
-          {scanning ? "Scanning..." : "Scan a receipt"}
+          {scanning
+            ? scanProgress
+              ? `Scanning ${scanProgress.current} of ${scanProgress.total}...`
+              : "Scanning..."
+            : "Scan receipts"}
         </button>
       </header>
       <main className="max-w-2xl mx-auto px-4 py-5">
