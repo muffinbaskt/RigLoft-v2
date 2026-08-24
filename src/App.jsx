@@ -18411,6 +18411,41 @@ function convertQtyForUnit(qty, fromUnit, toUnit) {
   return qty;
 }
 
+// Attaches a receipt's photo to a Job's Reference Documents once any of
+// its lines actually get applied there — checked by storage path so a
+// receipt spanning multiple approve passes (or multiple lines landing on
+// the same job) only ever gets attached once, not duplicated per line.
+function attachReceiptPhotoToJob(job, batch) {
+  if (!batch.photoUrl || !batch.photoPath) return job;
+  if ((job.referenceDocuments || []).some((d) => d.path === batch.photoPath)) return job;
+  return {
+    ...job,
+    referenceDocuments: [
+      ...(job.referenceDocuments || []),
+      {
+        id: uniqueId(),
+        name: batch.label ? `${batch.label} (receipt)` : "Receipt",
+        url: batch.photoUrl,
+        path: batch.photoPath,
+        type: "image/jpeg",
+        uploadedAt: timeStamp(),
+      },
+    ],
+    activityLog: [
+      { id: uniqueId(), time: timeStamp(), message: "Attached a receipt photo from Receiving" },
+      ...(job.activityLog || []),
+    ].slice(0, 50),
+  };
+}
+
+// Same idea for a Love List's photos — those are just a flat array of
+// URLs rather than document objects, so the duplicate check is simpler.
+function attachReceiptPhotoToLoveList(list, batch) {
+  if (!batch.photoUrl) return list;
+  if ((list.referenceImages || []).includes(batch.photoUrl)) return list;
+  return { ...list, referenceImages: [...(list.referenceImages || []), batch.photoUrl] };
+}
+
 function applyReceiptLineToJob(job, line, catalog) {
   const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
   const items = job.items || [];
@@ -18638,6 +18673,12 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
           ? applyReceiptLineToJob(updatedTarget, line, catalog)
           : applyReceiptLineToLoveList(updatedTarget, line, catalog);
     });
+    if (validLines.length > 0) {
+      updatedTarget =
+        targetType === "job"
+          ? attachReceiptPhotoToJob(updatedTarget, selectedBatch)
+          : attachReceiptPhotoToLoveList(updatedTarget, selectedBatch);
+    }
     onApplyToTarget(updatedTarget);
 
     const nextMemory = { ...nameMemory };
@@ -19299,6 +19340,9 @@ function ReceivingApp({ onGoHome }) {
         jobLines.forEach((line) => {
           updated = applyLineToJob(updated, line);
         });
+        // One photo, attached once, regardless of how many lines from
+        // this receipt ended up on this particular job.
+        updated = attachReceiptPhotoToJob(updated, batch);
         return updated;
       });
       setJobs(nextJobs);
@@ -19313,6 +19357,7 @@ function ReceivingApp({ onGoHome }) {
         listLines.forEach((line) => {
           updated = applyLineToLoveList(updated, line);
         });
+        updated = attachReceiptPhotoToLoveList(updated, batch);
         return updated;
       });
       setLists(nextLists);
