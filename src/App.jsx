@@ -18339,6 +18339,19 @@ const RECEIVING_NAME_MEMORY_KEY = "warehub-receiving-name-memory";
 // standalone Receiving screen and by pulling a receipt directly from
 // inside a Job or Love List — same rules, same code, no matter which
 // screen someone approves from.
+
+// Same red/yellow/green rule the item edit form already uses — Receiving
+// bypasses that form entirely when it patches quantities directly, so
+// without this, the stored status field goes stale even though the
+// numbers underneath it are correct (the edit form recomputes status live
+// for display, which is why it can show "Complete" while the actual
+// saved card still shows red).
+function computeJobItemStatus(qtyHave, qtyNeeded) {
+  if (qtyHave >= (Number(qtyNeeded) || 0)) return "green";
+  if (qtyHave > 0) return "yellow";
+  return "red";
+}
+
 // Converts a quantity between units when applying it to an item measured
 // differently — the only conversion this attempts is each↔dozen, since
 // that's the one pairing where the math is unambiguous (12 of one always
@@ -18392,6 +18405,7 @@ function applyReceiptLineToJob(job, line, catalog) {
       ...existing,
       containers,
       qtyHave: totalHave(containers),
+      status: computeJobItemStatus(totalHave(containers), existing.qtyNeeded),
       ordered: true,
       received: backorderConverted > 0 ? "partial" : "yes",
       backorderQty: backorderConverted,
@@ -18414,6 +18428,7 @@ function applyReceiptLineToJob(job, line, catalog) {
     needsTransfer: match ? !!match.needsTransfer : false,
     containers: line.shippedQty > 0 ? [{ name: "Unassigned", qty: line.shippedQty }] : [],
     qtyHave: line.shippedQty,
+    status: computeJobItemStatus(line.shippedQty, line.shippedQty + line.backorderQty || 1),
     ordered: true,
     received: line.backorderQty > 0 ? "partial" : line.shippedQty > 0 ? "yes" : "no",
     backorderQty: line.backorderQty,
@@ -18946,13 +18961,21 @@ function mergeJobItems(items, sourceId, targetId) {
   }
 
   const newSourceHave = totalHave(cleanedSourceContainers);
+  const newTargetHave = totalHave(targetContainers);
   let nextItems = items.map((i, idx) => {
-    if (idx === targetIdx) return { ...target, containers: targetContainers, qtyHave: totalHave(targetContainers) };
+    if (idx === targetIdx)
+      return {
+        ...target,
+        containers: targetContainers,
+        qtyHave: newTargetHave,
+        status: computeJobItemStatus(newTargetHave, target.qtyNeeded),
+      };
     if (idx === sourceIdx)
       return {
         ...source,
         containers: cleanedSourceContainers,
         qtyHave: newSourceHave,
+        status: computeJobItemStatus(newSourceHave, source.qtyNeeded),
         importedViaReceiving: newSourceHave > 0 ? source.importedViaReceiving : false,
       };
     return i;
