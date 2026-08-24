@@ -18079,7 +18079,14 @@ const RECEIVING_NAME_MEMORY_KEY = "warehub-receiving-name-memory";
 function applyReceiptLineToJob(job, line, catalog) {
   const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
   const items = job.items || [];
-  const idx = line.catalogId ? items.findIndex((i) => i.catalogId === line.catalogId) : -1;
+  // Matching by name, not catalogId — several real, differently-sized
+  // items can share one generic catalog entry on purpose (a "Bridge
+  // Clamp" catalog link covering a 4" and a 6" clamp, say), so matching
+  // on catalogId alone would silently merge two unrelated items' numbers
+  // together. The catalog link only ever supplies defaults for a brand
+  // new item below, never decides what counts as "the same item."
+  const normLineName = normalizeText(line.name);
+  const idx = items.findIndex((i) => normalizeText(i.name) === normLineName);
 
   if (idx !== -1) {
     const existing = items[idx];
@@ -18130,7 +18137,10 @@ function applyReceiptLineToJob(job, line, catalog) {
 function applyReceiptLineToLoveList(list, line, catalog) {
   const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
   const items = list.items || [];
-  const idx = line.catalogId ? items.findIndex((i) => i.catalogId === line.catalogId) : -1;
+  // Same fix as the Job version — match by name, not catalog link, since
+  // several differently-sized items can share one generic catalog entry.
+  const normLineName = normalizeText(line.name);
+  const idx = items.findIndex((i) => normalizeText(i.name) === normLineName);
 
   if (idx !== -1) {
     const existing = items[idx];
