@@ -18649,7 +18649,20 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
                 <div className="flex items-center gap-2 mb-1.5">
                   <input
                     value={line.name}
-                    onChange={(e) => updateLine(line.id, { name: e.target.value })}
+                    onChange={(e) => {
+                      const newName = e.target.value;
+                      const changes = { name: newName };
+                      // Only fill in a catalog link if there isn't one
+                      // already — never override a manual link (or a
+                      // generic multi-size entry chosen on purpose) just
+                      // because retyping the name doesn't happen to
+                      // fuzzy-match it anymore.
+                      if (!line.catalogId) {
+                        const found = findCatalogMatch(newName, catalog);
+                        if (found) changes.catalogId = found.id;
+                      }
+                      updateLine(line.id, changes);
+                    }}
                     className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
                   />
                   <button
@@ -19576,7 +19589,20 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
                 <div className="flex items-center gap-2 mb-1.5">
                   <input
                     value={line.name}
-                    onChange={(e) => updateLine(line.id, { name: e.target.value })}
+                    onChange={(e) => {
+                      const newName = e.target.value;
+                      const changes = { name: newName };
+                      // Only fill in a catalog link if there isn't one
+                      // already — never override a manual link (or a
+                      // generic multi-size entry chosen on purpose) just
+                      // because retyping the name doesn't happen to
+                      // fuzzy-match it anymore.
+                      if (!line.catalogId) {
+                        const found = findCatalogMatch(newName, catalog);
+                        if (found) changes.catalogId = found.id;
+                      }
+                      updateLine(line.id, changes);
+                    }}
                     className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
                   />
                   <button
