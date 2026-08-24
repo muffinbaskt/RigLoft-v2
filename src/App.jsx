@@ -18383,6 +18383,16 @@ function computeJobItemStatus(qtyHave, qtyNeeded) {
   return "red";
 }
 
+// Same idea for the separate "Ordered / Not received / Partially
+// received" pill — a merge changes quantity on both the item you're
+// folding away and the one it's going into, so both need this
+// recalculated, not just the status dot.
+function computeJobItemReceived(qtyHave, qtyNeeded) {
+  if (qtyHave <= 0) return "no";
+  if (qtyHave >= (Number(qtyNeeded) || 0)) return "yes";
+  return "partial";
+}
+
 // Converts a quantity between units when applying it to an item measured
 // differently — the only conversion this attempts is each↔dozen, since
 // that's the one pairing where the math is unambiguous (12 of one always
@@ -19000,6 +19010,8 @@ function mergeJobItems(items, sourceId, targetId) {
         containers: targetContainers,
         qtyHave: newTargetHave,
         status: computeJobItemStatus(newTargetHave, target.qtyNeeded),
+        ordered: true,
+        received: computeJobItemReceived(newTargetHave, target.qtyNeeded),
       };
     if (idx === sourceIdx)
       return {
@@ -19007,6 +19019,7 @@ function mergeJobItems(items, sourceId, targetId) {
         containers: cleanedSourceContainers,
         qtyHave: newSourceHave,
         status: computeJobItemStatus(newSourceHave, source.qtyNeeded),
+        received: computeJobItemReceived(newSourceHave, source.qtyNeeded),
         importedViaReceiving: newSourceHave > 0 ? source.importedViaReceiving : false,
       };
     return i;
