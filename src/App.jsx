@@ -8012,6 +8012,7 @@ function JobInventory({
   const [categoryFilter, setCategoryFilter] = useState("All");
   const [procFilter, setProcFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
+  const [importedOnlyFilter, setImportedOnlyFilter] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState("default");
   const [groupByGang, setGroupByGang] = useState(true);
@@ -8273,6 +8274,7 @@ function JobInventory({
           (i.containers || []).some((c) => c.name === containerFilter)) &&
         (categoryFilter === "All" || i.category === categoryFilter) &&
         (statusFilter === "All" || i.status === statusFilter) &&
+        (!importedOnlyFilter || i.importedViaReceiving) &&
         matchesProcFilter(i) &&
         matchesSearch(i)
     )
@@ -9230,6 +9232,17 @@ function JobInventory({
           </div>
           <div className="flex-1 min-w-0 flex items-center justify-end gap-2">
             <button
+              onClick={() => setImportedOnlyFilter((v) => !v)}
+              className={`flex items-center gap-1 text-xs rounded-full px-2.5 py-1 border whitespace-nowrap ${
+                importedOnlyFilter
+                  ? "bg-sky-500/15 border-sky-500/50 text-sky-300"
+                  : "border-slate-700 text-slate-500 hover:text-slate-300"
+              }`}
+            >
+              <Inbox className="w-3 h-3" />
+              Imported only
+            </button>
+            <button
               onClick={() => setGroupByGang((v) => !v)}
               className={`flex items-center gap-1 text-xs rounded-full px-2.5 py-1 border whitespace-nowrap ${
                 !groupByGang
@@ -9246,6 +9259,7 @@ function JobInventory({
               categoryFilter !== "All" ||
               statusFilter !== "All" ||
               procFilter !== "All" ||
+              importedOnlyFilter ||
               searchQuery) && (
               <button
                 onClick={() => {
@@ -9255,6 +9269,7 @@ function JobInventory({
                   setCategoryFilter("All");
                   setStatusFilter("All");
                   setProcFilter("All");
+                  setImportedOnlyFilter(false);
                   setSearchQuery("");
                 }}
                 className="text-xs text-slate-500 hover:text-slate-300 whitespace-nowrap px-1"
