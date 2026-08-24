@@ -1256,9 +1256,23 @@ function ItemForm({
             ) : (
               <div className="space-y-2 mb-2">
                 {item.containers.map((c, idx) => {
-                  const rowOptions = transferredContainerNames.has(c.name)
-                    ? [...new Set([c.name, ...assignableContainerOptions])]
-                    : assignableContainerOptions;
+                  // A row's current value can be a name that isn't in
+                  // this job's real container list at all — either a
+                  // transferred container (locked, shown read-only-ish
+                  // below) or "Unassigned", the synthetic bucket
+                  // Receiving drops freshly-shipped stock into before
+                  // it's been sorted into a real gangbox/conex. Either
+                  // way, the dropdown needs to actually include the
+                  // row's own value, or the browser silently falls back
+                  // to showing whatever option happens to be first —
+                  // which looks like the item's in the wrong place even
+                  // though the saved data is completely correct.
+                  const isTransferred = transferredContainerNames.has(c.name);
+                  const isKnownOption = assignableContainerOptions.includes(c.name);
+                  const rowOptions =
+                    isTransferred || !isKnownOption
+                      ? [...new Set([c.name, ...assignableContainerOptions])]
+                      : assignableContainerOptions;
                   return (
                   <div key={idx} className="flex items-center gap-2">
                     <div className="flex-1 min-w-0">
@@ -1267,8 +1281,10 @@ function ItemForm({
                         onChange={(val) => updateContainerRow(idx, "name", val)}
                         options={[...rowOptions].sort((a, b) => a.localeCompare(b))}
                         labels={
-                          transferredContainerNames.has(c.name)
+                          isTransferred
                             ? { [c.name]: `${c.name} (transferred — pick a new container)` }
+                            : c.name === "Unassigned"
+                            ? { [c.name]: "Unassigned (needs sorting into a real container)" }
                             : undefined
                         }
                       />
