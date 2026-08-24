@@ -13294,10 +13294,14 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
 
       const items = (data.items || []).map((it) => {
         const match = findCatalogMatch(it.name || "", catalog);
+        const unit = (it.unit || "each").trim();
         return {
           id: uniqueId(),
           name: it.name || "",
           qty: Number(it.qty) > 0 ? Number(it.qty) : 1,
+          // Blank means "each" (the normal case) — only actually shown
+          // when it's something worth calling out, like Dozen or Case.
+          qtyUnit: unit.toLowerCase() !== "each" ? unit : "",
           catalogId: match ? match.id : null,
           storage: match ? match.storage : "",
           storageDetail: match && match.storage === "Other" ? match.storageDetail || "" : "",
@@ -13341,6 +13345,7 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
           storage: i.storage,
           storageDetail: i.storageDetail,
           needsTransfer: i.needsTransfer,
+          qtyUnit: i.qtyUnit,
         })
       );
     onSave({
@@ -13494,6 +13499,13 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
                         value={item.qty}
                         onChange={(e) => updateReviewItem(item.id, { qty: Number(e.target.value) || 1 })}
                         className="w-14 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+                      />
+                      <input
+                        value={item.qtyUnit || ""}
+                        onChange={(e) => updateReviewItem(item.id, { qtyUnit: e.target.value })}
+                        placeholder="each"
+                        title="Unit — Dozen, Case, Box, etc. Leave blank for each."
+                        className="w-16 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-1.5 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-rose-500/60"
                       />
                       <button
                         onClick={() => cloneReviewItem(item.id)}
