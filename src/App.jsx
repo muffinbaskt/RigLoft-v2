@@ -19246,6 +19246,7 @@ function ReceivingApp({ onGoHome }) {
   const [viewingPhoto, setViewingPhoto] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [confirmingClearDiscarded, setConfirmingClearDiscarded] = useState(false);
+  const [confirmingClearAllHistory, setConfirmingClearAllHistory] = useState(false);
   const [viewingHistoryBatch, setViewingHistoryBatch] = useState(null);
   const fileInputRef = useRef(null);
 
@@ -19416,6 +19417,15 @@ function ReceivingApp({ onGoHome }) {
   };
   const clearDiscarded = () => {
     saveQueue(queue.filter((b) => b.status !== "discarded"));
+  };
+  // Wipes the whole history list, approved entries included — this only
+  // ever removes Receiving's own queue record. It never touches the
+  // actual storage files or the job/Love List photo attachments, since
+  // an approved receipt's photo may still be legitimately living on a
+  // job's Reference Documents page — deleting the underlying file here
+  // would silently break that.
+  const clearAllHistory = () => {
+    saveQueue(queue.filter((b) => b.status === "pending"));
   };
 
   // Applying an approved line to a Job — items are matched by catalogId;
@@ -19665,13 +19675,23 @@ function ReceivingApp({ onGoHome }) {
             <History className="w-3.5 h-3.5" />
             History ({history.length}) {showHistory ? "▲" : "▼"}
           </button>
-          {showHistory && history.some((b) => b.status === "discarded") && (
-            <button
-              onClick={() => setConfirmingClearDiscarded(true)}
-              className="text-xs text-slate-500 hover:text-red-400"
-            >
-              Clear discarded
-            </button>
+          {showHistory && history.length > 0 && (
+            <div className="flex items-center gap-3">
+              {history.some((b) => b.status === "discarded") && (
+                <button
+                  onClick={() => setConfirmingClearDiscarded(true)}
+                  className="text-xs text-slate-500 hover:text-red-400"
+                >
+                  Clear discarded
+                </button>
+              )}
+              <button
+                onClick={() => setConfirmingClearAllHistory(true)}
+                className="text-xs text-slate-500 hover:text-red-400"
+              >
+                Clear all history
+              </button>
+            </div>
           )}
         </div>
         {showHistory && (
@@ -19735,6 +19755,18 @@ function ReceivingApp({ onGoHome }) {
             setConfirmingClearDiscarded(false);
           }}
           onCancel={() => setConfirmingClearDiscarded(false)}
+        />
+      )}
+
+      {confirmingClearAllHistory && (
+        <ConfirmDelete
+          title="Clear the entire history?"
+          message="Every entry in History — approved and discarded — gets removed from this list. Nothing already added to a job or Love List is affected, and any photo already attached to a job's Reference Documents stays right where it is. This can't be undone."
+          onConfirm={() => {
+            clearAllHistory();
+            setConfirmingClearAllHistory(false);
+          }}
+          onCancel={() => setConfirmingClearAllHistory(false)}
         />
       )}
 
