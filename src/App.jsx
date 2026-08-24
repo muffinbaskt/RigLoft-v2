@@ -18910,9 +18910,14 @@ function ReceivingApp({ onGoHome }) {
         multiple
         className="hidden"
         onChange={(e) => {
-          const files = e.target.files;
+          // Copy the files out into a plain array FIRST — e.target.files
+          // is a live reference, and clearing the input's value right
+          // after (so the same files can be picked again later) empties
+          // that same list in place if we're still holding onto it
+          // directly instead of a real snapshot.
+          const files = Array.from(e.target.files || []);
           e.target.value = "";
-          if (files && files.length > 0) runScans(files);
+          if (files.length > 0) runScans(files);
         }}
       />
       <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
