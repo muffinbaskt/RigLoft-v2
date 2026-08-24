@@ -13995,6 +13995,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [showArchived, setShowArchived] = useState(false);
   const [statusFilter, setStatusFilter] = useState(null); // null = off, or a LOVE_STATUSES key
   const [itemSearch, setItemSearch] = useState("");
+  const [importedOnlyFilter, setImportedOnlyFilter] = useState(false);
 
   const archiveItem = (id) => {
     onUpdateList({
@@ -14020,6 +14021,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const visibleItems = list.items
     .filter((i) => showArchived || !i.archived)
     .filter((i) => !statusFilter || i.status === statusFilter)
+    .filter((i) => !importedOnlyFilter || i.importedViaReceiving)
     .filter((i) => !itemSearch.trim() || i.name.toLowerCase().includes(itemSearch.trim().toLowerCase()));
   const archivedCount = list.items.filter((i) => i.archived).length;
   // Archive only makes sense for items that are genuinely, fully done —
@@ -14645,10 +14647,26 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
               {counts[s.key]} {s.label}
             </button>
           ))}
+          {isEditor && (
+            <button
+              onClick={() => setImportedOnlyFilter((v) => !v)}
+              className={`flex items-center gap-1 text-xs rounded-full px-2.5 py-1 border transition-all ${
+                importedOnlyFilter
+                  ? "bg-sky-500/15 border-sky-500/50 text-sky-300"
+                  : "border-slate-700 text-slate-500 hover:text-slate-300"
+              }`}
+            >
+              <Inbox className="w-3 h-3" />
+              Imported only
+            </button>
+          )}
         </div>
-        {statusFilter && (
+        {(statusFilter || importedOnlyFilter) && (
           <button
-            onClick={() => setStatusFilter(null)}
+            onClick={() => {
+              setStatusFilter(null);
+              setImportedOnlyFilter(false);
+            }}
             className="text-xs text-slate-500 hover:text-slate-300 mb-4 -mt-2 block"
           >
             Clear filter
@@ -18689,10 +18707,11 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
     updateSelectedBatch({ lines: nextLines });
   };
 
-  // Only lines nobody's already claimed for a different job/list show up
-  // here — this is a claiming action scoped to whatever job/list you
-  // opened this from, not a takeover of the whole receipt.
-  const availableLines = selectedBatch ? selectedBatch.lines.filter((l) => !l.targetId) : [];
+  // Only lines nobody's already claimed for a different job/list, and
+  // that haven't already been processed, show up here — this is a
+  // claiming action scoped to whatever job/list you opened this from,
+  // not a takeover of the whole receipt.
+  const availableLines = selectedBatch ? selectedBatch.lines.filter((l) => !l.targetId && !l.approved) : [];
 
   const approve = () => {
     const validLines = availableLines.filter((l) => l.name.trim());
@@ -18718,14 +18737,16 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
     saveWithRetry(RECEIVING_NAME_MEMORY_KEY, JSON.stringify(nextMemory)).catch(() => {});
 
     playSaveChime();
-    // Claimed lines come off the batch; anything else (already claimed
-    // elsewhere, or still genuinely unassigned) stays in the queue for
-    // the standalone Receiving screen or another job/list to pick up.
-    const remainingLines = selectedBatch.lines.filter((l) => !validLines.includes(l));
-    const updatedBatch =
-      remainingLines.length === 0
-        ? { ...selectedBatch, lines: remainingLines, status: "approved", approvedAt: new Date().toISOString() }
-        : { ...selectedBatch, lines: remainingLines };
+    // Claimed lines stay on the batch, marked done with exactly which
+    // target claimed them — an approved receipt keeps its real contents
+    // on record this way, instead of the claimed lines just vanishing.
+    const updatedLines = selectedBatch.lines.map((l) =>
+      validLines.includes(l) ? { ...l, targetType, targetId: target.id, approved: true } : l
+    );
+    const stillPending = updatedLines.some((l) => l.name.trim() && !l.approved);
+    const updatedBatch = stillPending
+      ? { ...selectedBatch, lines: updatedLines }
+      : { ...selectedBatch, lines: updatedLines, status: "approved", approvedAt: new Date().toISOString() };
     saveQueue(queue.map((b) => (b.id === selectedBatch.id ? updatedBatch : b)));
     setConfirmingApprove(false);
     onClose();
@@ -19137,6 +19158,79 @@ function newReceiptBatch(photoUrl, path, lines) {
 // point is a safe holding area to check the paper against the pallet
 // first, since a wrong or duplicate scan should never silently corrupt a
 // job's real numbers.
+// Read-only look back at an approved (or discarded) receipt — the photo
+// and every line item exactly as they ended up, with which job/list each
+// one landed on. Nothing here is editable; this is purely a record.
+function ReceiptHistoryDetail({ batch, jobs, lists, onBack, onViewPhoto }) {
+  const targetLabelFor = (line) => {
+    if (!line.targetId) return null;
+    if (line.targetType === "job") {
+      const j = jobs.find((x) => x.id === line.targetId);
+      return j ? j.name : "a job";
+    }
+    const l = lists.find((x) => x.id === line.targetId);
+    return l ? `${l.jobLabel}${l.subJobLabel ? ` — ${l.subJobLabel}` : ""}` : "a Love List";
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
+        <button onClick={onBack} className="text-slate-400 hover:text-slate-200 flex items-center gap-1.5">
+          <ChevronLeft className="w-5 h-5" />
+          <span className="text-sm">Back</span>
+        </button>
+        <span
+          className={`text-xs rounded-full px-2.5 py-1 border ${
+            batch.status === "approved"
+              ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+              : "bg-slate-800 text-slate-500 border-slate-700"
+          }`}
+        >
+          {batch.status === "approved" ? "Approved" : "Discarded"}
+        </span>
+      </header>
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        {batch.label && <h2 className="text-slate-100 font-semibold text-base mb-1">{batch.label}</h2>}
+        <p className="text-xs text-slate-500 mb-4">
+          {formatTaskTimestamp(batch.approvedAt || batch.scannedAt)}
+        </p>
+        {batch.photoUrl && (
+          <button
+            onClick={() => onViewPhoto(batch.photoUrl)}
+            className="w-full mb-4 rounded-lg overflow-hidden border border-slate-800"
+          >
+            <img src={batch.photoUrl} alt="Receipt" className="w-full max-h-56 object-cover" />
+          </button>
+        )}
+        <p className="text-xs font-medium text-slate-400 mb-2">
+          Line items ({batch.lines.length})
+        </p>
+        <div className="space-y-2">
+          {batch.lines.length === 0 ? (
+            <p className="text-sm text-slate-500 text-center py-6">Nothing recorded on this receipt.</p>
+          ) : (
+            batch.lines.map((line) => (
+              <div key={line.id} className="border border-slate-800 rounded-lg p-2.5 bg-slate-900/60">
+                <p className="text-sm text-slate-100">{line.name}</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Shipped {line.shippedQty}
+                  {line.backorderQty > 0 ? ` · ${line.backorderQty} backorder` : ""}
+                  {line.unit && line.unit.toLowerCase() !== "each" ? ` ${line.unit}` : ""}
+                </p>
+                {line.targetId ? (
+                  <p className="text-xs text-emerald-400 mt-1">→ {targetLabelFor(line)}</p>
+                ) : (
+                  <p className="text-xs text-slate-600 mt-1">Never assigned a destination</p>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}
+
 function ReceivingApp({ onGoHome }) {
   const [queue, setQueue] = useState([]);
   const [jobs, setJobs] = useState([]);
@@ -19152,6 +19246,7 @@ function ReceivingApp({ onGoHome }) {
   const [viewingPhoto, setViewingPhoto] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [confirmingClearDiscarded, setConfirmingClearDiscarded] = useState(false);
+  const [viewingHistoryBatch, setViewingHistoryBatch] = useState(null);
   const fileInputRef = useRef(null);
 
   const load = async () => {
@@ -19240,6 +19335,11 @@ function ReceivingApp({ onGoHome }) {
         // its own rather than the whole batch pointing one place.
         targetType: null,
         targetId: null,
+        // Marked true once this line's actually been applied somewhere —
+        // kept in the batch forever after that (never deleted), so an
+        // approved receipt still has its real contents to look back at
+        // in history instead of an empty shell.
+        approved: false,
       };
     });
 
@@ -19339,7 +19439,13 @@ function ReceivingApp({ onGoHome }) {
   // means one receipt covering two Love Lists and a job can be approved
   // in pieces as each line gets sorted out, rather than all-or-nothing.
   const approveBatch = async (batch) => {
-    const assignedLines = batch.lines.filter((l) => l.name.trim() && l.targetType && l.targetId);
+    // Only lines with a destination that haven't been processed yet —
+    // the "not approved" check is what makes it safe to press Approve
+    // again later on the same receipt without double-applying anything
+    // already committed.
+    const assignedLines = batch.lines.filter(
+      (l) => l.name.trim() && l.targetType && l.targetId && !l.approved
+    );
     if (assignedLines.length === 0) return;
 
     const jobGroups = {};
@@ -19394,16 +19500,17 @@ function ReceivingApp({ onGoHome }) {
 
     playSaveChime();
 
-    // Applied lines come off the batch entirely — whatever's left (never
-    // assigned, or intentionally left for later) stays pending. Only once
-    // nothing's left does the whole receipt move to history.
-    const remainingLines = batch.lines.filter((l) => !assignedLines.includes(l));
-    const updatedBatch =
-      remainingLines.length === 0
-        ? { ...batch, lines: remainingLines, status: "approved", approvedAt: new Date().toISOString() }
-        : { ...batch, lines: remainingLines };
+    // Lines stay on the batch forever, just flagged — an approved
+    // receipt keeps its real contents on record instead of vanishing
+    // into an empty shell once everything's been applied. The batch
+    // itself only flips to "approved" once every named line is done.
+    const updatedLines = batch.lines.map((l) => (assignedLines.includes(l) ? { ...l, approved: true } : l));
+    const stillPending = updatedLines.some((l) => l.name.trim() && !l.approved);
+    const updatedBatch = stillPending
+      ? { ...batch, lines: updatedLines }
+      : { ...batch, lines: updatedLines, status: "approved", approvedAt: new Date().toISOString() };
     saveQueue(queue.map((b) => (b.id === batch.id ? updatedBatch : b)));
-    if (remainingLines.length === 0) setActiveBatchId(null);
+    if (!stillPending) setActiveBatchId(null);
   };
 
   if (loading) {
@@ -19436,6 +19543,21 @@ function ReceivingApp({ onGoHome }) {
       <ZoomableImage key={viewingPhoto} src={viewingPhoto} alt="Receipt" />
     </div>
   );
+
+  if (viewingHistoryBatch) {
+    return (
+      <>
+        <ReceiptHistoryDetail
+          batch={viewingHistoryBatch}
+          jobs={jobs}
+          lists={lists}
+          onBack={() => setViewingHistoryBatch(null)}
+          onViewPhoto={setViewingPhoto}
+        />
+        {photoViewerOverlay}
+      </>
+    );
+  }
 
   if (activeBatch) {
     return (
@@ -19558,7 +19680,11 @@ function ReceivingApp({ onGoHome }) {
               <p className="text-sm text-slate-500 text-center py-4">Nothing yet.</p>
             ) : (
               history.map((b) => (
-                <div key={b.id} className="bg-slate-900 border border-slate-800 rounded-lg p-3 flex items-center gap-3">
+                <button
+                  key={b.id}
+                  onClick={() => setViewingHistoryBatch(b)}
+                  className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 flex items-center gap-3 hover:border-slate-700"
+                >
                   {b.photoUrl && (
                     <img src={b.photoUrl} alt="" className="w-10 h-10 rounded-md object-cover border border-slate-800 shrink-0" />
                   )}
@@ -19572,13 +19698,16 @@ function ReceivingApp({ onGoHome }) {
                     </p>
                     <p className="text-xs text-slate-500">{formatTaskTimestamp(b.approvedAt || b.scannedAt)}</p>
                   </div>
-                  <button
-                    onClick={() => setDeleteTarget(b)}
-                    className="text-slate-600 hover:text-red-400 shrink-0"
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeleteTarget(b);
+                    }}
+                    className="text-slate-600 hover:text-red-400 shrink-0 p-1"
                   >
                     <X className="w-4 h-4" />
-                  </button>
-                </div>
+                  </span>
+                </button>
               ))
             )}
           </div>
@@ -19744,7 +19873,7 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
     setTargetSearch("");
   };
 
-  const assignedCount = batch.lines.filter((l) => l.name.trim() && l.targetId).length;
+  const assignedCount = batch.lines.filter((l) => l.name.trim() && l.targetId && !l.approved).length;
   const canApprove = assignedCount > 0;
 
   return (
@@ -19797,6 +19926,29 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
           {batch.lines.map((line) => {
             const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
             const targetLabel = targetLabelFor(line);
+            if (line.approved) {
+              // Already applied somewhere — locked so it can never be
+              // re-approved (which would double-apply its quantity), but
+              // still visible so the receipt's full contents stay on
+              // record rather than looking like they disappeared.
+              return (
+                <div
+                  key={line.id}
+                  className="border border-emerald-500/30 bg-emerald-500/5 rounded-lg p-2.5 flex items-center justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm text-slate-300 truncate">{line.name}</p>
+                    <p className="text-xs text-slate-500">
+                      Shipped {line.shippedQty}
+                      {line.backorderQty > 0 ? ` · ${line.backorderQty} backorder` : ""}
+                    </p>
+                  </div>
+                  <span className="text-[10px] rounded-full px-2 py-0.5 border shrink-0 bg-emerald-500/15 text-emerald-300 border-emerald-500/40">
+                    ✓ Added to {targetLabel || "target"}
+                  </span>
+                </div>
+              );
+            }
             return (
               <div key={line.id} className="border border-slate-800 rounded-lg p-2.5 bg-slate-900/60">
                 <div className="flex items-center gap-2 mb-1.5">
