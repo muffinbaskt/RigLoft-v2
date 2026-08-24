@@ -7922,19 +7922,27 @@ function MergeItemModal({ item, items, onConfirm, onClose }) {
               const cHave = totalHave(c.containers);
               const cNeeded = Number(c.qtyNeeded) || 0;
               const remaining = Math.max(0, cNeeded - cHave);
-              const willMove = Math.min(sourceHave, remaining);
+              // Same conversion the actual merge uses — compare in the
+              // target's unit, not raw numbers, so "12 each" correctly
+              // reads as enough to fill a "1 doz" need.
+              const sourceHaveInTargetUnits = convertQtyForUnit(sourceHave, item.qtyUnit, c.qtyUnit);
+              const willMoveInTargetUnits = Math.min(sourceHaveInTargetUnits, remaining);
+              const willMoveInSourceUnits = convertQtyForUnit(willMoveInTargetUnits, c.qtyUnit, item.qtyUnit);
+              const unitsDiffer = (item.qtyUnit || "each") !== (c.qtyUnit || "each");
               return (
                 <button
                   key={c.id}
                   onClick={() => onConfirm(c.id)}
-                  disabled={willMove <= 0}
+                  disabled={willMoveInTargetUnits <= 0}
                   className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-800 hover:border-slate-700 mb-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <p className="text-slate-100">{c.name}</p>
                   <p className="text-xs text-slate-500">
                     Have {cHave} of {cNeeded}
-                    {willMove > 0
-                      ? ` — will take ${willMove}, leaving ${sourceHave - willMove} here`
+                    {willMoveInTargetUnits > 0
+                      ? ` — will take ${willMoveInTargetUnits}${unitsDiffer ? ` ${c.qtyUnit || "each"}` : ""}, leaving ${
+                          sourceHave - willMoveInSourceUnits
+                        } here`
                       : " — already full, nothing to move"}
                   </p>
                 </button>
@@ -13902,19 +13910,24 @@ function MergeLoveListItemModal({ item, items, onConfirm, onClose }) {
               const cHave = c.qtyHave || 0;
               const cNeeded = c.qty || 0;
               const remaining = Math.max(0, cNeeded - cHave);
-              const willMove = Math.min(sourceHave, remaining);
+              const sourceHaveInTargetUnits = convertQtyForUnit(sourceHave, item.qtyUnit, c.qtyUnit);
+              const willMoveInTargetUnits = Math.min(sourceHaveInTargetUnits, remaining);
+              const willMoveInSourceUnits = convertQtyForUnit(willMoveInTargetUnits, c.qtyUnit, item.qtyUnit);
+              const unitsDiffer = (item.qtyUnit || "each") !== (c.qtyUnit || "each");
               return (
                 <button
                   key={c.id}
                   onClick={() => onConfirm(c.id)}
-                  disabled={willMove <= 0}
+                  disabled={willMoveInTargetUnits <= 0}
                   className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-800 hover:border-slate-700 mb-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <p className="text-slate-100">{c.name}</p>
                   <p className="text-xs text-slate-500">
                     Have {cHave} of {cNeeded}
-                    {willMove > 0
-                      ? ` — will take ${willMove}, leaving ${sourceHave - willMove} here`
+                    {willMoveInTargetUnits > 0
+                      ? ` — will take ${willMoveInTargetUnits}${unitsDiffer ? ` ${c.qtyUnit || "each"}` : ""}, leaving ${
+                          sourceHave - willMoveInSourceUnits
+                        } here`
                       : " — already full, nothing to move"}
                   </p>
                 </button>
@@ -18326,6 +18339,24 @@ const RECEIVING_NAME_MEMORY_KEY = "warehub-receiving-name-memory";
 // standalone Receiving screen and by pulling a receipt directly from
 // inside a Job or Love List — same rules, same code, no matter which
 // screen someone approves from.
+// Converts a quantity between units when applying it to an item measured
+// differently — the only conversion this attempts is each↔dozen, since
+// that's the one pairing where the math is unambiguous (12 of one always
+// equals 1 of the other). Anything else (boxes, cases, unlabeled units)
+// is left untouched rather than guessing, since a wrong guess there would
+// silently corrupt real quantities.
+function convertQtyForUnit(qty, fromUnit, toUnit) {
+  const norm = (u) => (u || "each").trim().toLowerCase();
+  const from = norm(fromUnit);
+  const to = norm(toUnit);
+  if (from === to) return qty;
+  const isDozen = (u) => ["doz", "dozen", "dz"].includes(u);
+  const isEach = (u) => ["each", "ea", "ea.", "pc", "pcs"].includes(u);
+  if (isEach(from) && isDozen(to)) return qty / 12;
+  if (isDozen(from) && isEach(to)) return qty * 12;
+  return qty;
+}
+
 function applyReceiptLineToJob(job, line, catalog) {
   const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
   const items = job.items || [];
@@ -18340,16 +18371,21 @@ function applyReceiptLineToJob(job, line, catalog) {
 
   if (idx !== -1) {
     const existing = items[idx];
+    // Convert to whatever unit the existing item is actually tracked in
+    // — a receipt saying "12 EA" against an item tracked in dozens means
+    // 1 dozen showed up, not 12.
+    const shippedConverted = convertQtyForUnit(line.shippedQty, line.unit, existing.qtyUnit);
+    const backorderConverted = convertQtyForUnit(line.backorderQty, line.unit, existing.qtyUnit);
     const containers = [...(existing.containers || [])];
     const unassignedIdx = containers.findIndex((c) => c.name === "Unassigned");
-    if (line.shippedQty > 0) {
+    if (shippedConverted > 0) {
       if (unassignedIdx !== -1) {
         containers[unassignedIdx] = {
           ...containers[unassignedIdx],
-          qty: containers[unassignedIdx].qty + line.shippedQty,
+          qty: containers[unassignedIdx].qty + shippedConverted,
         };
       } else {
-        containers.push({ name: "Unassigned", qty: line.shippedQty });
+        containers.push({ name: "Unassigned", qty: shippedConverted });
       }
     }
     const updated = {
@@ -18357,8 +18393,8 @@ function applyReceiptLineToJob(job, line, catalog) {
       containers,
       qtyHave: totalHave(containers),
       ordered: true,
-      received: line.backorderQty > 0 ? "partial" : "yes",
-      backorderQty: line.backorderQty,
+      received: backorderConverted > 0 ? "partial" : "yes",
+      backorderQty: backorderConverted,
     };
     const nextItems = [...items];
     nextItems[idx] = updated;
@@ -18370,6 +18406,7 @@ function applyReceiptLineToJob(job, line, catalog) {
     id: uniqueId(),
     name: line.name,
     qtyNeeded: String(line.shippedQty + line.backorderQty || 1),
+    qtyUnit: line.unit && line.unit.toLowerCase() !== "each" ? line.unit : "",
     catalogId: line.catalogId,
     gang: match ? match.gang : "Unassigned",
     storageDetail: match ? match.storageDetail || "" : "",
@@ -18400,22 +18437,26 @@ function applyReceiptLineToLoveList(list, line, catalog) {
 
   if (idx !== -1) {
     const existing = items[idx];
+    // Same each↔dozen conversion as the Job version — convert into
+    // whatever unit the existing item is actually tracked in.
+    const shippedConverted = convertQtyForUnit(line.shippedQty, line.unit, existing.qtyUnit);
+    const backorderConverted = convertQtyForUnit(line.backorderQty, line.unit, existing.qtyUnit);
     const currentHave = existing.qtyHave || 0;
-    const newHave = currentHave + line.shippedQty;
+    const newHave = currentHave + shippedConverted;
     let receivedBatches = existing.receivedBatches || [];
-    if (line.shippedQty > 0) {
+    if (shippedConverted > 0) {
       receivedBatches = [
         ...receivedBatches,
-        { receivedQty: line.shippedQty, serials: [], timestamp: new Date().toISOString() },
+        { receivedQty: shippedConverted, serials: [], timestamp: new Date().toISOString() },
       ];
     }
     const statusOrder = ["requested", "ordered", "received", "staged", "sent"];
-    const shouldAdvance = line.shippedQty > 0 && statusOrder.indexOf(existing.status) < statusOrder.indexOf("received");
+    const shouldAdvance = shippedConverted > 0 && statusOrder.indexOf(existing.status) < statusOrder.indexOf("received");
     const updated = {
       ...existing,
       qtyHave: newHave,
       receivedBatches,
-      backorderQty: line.backorderQty,
+      backorderQty: backorderConverted,
       status: shouldAdvance ? "received" : existing.status,
       statusDates: shouldAdvance
         ? { ...existing.statusDates, received: new Date().toISOString().slice(0, 10) }
@@ -18432,6 +18473,7 @@ function applyReceiptLineToLoveList(list, line, catalog) {
     storageDetail: match ? match.storageDetail || "" : "",
     needsTransfer: match ? !!match.needsTransfer : false,
     backorderQty: line.backorderQty,
+    qtyUnit: line.unit && line.unit.toLowerCase() !== "each" ? line.unit : "",
   });
   fresh.qtyHave = line.shippedQty;
   // Same flag as the Job version — a new item Receiving created rather
@@ -18871,8 +18913,13 @@ function mergeJobItems(items, sourceId, targetId) {
   const sourceHave = totalHave(source.containers);
   const targetHave = totalHave(target.containers);
   const remainingNeed = Math.max(0, (Number(target.qtyNeeded) || 0) - targetHave);
-  const absorb = Math.min(sourceHave, remainingNeed);
-  if (absorb <= 0) return items;
+  // Convert what the source has into the target's unit before comparing —
+  // "12 each" and "1 doz" are the same physical amount, but comparing the
+  // raw numbers alone would treat them as wildly different quantities.
+  const sourceHaveInTargetUnits = convertQtyForUnit(sourceHave, source.qtyUnit, target.qtyUnit);
+  const absorbInTargetUnits = Math.min(sourceHaveInTargetUnits, remainingNeed);
+  if (absorbInTargetUnits <= 0) return items;
+  const absorb = convertQtyForUnit(absorbInTargetUnits, target.qtyUnit, source.qtyUnit);
 
   let toRemove = absorb;
   const sourceContainers = (source.containers || []).map((c) => ({ ...c }));
@@ -18893,9 +18940,9 @@ function mergeJobItems(items, sourceId, targetId) {
   const targetContainers = (target.containers || []).map((c) => ({ ...c }));
   const targetUnassignedIdx = targetContainers.findIndex((c) => c.name === "Unassigned");
   if (targetUnassignedIdx !== -1) {
-    targetContainers[targetUnassignedIdx].qty += absorb;
+    targetContainers[targetUnassignedIdx].qty += absorbInTargetUnits;
   } else {
-    targetContainers.push({ name: "Unassigned", qty: absorb });
+    targetContainers.push({ name: "Unassigned", qty: absorbInTargetUnits });
   }
 
   const newSourceHave = totalHave(cleanedSourceContainers);
@@ -18926,12 +18973,14 @@ function mergeLoveListItems(items, sourceId, targetId) {
   const sourceHave = source.qtyHave || 0;
   const targetHave = target.qtyHave || 0;
   const remainingNeed = Math.max(0, (target.qty || 0) - targetHave);
-  const absorb = Math.min(sourceHave, remainingNeed);
-  if (absorb <= 0) return items;
+  const sourceHaveInTargetUnits = convertQtyForUnit(sourceHave, source.qtyUnit, target.qtyUnit);
+  const absorbInTargetUnits = Math.min(sourceHaveInTargetUnits, remainingNeed);
+  if (absorbInTargetUnits <= 0) return items;
+  const absorb = convertQtyForUnit(absorbInTargetUnits, target.qtyUnit, source.qtyUnit);
 
   const newSourceHave = sourceHave - absorb;
   let nextItems = items.map((i, idx) => {
-    if (idx === targetIdx) return { ...target, qtyHave: targetHave + absorb };
+    if (idx === targetIdx) return { ...target, qtyHave: targetHave + absorbInTargetUnits };
     if (idx === sourceIdx)
       return {
         ...source,
@@ -19055,6 +19104,11 @@ function ReceivingApp({ onGoHome }) {
         catalogId: match ? match.id : null,
         backorderQty: Number(it.backorderQty) > 0 ? Number(it.backorderQty) : 0,
         shippedQty: Number(it.shippedQty) > 0 ? Number(it.shippedQty) : 0,
+        // The receipt's own unit of measure (EACH, DZ, CS, etc.) — used
+        // to convert against whatever unit an existing item is actually
+        // tracked in, so "12 EA" correctly reads as "1 DZ" when that's
+        // what the matching item uses.
+        unit: (it.unit || "each").trim(),
         // Target lives on the LINE, not the whole receipt — a single PO
         // can genuinely cover materials for two different Love Lists
         // and a job all at once, so each line needs to be routable on
