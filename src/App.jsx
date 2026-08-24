@@ -6455,7 +6455,7 @@ function SuggestNewItemModal({ job, managerName, onClose }) {
   );
 }
 
-function ItemCard({ item, selectMode, selected, isEditor, workerTasks = [], onToggleSelect, onEdit, onDelete, onViewSerials, onSuggestEdit, onOpenContainer, onAssignItem }) {
+function ItemCard({ item, selectMode, selected, isEditor, workerTasks = [], onToggleSelect, onEdit, onDelete, onViewSerials, onSuggestEdit, onOpenContainer, onAssignItem, onMergeItem }) {
   const handleCardClick = () => {
     if (selectMode) {
       onToggleSelect(item.id);
@@ -6472,6 +6472,8 @@ function ItemCard({ item, selectMode, selected, isEditor, workerTasks = [], onTo
       } ${
         selected
           ? "border-amber-500/70 bg-amber-500/5"
+          : item.importedViaReceiving
+          ? "border-sky-500/50 bg-sky-500/5"
           : (item.transferredContainers || []).length > 0
           ? "border-purple-500/40 bg-purple-500/5"
           : item.gang === "Unassigned" || item.storage === "Unassigned"
@@ -6544,6 +6546,31 @@ function ItemCard({ item, selectMode, selected, isEditor, workerTasks = [], onTo
       </div>
 
       <div className="flex flex-wrap gap-1.5 mt-3">
+        {item.importedViaReceiving && isEditor && (
+          <span className="text-xs rounded-full pl-2.5 pr-1.5 py-1 border border-sky-500/40 bg-sky-500/10 text-sky-300 flex items-center gap-1.5">
+            <Inbox className="w-3 h-3" />
+            Imported
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onMergeItem(item);
+              }}
+              className="text-sky-200 hover:text-white underline decoration-dotted"
+            >
+              Merge
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onMergeItem(item, { dismiss: true });
+              }}
+              className="text-sky-500 hover:text-sky-300"
+              title="This is genuinely a new item — stop highlighting it"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </span>
+        )}
         {(item.transferredContainers || []).length > 0 && (
           <span className="text-xs rounded-full px-2.5 py-1 border border-purple-500/40 bg-purple-500/10 text-purple-300 flex items-center gap-1">
             <Lock className="w-3 h-3" />
@@ -7839,6 +7866,72 @@ function JobPicker({
   );
 }
 
+// Lets you fix an over-eager import — pick another item in the same job
+// to fold this one into, filling whatever it's short and leaving any
+// leftover here. Commits on tap since the preview already shows exactly
+// what will happen, same as the catalog-link pickers elsewhere.
+function MergeItemModal({ item, items, onConfirm, onClose }) {
+  const [search, setSearch] = useState("");
+  if (!item) return null;
+  const sourceHave = totalHave(item.containers);
+  const q = search.trim().toLowerCase();
+  const candidates = items.filter((i) => i.id !== item.id && (!q || i.name.toLowerCase().includes(q)));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <h3 className="text-slate-100 font-semibold text-sm truncate">Merge "{item.name}" into...</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200 shrink-0">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="px-5 pt-4 shrink-0">
+          <p className="text-xs text-slate-500 mb-3">
+            Has {sourceHave} on hand. Whatever's needed to fill the target moves over — anything
+            left stays here.
+          </p>
+          <input
+            autoFocus
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search items..."
+            className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500/60"
+          />
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {candidates.length === 0 ? (
+            <p className="text-xs text-slate-500 text-center py-3">No matches.</p>
+          ) : (
+            candidates.map((c) => {
+              const cHave = totalHave(c.containers);
+              const cNeeded = Number(c.qtyNeeded) || 0;
+              const remaining = Math.max(0, cNeeded - cHave);
+              const willMove = Math.min(sourceHave, remaining);
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => onConfirm(c.id)}
+                  disabled={willMove <= 0}
+                  className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-800 hover:border-slate-700 mb-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <p className="text-slate-100">{c.name}</p>
+                  <p className="text-xs text-slate-500">
+                    Have {cHave} of {cNeeded}
+                    {willMove > 0
+                      ? ` — will take ${willMove}, leaving ${sourceHave - willMove} here`
+                      : " — already full, nothing to move"}
+                  </p>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function JobInventory({
   job,
   isEditor: rawIsEditor,
@@ -7895,6 +7988,7 @@ function JobInventory({
   const [logOpen, setLogOpen] = useState(false);
   const [referenceDocsOpen, setReferenceDocsOpen] = useState(false);
   const [pullFromReceivingOpen, setPullFromReceivingOpen] = useState(false);
+  const [mergingItem, setMergingItem] = useState(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [containersOpen, setContainersOpen] = useState(false);
@@ -8366,6 +8460,30 @@ function JobInventory({
     } else {
       setFormState(item);
     }
+  };
+
+  // The "Imported" badge's two actions: tapping Merge opens the picker
+  // below; tapping the X just clears the flag, for whenever the imported
+  // item genuinely is a new, distinct item and not a match for anything
+  // already on the list.
+  const handleMergeAction = (item, options = {}) => {
+    if (options.dismiss) {
+      onUpdateJob((prevJob) => ({
+        ...prevJob,
+        items: prevJob.items.map((i) => (i.id === item.id ? { ...i, importedViaReceiving: false } : i)),
+      }));
+      return;
+    }
+    setMergingItem(item);
+  };
+
+  const confirmMerge = (targetId) => {
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      items: mergeJobItems(prevJob.items, mergingItem.id, targetId),
+    }));
+    playSaveChime();
+    setMergingItem(null);
   };
 
   const requestDeleteItem = (item) => {
@@ -9275,6 +9393,7 @@ function JobInventory({
                             onOpenContainer={openContainerFromItem}
                             workerTasks={workerTasks}
                             onAssignItem={setAssigningItem}
+                            onMergeItem={handleMergeAction}
                           />
                         ))}
                       </div>
@@ -9300,6 +9419,7 @@ function JobInventory({
                 onOpenContainer={openContainerFromItem}
                 workerTasks={workerTasks}
                 onAssignItem={setAssigningItem}
+                onMergeItem={handleMergeAction}
               />
             ))}
           </div>
@@ -9665,6 +9785,15 @@ function JobInventory({
           target={job}
           onApplyToTarget={(updatedJob) => onUpdateJob(() => updatedJob)}
           onClose={() => setPullFromReceivingOpen(false)}
+        />
+      )}
+
+      {mergingItem && (
+        <MergeItemModal
+          item={mergingItem}
+          items={job.items || []}
+          onConfirm={confirmMerge}
+          onClose={() => setMergingItem(null)}
         />
       )}
 
@@ -13719,9 +13848,74 @@ function LoveListPhotosModal({ list, isEditor, onAddPhoto, onRemovePhoto, onClos
   );
 }
 
+// Same idea as the Job List version, but for a Love List's flat Have/Need
+// numbers instead of a container list.
+function MergeLoveListItemModal({ item, items, onConfirm, onClose }) {
+  const [search, setSearch] = useState("");
+  if (!item) return null;
+  const sourceHave = item.qtyHave || 0;
+  const q = search.trim().toLowerCase();
+  const candidates = items.filter((i) => i.id !== item.id && (!q || i.name.toLowerCase().includes(q)));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <h3 className="text-slate-100 font-semibold text-sm truncate">Merge "{item.name}" into...</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200 shrink-0">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="px-5 pt-4 shrink-0">
+          <p className="text-xs text-slate-500 mb-3">
+            Has {sourceHave} on hand. Whatever's needed to fill the target moves over — anything
+            left stays here.
+          </p>
+          <input
+            autoFocus
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search items..."
+            className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500/60"
+          />
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {candidates.length === 0 ? (
+            <p className="text-xs text-slate-500 text-center py-3">No matches.</p>
+          ) : (
+            candidates.map((c) => {
+              const cHave = c.qtyHave || 0;
+              const cNeeded = c.qty || 0;
+              const remaining = Math.max(0, cNeeded - cHave);
+              const willMove = Math.min(sourceHave, remaining);
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => onConfirm(c.id)}
+                  disabled={willMove <= 0}
+                  className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-800 hover:border-slate-700 mb-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <p className="text-slate-100">{c.name}</p>
+                  <p className="text-xs text-slate-500">
+                    Have {cHave} of {cNeeded}
+                    {willMove > 0
+                      ? ` — will take ${willMove}, leaving ${sourceHave - willMove} here`
+                      : " — already full, nothing to move"}
+                  </p>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onBack, onGoHome }) {
   const [addingItem, setAddingItem] = useState(false);
   const [showPullFromReceiving, setShowPullFromReceiving] = useState(false);
+  const [mergingItem, setMergingItem] = useState(null);
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
   const [showPhotosModal, setShowPhotosModal] = useState(false);
@@ -14526,6 +14720,8 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                 } ${
                   selectMode && selectedIds.has(item.id)
                     ? "border-amber-500/60 bg-amber-500/5"
+                    : item.importedViaReceiving
+                    ? "border-sky-500/50 bg-sky-500/5"
                     : "border-slate-800"
                 }`}
               >
@@ -14618,6 +14814,32 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                     </button>
                   )}
                 </div>
+                {item.importedViaReceiving && isEditor && (
+                  <span className="inline-flex items-center gap-1.5 text-xs rounded-full pl-2.5 pr-1.5 py-1 border border-sky-500/40 bg-sky-500/10 text-sky-300 mb-2">
+                    <Inbox className="w-3 h-3" />
+                    Imported
+                    <button
+                      onClick={() => setMergingItem(item)}
+                      className="text-sky-200 hover:text-white underline decoration-dotted"
+                    >
+                      Merge
+                    </button>
+                    <button
+                      onClick={() =>
+                        onUpdateList({
+                          ...list,
+                          items: list.items.map((i) =>
+                            i.id === item.id ? { ...i, importedViaReceiving: false } : i
+                          ),
+                        })
+                      }
+                      className="text-sky-500 hover:text-sky-300"
+                      title="This is genuinely a new item — stop highlighting it"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                )}
                 {isEditor ? (
                   <button
                     onClick={() => setRelinkingItem(item)}
@@ -15203,6 +15425,19 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           target={list}
           onApplyToTarget={onUpdateList}
           onClose={() => setShowPullFromReceiving(false)}
+        />
+      )}
+
+      {mergingItem && (
+        <MergeLoveListItemModal
+          item={mergingItem}
+          items={list.items || []}
+          onConfirm={(targetId) => {
+            onUpdateList({ ...list, items: mergeLoveListItems(list.items, mergingItem.id, targetId) });
+            playSaveChime();
+            setMergingItem(null);
+          }}
+          onClose={() => setMergingItem(null)}
         />
       )}
     </div>
@@ -18130,6 +18365,12 @@ function applyReceiptLineToJob(job, line, catalog) {
     ordered: true,
     received: line.backorderQty > 0 ? "partial" : line.shippedQty > 0 ? "yes" : "no",
     backorderQty: line.backorderQty,
+    // Flags this as a fresh item Receiving created rather than matched —
+    // lets the item card highlight it and offer a merge, since a brand
+    // new name might really just be an existing item under slightly
+    // different wording (a size variant, a typo) rather than genuinely
+    // new stock.
+    importedViaReceiving: true,
   };
   return { ...job, items: [...items, fresh] };
 }
@@ -18178,6 +18419,9 @@ function applyReceiptLineToLoveList(list, line, catalog) {
     backorderQty: line.backorderQty,
   });
   fresh.qtyHave = line.shippedQty;
+  // Same flag as the Job version — a new item Receiving created rather
+  // than matched, so it can be highlighted and offered a merge.
+  fresh.importedViaReceiving = true;
   if (line.shippedQty > 0) {
     fresh.status = "received";
     fresh.statusDates.received = new Date().toISOString().slice(0, 10);
@@ -18579,6 +18823,97 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
       )}
     </div>
   );
+}
+
+// Merges an imported item's quantity into an existing one — moves however
+// much is needed to fill the target (never overfills it), and leaves
+// whatever's left over sitting on the source. If the source empties out
+// completely, it's removed outright rather than lingering as a
+// zero-quantity leftover. Job items track quantity through a list of
+// containers rather than one flat number, so the moved amount specifically
+// comes out of (and goes into) each item's "Unassigned" bucket — the same
+// place Receiving always drops freshly-shipped stock before it's sorted.
+function mergeJobItems(items, sourceId, targetId) {
+  const sourceIdx = items.findIndex((i) => i.id === sourceId);
+  const targetIdx = items.findIndex((i) => i.id === targetId);
+  if (sourceIdx === -1 || targetIdx === -1 || sourceId === targetId) return items;
+
+  const source = items[sourceIdx];
+  const target = items[targetIdx];
+  const sourceHave = totalHave(source.containers);
+  const targetHave = totalHave(target.containers);
+  const remainingNeed = Math.max(0, (Number(target.qtyNeeded) || 0) - targetHave);
+  const absorb = Math.min(sourceHave, remainingNeed);
+  if (absorb <= 0) return items;
+
+  let toRemove = absorb;
+  const sourceContainers = (source.containers || []).map((c) => ({ ...c }));
+  const unassignedIdx = sourceContainers.findIndex((c) => c.name === "Unassigned");
+  if (unassignedIdx !== -1) {
+    const take = Math.min(sourceContainers[unassignedIdx].qty, toRemove);
+    sourceContainers[unassignedIdx].qty -= take;
+    toRemove -= take;
+  }
+  for (let i = 0; i < sourceContainers.length && toRemove > 0; i++) {
+    if (i === unassignedIdx) continue;
+    const take = Math.min(sourceContainers[i].qty, toRemove);
+    sourceContainers[i].qty -= take;
+    toRemove -= take;
+  }
+  const cleanedSourceContainers = sourceContainers.filter((c) => c.qty > 0);
+
+  const targetContainers = (target.containers || []).map((c) => ({ ...c }));
+  const targetUnassignedIdx = targetContainers.findIndex((c) => c.name === "Unassigned");
+  if (targetUnassignedIdx !== -1) {
+    targetContainers[targetUnassignedIdx].qty += absorb;
+  } else {
+    targetContainers.push({ name: "Unassigned", qty: absorb });
+  }
+
+  const newSourceHave = totalHave(cleanedSourceContainers);
+  let nextItems = items.map((i, idx) => {
+    if (idx === targetIdx) return { ...target, containers: targetContainers, qtyHave: totalHave(targetContainers) };
+    if (idx === sourceIdx)
+      return {
+        ...source,
+        containers: cleanedSourceContainers,
+        qtyHave: newSourceHave,
+        importedViaReceiving: newSourceHave > 0 ? source.importedViaReceiving : false,
+      };
+    return i;
+  });
+  if (newSourceHave === 0) nextItems = nextItems.filter((i) => i.id !== sourceId);
+  return nextItems;
+}
+
+// Same idea for Love List items, which just track Have as one flat number
+// rather than a list of containers.
+function mergeLoveListItems(items, sourceId, targetId) {
+  const sourceIdx = items.findIndex((i) => i.id === sourceId);
+  const targetIdx = items.findIndex((i) => i.id === targetId);
+  if (sourceIdx === -1 || targetIdx === -1 || sourceId === targetId) return items;
+
+  const source = items[sourceIdx];
+  const target = items[targetIdx];
+  const sourceHave = source.qtyHave || 0;
+  const targetHave = target.qtyHave || 0;
+  const remainingNeed = Math.max(0, (target.qty || 0) - targetHave);
+  const absorb = Math.min(sourceHave, remainingNeed);
+  if (absorb <= 0) return items;
+
+  const newSourceHave = sourceHave - absorb;
+  let nextItems = items.map((i, idx) => {
+    if (idx === targetIdx) return { ...target, qtyHave: targetHave + absorb };
+    if (idx === sourceIdx)
+      return {
+        ...source,
+        qtyHave: newSourceHave,
+        importedViaReceiving: newSourceHave > 0 ? source.importedViaReceiving : false,
+      };
+    return i;
+  });
+  if (newSourceHave === 0) nextItems = nextItems.filter((i) => i.id !== sourceId);
+  return nextItems;
 }
 
 function newReceiptBatch(photoUrl, path, lines) {
@@ -19107,16 +19442,37 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
   // fight that on purpose.
   const jobOptions = jobs.filter((j) => !j.archived && !j.isQuickTransfer && !j.sealed);
   const listOptions = lists.filter((l) => !l.archived);
-  const filteredTargets = (assignTargetType === "job" ? jobOptions : listOptions).filter((t) => {
-    const q = targetSearch.trim().toLowerCase();
-    if (!q) return true;
-    if (assignTargetType === "job") return (t.name || "").toLowerCase().includes(q);
-    const haystack = [t.jobLabel, t.subJobLabel, t.submittedBy, t.dateReceived]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-    return haystack.includes(q);
-  });
+
+  // How many of this receipt's still-unassigned line names already exist
+  // by name on a given job/list — the whole point is spotting "this
+  // receipt is obviously for this Love List" at a glance, so an order
+  // that lines up closely with something floats straight to the top.
+  const unassignedNames = new Set(
+    batch.lines.filter((l) => !l.targetId && l.name.trim()).map((l) => normalizeText(l.name))
+  );
+  const matchCountFor = (t) => {
+    if (unassignedNames.size === 0) return 0;
+    const targetNames = new Set((t.items || []).map((i) => normalizeText(i.name)));
+    let count = 0;
+    unassignedNames.forEach((n) => {
+      if (targetNames.has(n)) count++;
+    });
+    return count;
+  };
+
+  const filteredTargets = (assignTargetType === "job" ? jobOptions : listOptions)
+    .filter((t) => {
+      const q = targetSearch.trim().toLowerCase();
+      if (!q) return true;
+      if (assignTargetType === "job") return (t.name || "").toLowerCase().includes(q);
+      const haystack = [t.jobLabel, t.subJobLabel, t.submittedBy, t.dateReceived]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(q);
+    })
+    .map((t) => ({ ...t, __matchCount: matchCountFor(t) }))
+    .sort((a, b) => b.__matchCount - a.__matchCount);
 
   const targetLabelFor = (line) => {
     if (!line.targetId) return null;
@@ -19478,23 +19834,43 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
                 {filteredTargets.length === 0 ? (
                   <p className="text-xs text-slate-500 text-center py-3">No matches.</p>
                 ) : (
-                  filteredTargets.map((t) => (
-                    <button
-                      key={t.id}
-                      onClick={() => chooseTarget(t)}
-                      className="w-full text-left text-sm rounded-md px-2.5 py-1.5 text-slate-300 hover:bg-slate-800 mb-1"
-                    >
-                      {assignTargetType === "job" ? (
-                        t.name
-                      ) : (
-                        <>
-                          <p>
-                            {t.jobLabel}
-                            {t.subJobLabel ? ` — ${t.subJobLabel}` : ""}
-                          </p>
-                          {/* Most Love Lists share the same jobLabel — this
-                              line is what actually tells identical-looking
-                              options apart. */}
+                  filteredTargets.map((t) => {
+                    const isPerfect = t.__matchCount > 0 && t.__matchCount === unassignedNames.size;
+                    return (
+                      <button
+                        key={t.id}
+                        onClick={() => chooseTarget(t)}
+                        className={`w-full text-left text-sm rounded-md px-2.5 py-1.5 hover:bg-slate-800 mb-1 ${
+                          isPerfect
+                            ? "border border-emerald-500/40 bg-emerald-500/10"
+                            : t.__matchCount > 0
+                            ? "border border-sky-500/30"
+                            : ""
+                        } text-slate-300`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span>{assignTargetType === "job" ? t.name : (
+                            <>
+                              {t.jobLabel}
+                              {t.subJobLabel ? ` — ${t.subJobLabel}` : ""}
+                            </>
+                          )}</span>
+                          {t.__matchCount > 0 && (
+                            <span
+                              className={`text-[10px] rounded-full px-1.5 py-0.5 border shrink-0 ${
+                                isPerfect
+                                  ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                                  : "bg-sky-500/15 text-sky-300 border-sky-500/40"
+                              }`}
+                            >
+                              {isPerfect ? "✓ Perfect match" : `${t.__matchCount} matching`}
+                            </span>
+                          )}
+                        </div>
+                        {assignTargetType === "love_list" && (
+                          // Most Love Lists share the same jobLabel — this
+                          // line is what actually tells identical-looking
+                          // options apart.
                           <p className="text-xs opacity-70">
                             {[
                               t.submittedBy && `Submitted by ${t.submittedBy}`,
@@ -19504,10 +19880,10 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
                               .filter(Boolean)
                               .join(" · ")}
                           </p>
-                        </>
-                      )}
-                    </button>
-                  ))
+                        )}
+                      </button>
+                    );
+                  })
                 )}
               </div>
             )}
