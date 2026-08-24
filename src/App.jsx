@@ -18644,6 +18644,36 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
       lines: selectedBatch.lines.map((l) => (l.id === lineId ? { ...l, ...changes } : l)),
     });
   };
+
+  // Catalog matching waits for a pause in typing instead of re-checking on
+  // every keystroke — matching off just the first letter or two almost
+  // never finds the right thing, and locking onto that first guess made
+  // it impossible to ever find a better one later. Each pause re-evaluates
+  // fresh against the *current* full text, and only ever touches an
+  // auto-found link — a deliberate pick from the catalog picker
+  // (catalogLinkedManually) is never silently replaced or cleared.
+  const nameDebounceTimers = useRef({});
+  const selectedBatchRef = useRef(selectedBatch);
+  useEffect(() => {
+    selectedBatchRef.current = selectedBatch;
+  }, [selectedBatch]);
+
+  const handleNameChange = (lineId, newName) => {
+    updateLine(lineId, { name: newName });
+    if (nameDebounceTimers.current[lineId]) clearTimeout(nameDebounceTimers.current[lineId]);
+    nameDebounceTimers.current[lineId] = setTimeout(() => {
+      const currentBatch = selectedBatchRef.current;
+      const currentLine = currentBatch && currentBatch.lines.find((l) => l.id === lineId);
+      if (!currentLine || currentLine.catalogLinkedManually) return;
+      const found = findCatalogMatch(currentLine.name, catalog);
+      if (found && found.id !== currentLine.catalogId) {
+        updateLine(lineId, { catalogId: found.id });
+      } else if (!found && currentLine.catalogId) {
+        updateLine(lineId, { catalogId: null });
+      }
+    }, 900);
+  };
+
   const removeLine = (lineId) => {
     updateSelectedBatch({ lines: selectedBatch.lines.filter((l) => l.id !== lineId) });
   };
@@ -18788,20 +18818,7 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
                 <div className="flex items-center gap-2 mb-1.5">
                   <input
                     value={line.name}
-                    onChange={(e) => {
-                      const newName = e.target.value;
-                      const changes = { name: newName };
-                      // Only fill in a catalog link if there isn't one
-                      // already — never override a manual link (or a
-                      // generic multi-size entry chosen on purpose) just
-                      // because retyping the name doesn't happen to
-                      // fuzzy-match it anymore.
-                      if (!line.catalogId) {
-                        const found = findCatalogMatch(newName, catalog);
-                        if (found) changes.catalogId = found.id;
-                      }
-                      updateLine(line.id, changes);
-                    }}
+                    onChange={(e) => handleNameChange(line.id, e.target.value)}
                     className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
                   />
                   <button
@@ -18913,7 +18930,7 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
               {relinkingLine.catalogId && (
                 <button
                   onClick={() => {
-                    updateLine(relinkingLine.id, { catalogId: null });
+                    updateLine(relinkingLine.id, { catalogId: null, catalogLinkedManually: false });
                     setRelinkingLine(null);
                     setCatalogSearch("");
                   }}
@@ -18929,7 +18946,7 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
                   <button
                     key={c.id}
                     onClick={() => {
-                      updateLine(relinkingLine.id, { catalogId: c.id });
+                      updateLine(relinkingLine.id, { catalogId: c.id, catalogLinkedManually: true });
                       learnAlias(c.id, relinkingLine.rawName);
                       setRelinkingLine(null);
                       setCatalogSearch("");
@@ -19618,6 +19635,36 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
       lines: batch.lines.map((l) => (l.id === lineId ? { ...l, ...changes } : l)),
     });
   };
+
+  // Catalog matching waits for a pause in typing instead of re-checking on
+  // every keystroke — matching off just the first letter or two almost
+  // never finds the right thing, and locking onto that first guess made
+  // it impossible to ever find a better one later. Each pause re-evaluates
+  // fresh against the *current* full text, and only ever touches an
+  // auto-found link — a deliberate pick from the catalog picker
+  // (catalogLinkedManually) is never silently replaced or cleared.
+  const nameDebounceTimers = useRef({});
+  const batchRef = useRef(batch);
+  useEffect(() => {
+    batchRef.current = batch;
+  }, [batch]);
+
+  const handleNameChange = (lineId, newName) => {
+    updateLine(lineId, { name: newName });
+    if (nameDebounceTimers.current[lineId]) clearTimeout(nameDebounceTimers.current[lineId]);
+    nameDebounceTimers.current[lineId] = setTimeout(() => {
+      const currentBatch = batchRef.current;
+      const currentLine = currentBatch && currentBatch.lines.find((l) => l.id === lineId);
+      if (!currentLine || currentLine.catalogLinkedManually) return;
+      const found = findCatalogMatch(currentLine.name, catalog);
+      if (found && found.id !== currentLine.catalogId) {
+        updateLine(lineId, { catalogId: found.id });
+      } else if (!found && currentLine.catalogId) {
+        updateLine(lineId, { catalogId: null });
+      }
+    }, 900);
+  };
+
   const removeLine = (lineId) => {
     onUpdateBatch({ ...batch, lines: batch.lines.filter((l) => l.id !== lineId) });
   };
@@ -19755,20 +19802,7 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
                 <div className="flex items-center gap-2 mb-1.5">
                   <input
                     value={line.name}
-                    onChange={(e) => {
-                      const newName = e.target.value;
-                      const changes = { name: newName };
-                      // Only fill in a catalog link if there isn't one
-                      // already — never override a manual link (or a
-                      // generic multi-size entry chosen on purpose) just
-                      // because retyping the name doesn't happen to
-                      // fuzzy-match it anymore.
-                      if (!line.catalogId) {
-                        const found = findCatalogMatch(newName, catalog);
-                        if (found) changes.catalogId = found.id;
-                      }
-                      updateLine(line.id, changes);
-                    }}
+                    onChange={(e) => handleNameChange(line.id, e.target.value)}
                     className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
                   />
                   <button
@@ -19931,11 +19965,12 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
               {relinkingLine.catalogId && (
                 <button
                   onClick={() => {
-                    // Unlinking reverts to whatever OCR actually read —
-                    // gives a clean slate to retype or relink to
-                    // something else, rather than keeping a catalog name
-                    // that no longer has anything backing it.
-                    updateLine(relinkingLine.id, { catalogId: null, name: relinkingLine.rawName });
+                    // Unlinking only clears the catalog link — the name
+                    // you've typed (or that's already been auto-filled
+                    // from a remembered match) stays exactly as-is, same
+                    // as linking never touches it either. Reverting to
+                    // raw OCR text here would throw away real work.
+                    updateLine(relinkingLine.id, { catalogId: null, catalogLinkedManually: false });
                     setRelinkingLine(null);
                     setCatalogSearch("");
                   }}
@@ -19958,7 +19993,7 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
                       // the same storage/gang, so the specific wording on
                       // this line (the size, the spec) is exactly what
                       // shouldn't get collapsed away automatically.
-                      updateLine(relinkingLine.id, { catalogId: c.id });
+                      updateLine(relinkingLine.id, { catalogId: c.id, catalogLinkedManually: true });
                       onLearnAlias && onLearnAlias(c.id, relinkingLine.rawName);
                       setRelinkingLine(null);
                       setCatalogSearch("");
