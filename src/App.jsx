@@ -19255,6 +19255,8 @@ function ReceivingApp({ onGoHome }) {
   const [scanError, setScanError] = useState("");
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [pendingSearch, setPendingSearch] = useState("");
+  const [historySearch, setHistorySearch] = useState("");
   const [viewingPhoto, setViewingPhoto] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [confirmingClearDiscarded, setConfirmingClearDiscarded] = useState(false);
@@ -19543,8 +19545,23 @@ function ReceivingApp({ onGoHome }) {
     );
   }
 
-  const pending = queue.filter((b) => b.status === "pending");
-  const history = queue.filter((b) => b.status !== "pending");
+  const pending = queue.filter((b) => b.status === "pending").filter((b) => {
+    const q = pendingSearch.trim().toLowerCase();
+    if (!q) return true;
+    const haystack = [b.label, ...b.lines.map((l) => l.name)].filter(Boolean).join(" ").toLowerCase();
+    return haystack.includes(q);
+  });
+  const history = queue
+    .filter((b) => b.status !== "pending")
+    .filter((b) => {
+      const q = historySearch.trim().toLowerCase();
+      if (!q) return true;
+      const haystack = [b.label, ...b.lines.map((l) => l.name)]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(q);
+    });
   const activeBatch = queue.find((b) => b.id === activeBatchId) || null;
 
   // Defined once, rendered in both return paths below — this used to
@@ -19648,10 +19665,18 @@ function ReceivingApp({ onGoHome }) {
         <p className="text-xs font-medium text-slate-400 mb-2">
           Awaiting review ({pending.length})
         </p>
+        <input
+          value={pendingSearch}
+          onChange={(e) => setPendingSearch(e.target.value)}
+          placeholder="Search pending receipts — item, label..."
+          className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+        />
         <div className="space-y-2 mb-6">
           {pending.length === 0 ? (
             <p className="text-sm text-slate-500 text-center py-8">
-              Nothing waiting on you — scan a receipt to get started.
+              {pendingSearch.trim()
+                ? "Nothing matches that search."
+                : "Nothing waiting on you — scan a receipt to get started."}
             </p>
           ) : (
             pending.map((b) => (
@@ -19707,9 +19732,19 @@ function ReceivingApp({ onGoHome }) {
           )}
         </div>
         {showHistory && (
+          <input
+            value={historySearch}
+            onChange={(e) => setHistorySearch(e.target.value)}
+            placeholder="Search history — item, vendor, PO#, reference..."
+            className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+          />
+        )}
+        {showHistory && (
           <div className="space-y-2">
             {history.length === 0 ? (
-              <p className="text-sm text-slate-500 text-center py-4">Nothing yet.</p>
+              <p className="text-sm text-slate-500 text-center py-4">
+                {historySearch.trim() ? "Nothing matches that search." : "Nothing yet."}
+              </p>
             ) : (
               history.map((b) => (
                 <button
