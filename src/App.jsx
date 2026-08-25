@@ -19289,6 +19289,16 @@ function ReceiptHistoryDetail({ batch, jobs, lists, onBack, onViewPhoto }) {
 
 function ReceivingApp({ onGoHome }) {
   const [queue, setQueue] = useState([]);
+  // Kept in sync on every single write, synchronously — this is what a
+  // long bulk scan reads from before merging in each new receipt. Using
+  // the `queue` state variable directly there was the actual bug: if you
+  // edited something (like a label) while other files were still
+  // scanning in the background, the next background scan to finish would
+  // save from an old snapshot taken before your edit and silently wipe it
+  // out. Reading from this ref instead means every save always builds on
+  // top of whatever's genuinely most recent, no matter what else was
+  // happening at the same time.
+  const queueRef = useRef([]);
   const [jobs, setJobs] = useState([]);
   const [lists, setLists] = useState([]);
   const [catalog, setCatalog] = useState([]);
@@ -19318,7 +19328,11 @@ function ReceivingApp({ onGoHome }) {
         getWithRetry(CATALOG_KEY),
         getWithRetry(RECEIVING_NAME_MEMORY_KEY),
       ]);
-      if (qResult.ok && qResult.value) setQueue(JSON.parse(qResult.value));
+      if (qResult.ok && qResult.value) {
+        const loaded = JSON.parse(qResult.value);
+        setQueue(loaded);
+        queueRef.current = loaded;
+      }
       if (jResult.ok && jResult.value) setJobs(JSON.parse(jResult.value));
       if (lResult.ok && lResult.value) setLists(JSON.parse(lResult.value));
       if (cResult.ok && cResult.value) setCatalog(JSON.parse(cResult.value));
@@ -19332,6 +19346,7 @@ function ReceivingApp({ onGoHome }) {
   }, []);
 
   const saveQueue = (next) => {
+    queueRef.current = next;
     setQueue(next);
     saveWithRetry(RECEIVING_QUEUE_KEY, JSON.stringify(next)).catch(() => {});
   };
@@ -19426,14 +19441,19 @@ function ReceivingApp({ onGoHome }) {
     // but for a big stack it's the difference between losing nothing and
     // losing everything if the tab gets backgrounded, the phone locks, or
     // anything else interrupts a run that might take several minutes.
-    let currentQueue = queue;
+    //
+    // Each iteration reads queueRef.current fresh, right before saving —
+    // not a locally-tracked variable — because a scan can take several
+    // seconds, plenty of time for you to open an already-finished receipt
+    // and start editing it while the rest keep scanning in the
+    // background. Reading a stale snapshot here would silently overwrite
+    // whatever you'd just typed the next time a background scan finished.
     let firstBatchId = null;
     for (let i = 0; i < files.length; i++) {
       setScanProgress({ current: i + 1, total: files.length });
       try {
         const batch = await scanOneFile(files[i]);
-        currentQueue = [batch, ...currentQueue];
-        saveQueue(currentQueue);
+        saveQueue([batch, ...queueRef.current]);
         if (!firstBatchId) firstBatchId = batch.id;
         playSaveChime();
       } catch (err) {
@@ -19447,7 +19467,7 @@ function ReceivingApp({ onGoHome }) {
   };
 
   const updateBatch = (updated) => {
-    saveQueue(queue.map((b) => (b.id === updated.id ? updated : b)));
+    saveQueue(queueRef.current.map((b) => (b.id === updated.id ? updated : b)));
   };
 
   // Same alias-learning as Love List's scan review — linking a garbled OCR
@@ -19473,7 +19493,7 @@ function ReceivingApp({ onGoHome }) {
   const discardBatch = async (batch) => {
     if (batch.photoPath) deleteReferenceDocument(batch.photoPath).catch(() => {});
     (batch.extraPhotoPaths || []).forEach((p) => deleteReferenceDocument(p).catch(() => {}));
-    saveQueue(queue.map((b) => (b.id === batch.id ? { ...b, status: "discarded" } : b)));
+    saveQueue(queueRef.current.map((b) => (b.id === batch.id ? { ...b, status: "discarded" } : b)));
     setActiveBatchId(null);
   };
 
@@ -19483,8 +19503,8 @@ function ReceivingApp({ onGoHome }) {
   // move into the target; the absorbed batch itself is removed from the
   // queue entirely rather than left behind as an empty duplicate.
   const combineBatches = (targetId, sourceId) => {
-    const target = queue.find((b) => b.id === targetId);
-    const source = queue.find((b) => b.id === sourceId);
+    const target = queueRef.current.find((b) => b.id === targetId);
+    const source = queueRef.current.find((b) => b.id === sourceId);
     if (!target || !source || target.id === source.id) return;
 
     const mergedLines = [...target.lines, ...source.lines.map((l) => ({ ...l, id: uniqueId() }))];
@@ -19507,7 +19527,7 @@ function ReceivingApp({ onGoHome }) {
 
     playSaveChime();
     saveQueue(
-      queue
+      queueRef.current
         .filter((b) => b.id !== sourceId)
         .map((b) => (b.id === targetId ? updatedTarget : b))
     );
@@ -19519,8 +19539,8 @@ function ReceivingApp({ onGoHome }) {
   // have each call working off the same stale queue snapshot and losing
   // all but the last merge.
   const combineMultipleBatches = (targetId, sourceIds) => {
-    const target = queue.find((b) => b.id === targetId);
-    const sources = sourceIds.map((id) => queue.find((b) => b.id === id)).filter(Boolean);
+    const target = queueRef.current.find((b) => b.id === targetId);
+    const sources = sourceIds.map((id) => queueRef.current.find((b) => b.id === id)).filter(Boolean);
     if (!target || sources.length === 0) return;
 
     let mergedLines = [...target.lines];
@@ -19543,7 +19563,7 @@ function ReceivingApp({ onGoHome }) {
 
     playSaveChime();
     saveQueue(
-      queue
+      queueRef.current
         .filter((b) => !sourceIdSet.has(b.id))
         .map((b) => (b.id === targetId ? updatedTarget : b))
     );
@@ -19553,10 +19573,10 @@ function ReceivingApp({ onGoHome }) {
   // the photo file itself; this just clears the leftover queue record so
   // discarded (or old approved) receipts don't pile up forever.
   const deleteBatch = (id) => {
-    saveQueue(queue.filter((b) => b.id !== id));
+    saveQueue(queueRef.current.filter((b) => b.id !== id));
   };
   const clearDiscarded = () => {
-    saveQueue(queue.filter((b) => b.status !== "discarded"));
+    saveQueue(queueRef.current.filter((b) => b.status !== "discarded"));
   };
   // Wipes the whole history list, approved entries included — this only
   // ever removes Receiving's own queue record. It never touches the
@@ -19565,7 +19585,7 @@ function ReceivingApp({ onGoHome }) {
   // job's Reference Documents page — deleting the underlying file here
   // would silently break that.
   const clearAllHistory = () => {
-    saveQueue(queue.filter((b) => b.status === "pending"));
+    saveQueue(queueRef.current.filter((b) => b.status === "pending"));
   };
 
   // Applying an approved line to a Job — items are matched by catalogId;
@@ -19659,7 +19679,7 @@ function ReceivingApp({ onGoHome }) {
     const updatedBatch = stillPending
       ? { ...batch, lines: updatedLines }
       : { ...batch, lines: updatedLines, status: "approved", approvedAt: new Date().toISOString() };
-    saveQueue(queue.map((b) => (b.id === batch.id ? updatedBatch : b)));
+    saveQueue(queueRef.current.map((b) => (b.id === batch.id ? updatedBatch : b)));
     if (!stillPending) setActiveBatchId(null);
   };
 
@@ -19678,22 +19698,51 @@ function ReceivingApp({ onGoHome }) {
     return haystack.includes(q);
   });
 
-  // Groups pending receipts that printed their own "Page X of Y" — same
-  // totalPages, different pageNumbers, is a strong signal these landed
-  // separately during a bulk scan but are really one document. This runs
-  // off the raw pending set, not the search-filtered one, so the
-  // suggestion doesn't disappear just because you typed something in the
-  // search box.
+  // Groups pending receipts that printed their own "Page X of Y" —
+  // walked in the order they were actually scanned, not just bucketed by
+  // matching totalPages. That distinction matters the moment you bulk-
+  // scan two different multi-page receipts in the same run: bucketing by
+  // total page count alone would lump all of both documents' pages
+  // together as one ambiguous pile. Following scan order instead — "does
+  // this page continue an already-open group of the same total, or does
+  // it start a new one" — keeps interleaved or back-to-back documents
+  // correctly separated, and each detected group gets its own letter (A,
+  // B, C...) so you can visually match the label against the thumbnail
+  // you can already see on each pending card, rather than combining
+  // blind.
   const multiPageGroups = (() => {
-    const rawPending = queue.filter((b) => b.status === "pending");
-    const byTotalPages = {};
+    const rawPending = [...queue.filter((b) => b.status === "pending" && b.totalPages > 1)].sort(
+      (a, b) => new Date(a.scannedAt) - new Date(b.scannedAt)
+    );
+    const openGroups = []; // { totalPages, lastPageNumber, batches: [] }
     rawPending.forEach((b) => {
-      if (b.totalPages > 1) (byTotalPages[b.totalPages] = byTotalPages[b.totalPages] || []).push(b);
+      const openMatch = openGroups.find(
+        (g) =>
+          g.totalPages === b.totalPages &&
+          g.lastPageNumber === b.pageNumber - 1 &&
+          g.batches.length < g.totalPages
+      );
+      if (openMatch) {
+        openMatch.batches.push(b);
+        openMatch.lastPageNumber = b.pageNumber;
+      } else {
+        openGroups.push({ totalPages: b.totalPages, lastPageNumber: b.pageNumber, batches: [b] });
+      }
     });
-    return Object.values(byTotalPages)
-      .filter((group) => new Set(group.map((b) => b.pageNumber)).size >= 2)
-      .map((group) => [...group].sort((a, b) => (a.pageNumber || 1) - (b.pageNumber || 1)));
+    return openGroups
+      .filter((g) => g.batches.length >= 2)
+      .map((g, idx) => ({ ...g, letter: String.fromCharCode(65 + idx) }));
   })();
+
+  // Quick lookup so each pending card can show its group letter right
+  // next to its own thumbnail, without every card re-deriving the whole
+  // grouping computation itself.
+  const batchGroupLetter = {};
+  multiPageGroups.forEach((g) => {
+    g.batches.forEach((b) => {
+      batchGroupLetter[b.id] = g.letter;
+    });
+  });
 
   const history = queue
     .filter((b) => b.status !== "pending")
@@ -19810,27 +19859,29 @@ function ReceivingApp({ onGoHome }) {
         {scanError && <p className="text-sm text-red-400 mb-4">Couldn't scan that: {scanError}</p>}
 
         {multiPageGroups
-          .filter((group) => !dismissedPageGroups.has(group.map((b) => b.id).sort().join(",")))
-          .map((group) => {
-            const groupKey = group.map((b) => b.id).sort().join(",");
-            const totalPages = group[0].totalPages;
+          .filter((g) => !dismissedPageGroups.has(g.batches.map((b) => b.id).sort().join(",")))
+          .map((g) => {
+            const groupKey = g.batches.map((b) => b.id).sort().join(",");
+            const isComplete = g.batches.length === g.totalPages;
             return (
               <div
                 key={groupKey}
                 className="border border-amber-500/40 bg-amber-500/10 rounded-lg p-3 mb-3"
               >
                 <p className="text-sm text-amber-200">
-                  📎 These {group.length} receipts look like pages of the same document (
-                  {group.map((b) => `${b.pageNumber} of ${totalPages}`).join(", ")}) — combine them?
+                  📎 Group {g.letter}: pages {g.batches.map((b) => b.pageNumber).join(", ")} of{" "}
+                  {g.totalPages} look like the same document
+                  {!isComplete && ` (still missing ${g.totalPages - g.batches.length})`} — each one's
+                  thumbnail is tagged "{g.letter}" below so you can check before combining.
                 </p>
                 <div className="flex gap-2 mt-2">
                   <button
                     onClick={() =>
-                      combineMultipleBatches(group[0].id, group.slice(1).map((b) => b.id))
+                      combineMultipleBatches(g.batches[0].id, g.batches.slice(1).map((b) => b.id))
                     }
                     className="text-xs rounded-md px-3 py-1.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
                   >
-                    Combine
+                    Combine {g.letter}
                   </button>
                   <button
                     onClick={() => setDismissedPageGroups((prev) => new Set(prev).add(groupKey))}
@@ -19867,7 +19918,14 @@ function ReceivingApp({ onGoHome }) {
                 className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700 flex items-center gap-3"
               >
                 {b.photoUrl && (
-                  <img src={b.photoUrl} alt="" className="w-12 h-12 rounded-md object-cover border border-slate-800 shrink-0" />
+                  <div className="relative shrink-0">
+                    <img src={b.photoUrl} alt="" className="w-12 h-12 rounded-md object-cover border border-slate-800" />
+                    {batchGroupLetter[b.id] && (
+                      <span className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-amber-500 text-slate-950 text-[10px] font-bold flex items-center justify-center border-2 border-slate-900">
+                        {batchGroupLetter[b.id]}
+                      </span>
+                    )}
+                  </div>
                 )}
                 <div className="min-w-0">
                   <p className="text-sm text-slate-100 truncate">
@@ -19878,7 +19936,10 @@ function ReceivingApp({ onGoHome }) {
                       {b.lines.length} item{b.lines.length === 1 ? "" : "s"}
                     </p>
                   )}
-                  <p className="text-xs text-slate-500">{formatTaskTimestamp(b.scannedAt)}</p>
+                  <p className="text-xs text-slate-500">
+                    {formatTaskTimestamp(b.scannedAt)}
+                    {b.totalPages > 1 && ` · Page ${b.pageNumber} of ${b.totalPages}`}
+                  </p>
                 </div>
               </button>
             ))
