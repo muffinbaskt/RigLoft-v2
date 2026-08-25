@@ -20066,6 +20066,7 @@ function ReceivingApp({ onGoHome }) {
                   <p className="text-xs text-slate-500">
                     {formatTaskTimestamp(b.scannedAt)}
                     {b.totalPages > 1 && ` · Page ${b.pageNumber} of ${b.totalPages}`}
+                    {b.totalPages > 1 && (b.orderNumber ? ` · Order #${b.orderNumber}` : " · no order # found")}
                   </p>
                 </div>
               </button>
