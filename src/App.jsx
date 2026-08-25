@@ -19186,6 +19186,10 @@ function newReceiptBatch(photoUrl, path, lines, meta = {}) {
     // is presumed to just be a single-page document.
     pageNumber: meta.pageNumber || 1,
     totalPages: meta.totalPages || 1,
+    // When present, the strongest available signal for confirming two
+    // pages actually belong to the same document — used only to narrow
+    // down multi-page grouping, not surfaced anywhere else.
+    orderNumber: meta.orderNumber || "",
     scannedAt: new Date().toISOString(),
     status: "pending", // "pending" | "approved" | "discarded" — approved once every line's been applied somewhere
     lines,
@@ -19287,6 +19291,66 @@ function ReceiptHistoryDetail({ batch, jobs, lists, onBack, onViewPhoto }) {
   );
 }
 
+// Fullscreen stepper for eyeballing a detected group's pages side by
+// side without hunting through the whole pending list — arrow keys or
+// the on-screen buttons move between them, each still fully zoomable via
+// ZoomableImage in case a detail needs a closer look.
+function GroupPhotoStepper({ photos, onClose }) {
+  const [index, setIndex] = useState(0);
+  const current = photos[index];
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.key === "ArrowRight") setIndex((i) => Math.min(i + 1, photos.length - 1));
+      else if (e.key === "ArrowLeft") setIndex((i) => Math.max(i - 1, 0));
+      else if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [photos.length, onClose]);
+
+  if (!current) return null;
+
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/95 flex flex-col">
+      <div className="flex items-center justify-between px-4 py-3 text-slate-300">
+        <span className="text-sm">
+          Page {current.pageNumber} · {index + 1} of {photos.length}
+        </span>
+        <button onClick={onClose} className="text-slate-300 hover:text-white">
+          <X className="w-6 h-6" />
+        </button>
+      </div>
+      <div className="flex-1 flex items-center justify-center px-4 pb-4 min-h-0 relative">
+        <button
+          onClick={() => setIndex((i) => Math.max(i - 1, 0))}
+          disabled={index === 0}
+          className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-white disabled:opacity-20 p-2"
+        >
+          <ChevronLeft className="w-8 h-8" />
+        </button>
+        <ZoomableImage key={current.url} src={current.url} alt={`Page ${current.pageNumber}`} />
+        <button
+          onClick={() => setIndex((i) => Math.min(i + 1, photos.length - 1))}
+          disabled={index === photos.length - 1}
+          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-white disabled:opacity-20 p-2"
+        >
+          <ChevronRight className="w-8 h-8" />
+        </button>
+      </div>
+      <div className="flex justify-center gap-1.5 pb-4">
+        {photos.map((p, i) => (
+          <button
+            key={p.batchId}
+            onClick={() => setIndex(i)}
+            className={`w-2 h-2 rounded-full ${i === index ? "bg-amber-400" : "bg-slate-700"}`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ReceivingApp({ onGoHome }) {
   const [queue, setQueue] = useState([]);
   // Kept in sync on every single write, synchronously — this is what a
@@ -19311,6 +19375,7 @@ function ReceivingApp({ onGoHome }) {
   const [showHistory, setShowHistory] = useState(false);
   const [pendingSearch, setPendingSearch] = useState("");
   const [dismissedPageGroups, setDismissedPageGroups] = useState(new Set());
+  const [viewingGroupPhotos, setViewingGroupPhotos] = useState(null);
   const [historySearch, setHistorySearch] = useState("");
   const [viewingPhoto, setViewingPhoto] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -19421,6 +19486,7 @@ function ReceivingApp({ onGoHome }) {
     return newReceiptBatch(photoUrl, photoPath, lines, {
       pageNumber: data.pageNumber,
       totalPages: data.totalPages,
+      orderNumber: data.orderNumber,
     });
   };
 
@@ -19523,6 +19589,13 @@ function ReceivingApp({ onGoHome }) {
       lines: mergedLines,
       extraPhotoUrls: mergedExtraUrls,
       extraPhotoPaths: mergedExtraPaths,
+      // Cleared so this combined result stops looking like an unfinished
+      // "page 1 of 2" still searching for a partner — without this, it
+      // would keep matching against whatever unrelated receipt happens
+      // to share the same page count, silently absorbing more into the
+      // same group every time the suggestion re-evaluates.
+      pageNumber: 1,
+      totalPages: 1,
     };
 
     playSaveChime();
@@ -19558,6 +19631,11 @@ function ReceivingApp({ onGoHome }) {
       lines: mergedLines,
       extraPhotoUrls: mergedExtraUrls,
       extraPhotoPaths: mergedExtraPaths,
+      // Same reset as the pairwise combine — a batch that's already been
+      // combined shouldn't still register as an incomplete "page X of Y"
+      // eligible for further auto-matching.
+      pageNumber: 1,
+      totalPages: 1,
     };
     const sourceIdSet = new Set(sourceIds);
 
@@ -19709,24 +19787,37 @@ function ReceivingApp({ onGoHome }) {
   // correctly separated, and each detected group gets its own letter (A,
   // B, C...) so you can visually match the label against the thumbnail
   // you can already see on each pending card, rather than combining
-  // blind.
+  // blind. When an order number is available on both sides, it's used as
+  // a veto — a sequence match with a clearly different order number is
+  // rejected rather than joined, since that's a much stronger signal
+  // than page order alone that two receipts are actually unrelated.
   const multiPageGroups = (() => {
     const rawPending = [...queue.filter((b) => b.status === "pending" && b.totalPages > 1)].sort(
       (a, b) => new Date(a.scannedAt) - new Date(b.scannedAt)
     );
-    const openGroups = []; // { totalPages, lastPageNumber, batches: [] }
+    const norm = (s) => (s || "").trim().toLowerCase();
+    const openGroups = []; // { totalPages, lastPageNumber, orderNumber, batches: [] }
     rawPending.forEach((b) => {
-      const openMatch = openGroups.find(
-        (g) =>
-          g.totalPages === b.totalPages &&
-          g.lastPageNumber === b.pageNumber - 1 &&
-          g.batches.length < g.totalPages
-      );
+      const openMatch = openGroups.find((g) => {
+        if (g.totalPages !== b.totalPages) return false;
+        if (g.lastPageNumber !== b.pageNumber - 1) return false;
+        if (g.batches.length >= g.totalPages) return false;
+        // Both sides have an order number and they don't match — treat
+        // as a different document even though the sequence lines up.
+        if (g.orderNumber && b.orderNumber && norm(g.orderNumber) !== norm(b.orderNumber)) return false;
+        return true;
+      });
       if (openMatch) {
         openMatch.batches.push(b);
         openMatch.lastPageNumber = b.pageNumber;
+        if (!openMatch.orderNumber && b.orderNumber) openMatch.orderNumber = b.orderNumber;
       } else {
-        openGroups.push({ totalPages: b.totalPages, lastPageNumber: b.pageNumber, batches: [b] });
+        openGroups.push({
+          totalPages: b.totalPages,
+          lastPageNumber: b.pageNumber,
+          orderNumber: b.orderNumber || "",
+          batches: [b],
+        });
       }
     });
     return openGroups
@@ -19871,10 +19962,22 @@ function ReceivingApp({ onGoHome }) {
                 <p className="text-sm text-amber-200">
                   📎 Group {g.letter}: pages {g.batches.map((b) => b.pageNumber).join(", ")} of{" "}
                   {g.totalPages} look like the same document
-                  {!isComplete && ` (still missing ${g.totalPages - g.batches.length})`} — each one's
-                  thumbnail is tagged "{g.letter}" below so you can check before combining.
+                  {!isComplete && ` (still missing ${g.totalPages - g.batches.length})`}
+                  {g.orderNumber && ` · Order #${g.orderNumber}`}.
                 </p>
                 <div className="flex gap-2 mt-2">
+                  <button
+                    onClick={() =>
+                      setViewingGroupPhotos(
+                        g.batches
+                          .filter((b) => b.photoUrl)
+                          .map((b) => ({ url: b.photoUrl, pageNumber: b.pageNumber, batchId: b.id }))
+                      )
+                    }
+                    className="text-xs rounded-md px-3 py-1.5 border border-amber-500/40 text-amber-200 hover:bg-amber-500/10"
+                  >
+                    👀 View pages
+                  </button>
                   <button
                     onClick={() =>
                       combineMultipleBatches(g.batches[0].id, g.batches.slice(1).map((b) => b.id))
@@ -20060,6 +20163,10 @@ function ReceivingApp({ onGoHome }) {
       )}
 
       {photoViewerOverlay}
+
+      {viewingGroupPhotos && (
+        <GroupPhotoStepper photos={viewingGroupPhotos} onClose={() => setViewingGroupPhotos(null)} />
+      )}
     </div>
   );
 }
