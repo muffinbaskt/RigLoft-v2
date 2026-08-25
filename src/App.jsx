@@ -18441,28 +18441,44 @@ function convertQtyForUnit(qty, fromUnit, toUnit) {
   return qty;
 }
 
-// Attaches a receipt's photo to a Job's Reference Documents once any of
-// its lines actually get applied there — checked by storage path so a
+// Attaches every page of a receipt to a Job's Reference Documents once any
+// of its lines actually get applied there — checked by storage path so a
 // receipt spanning multiple approve passes (or multiple lines landing on
-// the same job) only ever gets attached once, not duplicated per line.
+// the same job) only ever gets attached once per page, not duplicated.
 function attachReceiptPhotoToJob(job, batch) {
-  if (!batch.photoUrl || !batch.photoPath) return job;
-  if ((job.referenceDocuments || []).some((d) => d.path === batch.photoPath)) return job;
+  const pages = [
+    ...(batch.photoUrl && batch.photoPath ? [{ url: batch.photoUrl, path: batch.photoPath }] : []),
+    ...(batch.extraPhotoUrls || []).map((url, i) => ({ url, path: (batch.extraPhotoPaths || [])[i] })),
+  ].filter((p) => p.url && p.path);
+  if (pages.length === 0) return job;
+
+  const existingPaths = new Set((job.referenceDocuments || []).map((d) => d.path));
+  const newPages = pages.filter((p) => !existingPaths.has(p.path));
+  if (newPages.length === 0) return job;
+
+  const baseName = batch.label ? `${batch.label} (receipt)` : "Receipt";
   return {
     ...job,
     referenceDocuments: [
       ...(job.referenceDocuments || []),
-      {
+      ...newPages.map((p, i) => ({
         id: uniqueId(),
-        name: batch.label ? `${batch.label} (receipt)` : "Receipt",
-        url: batch.photoUrl,
-        path: batch.photoPath,
+        name: newPages.length > 1 ? `${baseName} — page ${i + 1}` : baseName,
+        url: p.url,
+        path: p.path,
         type: "image/jpeg",
         uploadedAt: timeStamp(),
-      },
+      })),
     ],
     activityLog: [
-      { id: uniqueId(), time: timeStamp(), message: "Attached a receipt photo from Receiving" },
+      {
+        id: uniqueId(),
+        time: timeStamp(),
+        message:
+          newPages.length > 1
+            ? `Attached ${newPages.length} receipt photos from Receiving`
+            : "Attached a receipt photo from Receiving",
+      },
       ...(job.activityLog || []),
     ].slice(0, 50),
   };
@@ -18471,9 +18487,12 @@ function attachReceiptPhotoToJob(job, batch) {
 // Same idea for a Love List's photos — those are just a flat array of
 // URLs rather than document objects, so the duplicate check is simpler.
 function attachReceiptPhotoToLoveList(list, batch) {
-  if (!batch.photoUrl) return list;
-  if ((list.referenceImages || []).includes(batch.photoUrl)) return list;
-  return { ...list, referenceImages: [...(list.referenceImages || []), batch.photoUrl] };
+  const urls = [batch.photoUrl, ...(batch.extraPhotoUrls || [])].filter(Boolean);
+  if (urls.length === 0) return list;
+  const existing = new Set(list.referenceImages || []);
+  const newUrls = urls.filter((u) => !existing.has(u));
+  if (newUrls.length === 0) return list;
+  return { ...list, referenceImages: [...(list.referenceImages || []), ...newUrls] };
 }
 
 function applyReceiptLineToJob(job, line, catalog) {
@@ -19151,12 +19170,22 @@ function mergeLoveListItems(items, sourceId, targetId) {
   return nextItems;
 }
 
-function newReceiptBatch(photoUrl, path, lines) {
+function newReceiptBatch(photoUrl, path, lines, meta = {}) {
   return {
     id: uniqueId(),
     label: "", // optional placeholder name — "Pallet 2", "Beater Pallet", etc.
     photoUrl,
     photoPath: path,
+    // Extra pages absorbed from combining separately-scanned receipts —
+    // the first page stays the primary photo/path above, everything else
+    // lands here.
+    extraPhotoUrls: [],
+    extraPhotoPaths: [],
+    // Whatever page indicator the receipt itself prints ("Page 2 of 3"),
+    // when there is one — 1/1 means no indicator was found, i.e. this
+    // is presumed to just be a single-page document.
+    pageNumber: meta.pageNumber || 1,
+    totalPages: meta.totalPages || 1,
     scannedAt: new Date().toISOString(),
     status: "pending", // "pending" | "approved" | "discarded" — approved once every line's been applied somewhere
     lines,
@@ -19207,12 +19236,27 @@ function ReceiptHistoryDetail({ batch, jobs, lists, onBack, onViewPhoto }) {
           {formatTaskTimestamp(batch.approvedAt || batch.scannedAt)}
         </p>
         {batch.photoUrl && (
-          <button
-            onClick={() => onViewPhoto(batch.photoUrl)}
-            className="w-full mb-4 rounded-lg overflow-hidden border border-slate-800"
-          >
-            <img src={batch.photoUrl} alt="Receipt" className="w-full max-h-56 object-cover" />
-          </button>
+          <div className="mb-4">
+            <button
+              onClick={() => onViewPhoto(batch.photoUrl)}
+              className="w-full rounded-lg overflow-hidden border border-slate-800"
+            >
+              <img src={batch.photoUrl} alt="Receipt" className="w-full max-h-56 object-cover" />
+            </button>
+            {(batch.extraPhotoUrls || []).length > 0 && (
+              <div className="grid grid-cols-4 gap-1.5 mt-1.5">
+                {batch.extraPhotoUrls.map((url, i) => (
+                  <button
+                    key={i}
+                    onClick={() => onViewPhoto(url)}
+                    className="rounded-md overflow-hidden border border-slate-800"
+                  >
+                    <img src={url} alt={`Page ${i + 2}`} className="w-full h-14 object-cover" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
         <p className="text-xs font-medium text-slate-400 mb-2">
           Line items ({batch.lines.length})
@@ -19256,6 +19300,7 @@ function ReceivingApp({ onGoHome }) {
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
   const [pendingSearch, setPendingSearch] = useState("");
+  const [dismissedPageGroups, setDismissedPageGroups] = useState(new Set());
   const [historySearch, setHistorySearch] = useState("");
   const [viewingPhoto, setViewingPhoto] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -19358,7 +19403,10 @@ function ReceivingApp({ onGoHome }) {
       };
     });
 
-    return newReceiptBatch(photoUrl, photoPath, lines);
+    return newReceiptBatch(photoUrl, photoPath, lines, {
+      pageNumber: data.pageNumber,
+      totalPages: data.totalPages,
+    });
   };
 
   // Runs one photo at a time (not in parallel) — keeps the OCR endpoint
@@ -19372,22 +19420,27 @@ function ReceivingApp({ onGoHome }) {
     setScanning(true);
     setScanError("");
     const files = Array.from(fileList);
-    const newBatches = [];
     const errors = [];
+    // Saved the instant each one finishes, not batched up until the very
+    // end — for a handful of receipts that distinction barely matters,
+    // but for a big stack it's the difference between losing nothing and
+    // losing everything if the tab gets backgrounded, the phone locks, or
+    // anything else interrupts a run that might take several minutes.
+    let currentQueue = queue;
+    let firstBatchId = null;
     for (let i = 0; i < files.length; i++) {
       setScanProgress({ current: i + 1, total: files.length });
       try {
         const batch = await scanOneFile(files[i]);
-        newBatches.push(batch);
+        currentQueue = [batch, ...currentQueue];
+        saveQueue(currentQueue);
+        if (!firstBatchId) firstBatchId = batch.id;
+        playSaveChime();
       } catch (err) {
         errors.push(`"${files[i].name}" — ${err.message || String(err)}`);
       }
     }
-    if (newBatches.length > 0) {
-      playSaveChime();
-      saveQueue([...newBatches, ...queue]);
-      if (newBatches.length === 1) setActiveBatchId(newBatches[0].id);
-    }
+    if (files.length === 1 && firstBatchId) setActiveBatchId(firstBatchId);
     if (errors.length > 0) setScanError(errors.join(" · "));
     setScanning(false);
     setScanProgress(null);
@@ -19419,8 +19472,81 @@ function ReceivingApp({ onGoHome }) {
 
   const discardBatch = async (batch) => {
     if (batch.photoPath) deleteReferenceDocument(batch.photoPath).catch(() => {});
+    (batch.extraPhotoPaths || []).forEach((p) => deleteReferenceDocument(p).catch(() => {}));
     saveQueue(queue.map((b) => (b.id === batch.id ? { ...b, status: "discarded" } : b)));
     setActiveBatchId(null);
+  };
+
+  // Folds a second pending receipt into the one you're currently
+  // reviewing — for when a bulk scan turned one multi-page receipt into
+  // several separate entries. The absorbed batch's lines and photo(s)
+  // move into the target; the absorbed batch itself is removed from the
+  // queue entirely rather than left behind as an empty duplicate.
+  const combineBatches = (targetId, sourceId) => {
+    const target = queue.find((b) => b.id === targetId);
+    const source = queue.find((b) => b.id === sourceId);
+    if (!target || !source || target.id === source.id) return;
+
+    const mergedLines = [...target.lines, ...source.lines.map((l) => ({ ...l, id: uniqueId() }))];
+    const mergedExtraUrls = [
+      ...(target.extraPhotoUrls || []),
+      ...(source.photoUrl ? [source.photoUrl] : []),
+      ...(source.extraPhotoUrls || []),
+    ];
+    const mergedExtraPaths = [
+      ...(target.extraPhotoPaths || []),
+      ...(source.photoPath ? [source.photoPath] : []),
+      ...(source.extraPhotoPaths || []),
+    ];
+    const updatedTarget = {
+      ...target,
+      lines: mergedLines,
+      extraPhotoUrls: mergedExtraUrls,
+      extraPhotoPaths: mergedExtraPaths,
+    };
+
+    playSaveChime();
+    saveQueue(
+      queue
+        .filter((b) => b.id !== sourceId)
+        .map((b) => (b.id === targetId ? updatedTarget : b))
+    );
+  };
+
+  // Same as above but folds several source batches into one target in a
+  // single pass — used for the auto-detected "these look like pages of
+  // the same document" suggestion, where combining one at a time would
+  // have each call working off the same stale queue snapshot and losing
+  // all but the last merge.
+  const combineMultipleBatches = (targetId, sourceIds) => {
+    const target = queue.find((b) => b.id === targetId);
+    const sources = sourceIds.map((id) => queue.find((b) => b.id === id)).filter(Boolean);
+    if (!target || sources.length === 0) return;
+
+    let mergedLines = [...target.lines];
+    let mergedExtraUrls = [...(target.extraPhotoUrls || [])];
+    let mergedExtraPaths = [...(target.extraPhotoPaths || [])];
+    sources.forEach((source) => {
+      mergedLines = [...mergedLines, ...source.lines.map((l) => ({ ...l, id: uniqueId() }))];
+      if (source.photoUrl) mergedExtraUrls.push(source.photoUrl);
+      if (source.photoPath) mergedExtraPaths.push(source.photoPath);
+      mergedExtraUrls = [...mergedExtraUrls, ...(source.extraPhotoUrls || [])];
+      mergedExtraPaths = [...mergedExtraPaths, ...(source.extraPhotoPaths || [])];
+    });
+    const updatedTarget = {
+      ...target,
+      lines: mergedLines,
+      extraPhotoUrls: mergedExtraUrls,
+      extraPhotoPaths: mergedExtraPaths,
+    };
+    const sourceIdSet = new Set(sourceIds);
+
+    playSaveChime();
+    saveQueue(
+      queue
+        .filter((b) => !sourceIdSet.has(b.id))
+        .map((b) => (b.id === targetId ? updatedTarget : b))
+    );
   };
 
   // Fully removes a history entry — discardBatch above already deletes
@@ -19551,6 +19677,24 @@ function ReceivingApp({ onGoHome }) {
     const haystack = [b.label, ...b.lines.map((l) => l.name)].filter(Boolean).join(" ").toLowerCase();
     return haystack.includes(q);
   });
+
+  // Groups pending receipts that printed their own "Page X of Y" — same
+  // totalPages, different pageNumbers, is a strong signal these landed
+  // separately during a bulk scan but are really one document. This runs
+  // off the raw pending set, not the search-filtered one, so the
+  // suggestion doesn't disappear just because you typed something in the
+  // search box.
+  const multiPageGroups = (() => {
+    const rawPending = queue.filter((b) => b.status === "pending");
+    const byTotalPages = {};
+    rawPending.forEach((b) => {
+      if (b.totalPages > 1) (byTotalPages[b.totalPages] = byTotalPages[b.totalPages] || []).push(b);
+    });
+    return Object.values(byTotalPages)
+      .filter((group) => new Set(group.map((b) => b.pageNumber)).size >= 2)
+      .map((group) => [...group].sort((a, b) => (a.pageNumber || 1) - (b.pageNumber || 1)));
+  })();
+
   const history = queue
     .filter((b) => b.status !== "pending")
     .filter((b) => {
@@ -19606,10 +19750,12 @@ function ReceivingApp({ onGoHome }) {
           jobs={jobs}
           lists={lists}
           catalog={catalog}
+          otherPendingBatches={queue.filter((b) => b.status === "pending" && b.id !== activeBatch.id)}
           onUpdateBatch={updateBatch}
           onLearnAlias={learnAlias}
           onApprove={approveBatch}
           onDiscard={discardBatch}
+          onCombine={combineBatches}
           onViewPhoto={setViewingPhoto}
           onBack={() => setActiveBatchId(null)}
         />
@@ -19662,6 +19808,41 @@ function ReceivingApp({ onGoHome }) {
       </header>
       <main className="max-w-2xl mx-auto px-4 py-5">
         {scanError && <p className="text-sm text-red-400 mb-4">Couldn't scan that: {scanError}</p>}
+
+        {multiPageGroups
+          .filter((group) => !dismissedPageGroups.has(group.map((b) => b.id).sort().join(",")))
+          .map((group) => {
+            const groupKey = group.map((b) => b.id).sort().join(",");
+            const totalPages = group[0].totalPages;
+            return (
+              <div
+                key={groupKey}
+                className="border border-amber-500/40 bg-amber-500/10 rounded-lg p-3 mb-3"
+              >
+                <p className="text-sm text-amber-200">
+                  📎 These {group.length} receipts look like pages of the same document (
+                  {group.map((b) => `${b.pageNumber} of ${totalPages}`).join(", ")}) — combine them?
+                </p>
+                <div className="flex gap-2 mt-2">
+                  <button
+                    onClick={() =>
+                      combineMultipleBatches(group[0].id, group.slice(1).map((b) => b.id))
+                    }
+                    className="text-xs rounded-md px-3 py-1.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+                  >
+                    Combine
+                  </button>
+                  <button
+                    onClick={() => setDismissedPageGroups((prev) => new Set(prev).add(groupKey))}
+                    className="text-xs rounded-md px-3 py-1.5 border border-amber-500/40 text-amber-200 hover:bg-amber-500/10"
+                  >
+                    Not the same receipt
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+
         <p className="text-xs font-medium text-slate-400 mb-2">
           Awaiting review ({pending.length})
         </p>
@@ -19825,7 +20006,7 @@ function ReceivingApp({ onGoHome }) {
 // The review screen for one scanned receipt — verify against the pallet,
 // fix up anything OCR misread, link unmatched names to the catalog, pick
 // which Job or Love List this shipment belongs to, then approve.
-function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLearnAlias, onApprove, onDiscard, onViewPhoto, onBack }) {
+function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches, onUpdateBatch, onLearnAlias, onApprove, onDiscard, onCombine, onViewPhoto, onBack }) {
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const [confirmingApprove, setConfirmingApprove] = useState(false);
   const [relinkingLine, setRelinkingLine] = useState(null);
@@ -19836,6 +20017,7 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
   const [assigningLine, setAssigningLine] = useState(null); // a line object, or "bulk" for the shortcut
   const [assignTargetType, setAssignTargetType] = useState(null);
   const [targetSearch, setTargetSearch] = useState("");
+  const [showCombinePicker, setShowCombinePicker] = useState(false);
 
   const updateLine = (lineId, changes) => {
     onUpdateBatch({
@@ -19973,13 +20155,35 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
           destination chosen get applied.
         </p>
         {batch.photoUrl && (
-          <button
-            onClick={() => onViewPhoto(batch.photoUrl)}
-            className="w-full mb-4 rounded-lg overflow-hidden border border-slate-800"
-          >
-            <img src={batch.photoUrl} alt="Receipt" className="w-full max-h-48 object-cover" />
-          </button>
+          <div className="mb-4">
+            <button
+              onClick={() => onViewPhoto(batch.photoUrl)}
+              className="w-full rounded-lg overflow-hidden border border-slate-800"
+            >
+              <img src={batch.photoUrl} alt="Receipt" className="w-full max-h-48 object-cover" />
+            </button>
+            {(batch.extraPhotoUrls || []).length > 0 && (
+              <div className="grid grid-cols-4 gap-1.5 mt-1.5">
+                {batch.extraPhotoUrls.map((url, i) => (
+                  <button
+                    key={i}
+                    onClick={() => onViewPhoto(url)}
+                    className="rounded-md overflow-hidden border border-slate-800"
+                  >
+                    <img src={url} alt={`Page ${i + 2}`} className="w-full h-14 object-cover" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
+
+        <button
+          onClick={() => setShowCombinePicker(true)}
+          className="w-full text-left text-xs text-slate-400 hover:text-slate-200 border border-dashed border-slate-700 rounded-md px-3 py-2 mb-4"
+        >
+          📎 Combine with another pending receipt — for multi-page scans that landed separately
+        </button>
 
         <label className="block text-xs font-medium text-slate-400 mb-1.5">
           Name this receipt (optional)
@@ -20360,6 +20564,49 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, onUpdateBatch, onLe
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {showCombinePicker && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4 py-8">
+          <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold text-sm">Combine with...</h3>
+              <button onClick={() => setShowCombinePicker(false)} className="text-slate-400 hover:text-slate-200">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {otherPendingBatches.length === 0 ? (
+                <p className="text-xs text-slate-500 text-center py-4">
+                  No other pending receipts to combine with.
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  {otherPendingBatches.map((b) => (
+                    <button
+                      key={b.id}
+                      onClick={() => {
+                        onCombine(batch.id, b.id);
+                        setShowCombinePicker(false);
+                      }}
+                      className="w-full text-left flex items-center gap-3 bg-slate-800/40 border border-slate-800 rounded-lg p-2.5 hover:border-slate-700"
+                    >
+                      {b.photoUrl && (
+                        <img src={b.photoUrl} alt="" className="w-10 h-10 rounded-md object-cover border border-slate-800 shrink-0" />
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-sm text-slate-100 truncate">
+                          {b.label ? b.label : `${b.lines.length} item${b.lines.length === 1 ? "" : "s"} scanned`}
+                        </p>
+                        <p className="text-xs text-slate-500">{formatTaskTimestamp(b.scannedAt)}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
