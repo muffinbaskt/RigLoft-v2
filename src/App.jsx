@@ -19370,6 +19370,7 @@ function ReceivingApp({ onGoHome }) {
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(null); // { current, total } while scanning several
+  const [recheckProgress, setRecheckProgress] = useState(null); // { current, total } while re-checking pending receipts for order #s
   const [scanError, setScanError] = useState("");
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
@@ -19537,6 +19538,59 @@ function ReceivingApp({ onGoHome }) {
     if (errors.length > 0) setScanError(errors.join(" · "));
     setScanning(false);
     setScanProgress(null);
+  };
+
+  // Re-runs OCR against photos already sitting in storage — for
+  // backfilling order numbers on receipts that were scanned before this
+  // extraction existed or got improved, without needing to re-photograph
+  // anything. Deliberately touches ONLY orderNumber — never pageNumber,
+  // totalPages, line items, or anything else already on the batch —
+  // since re-detecting page info on an already-combined receipt's first
+  // page (which may still visibly say "Page 1 of 2" on the paper itself)
+  // could otherwise silently undo a combine that was already resolved.
+  const recheckOrderNumbers = async () => {
+    const targets = queueRef.current.filter(
+      (b) => b.status === "pending" && b.photoUrl && !b.orderNumber
+    );
+    if (targets.length === 0) return;
+
+    setRecheckProgress({ current: 0, total: targets.length });
+    for (let i = 0; i < targets.length; i++) {
+      setRecheckProgress({ current: i + 1, total: targets.length });
+      try {
+        const imgRes = await fetch(targets[i].photoUrl);
+        const blob = await imgRes.blob();
+        const base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result.split(",")[1]);
+          reader.onerror = () => reject(new Error("Couldn't read that photo."));
+          reader.readAsDataURL(blob);
+        });
+        const res = await fetch(
+          "https://vwvppivdpxjvmaazcmmg.supabase.co/functions/v1/scan-receipt",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ imageBase64: base64, mediaType: blob.type || "image/jpeg" }),
+          }
+        );
+        const data = await res.json();
+        if (data.ok && data.orderNumber) {
+          const current = queueRef.current.find((b) => b.id === targets[i].id);
+          if (current) {
+            saveQueue(
+              queueRef.current.map((b) =>
+                b.id === targets[i].id ? { ...b, orderNumber: data.orderNumber } : b
+              )
+            );
+          }
+        }
+      } catch {
+        // Skip silently — this is a best-effort backfill, not something
+        // that should interrupt the rest of the batch over one failure.
+      }
+    }
+    setRecheckProgress(null);
   };
 
   const updateBatch = (updated) => {
@@ -20024,6 +20078,20 @@ function ReceivingApp({ onGoHome }) {
         <p className="text-xs font-medium text-slate-400 mb-2">
           Awaiting review ({pending.length})
         </p>
+        {queue.filter((b) => b.status === "pending" && b.photoUrl && !b.orderNumber).length > 0 && (
+          <button
+            onClick={recheckOrderNumbers}
+            disabled={!!recheckProgress}
+            className="w-full text-left text-xs text-slate-400 hover:text-slate-200 border border-dashed border-slate-700 rounded-md px-3 py-2 mb-2 disabled:opacity-50"
+          >
+            🔄{" "}
+            {recheckProgress
+              ? `Re-checking ${recheckProgress.current} of ${recheckProgress.total}...`
+              : `Re-check pending receipts for order #s (${
+                  queue.filter((b) => b.status === "pending" && b.photoUrl && !b.orderNumber).length
+                } missing)`}
+          </button>
+        )}
         <input
           value={pendingSearch}
           onChange={(e) => setPendingSearch(e.target.value)}
