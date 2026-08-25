@@ -18635,6 +18635,11 @@ function applyReceiptLineToLoveList(list, line, catalog) {
 // you're already looking at, with the target implied instead of picked.
 function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarget, onClose }) {
   const [queue, setQueue] = useState([]);
+  // Same fix as ReceivingApp's queueRef — keeps every mutation reading
+  // the truly latest state instead of whatever a given closure happened
+  // to capture, which is what was causing the debounced catalog-match
+  // update to silently revert the last character typed.
+  const queueRef = useRef([]);
   const [catalog, setCatalog] = useState([]);
   const [nameMemory, setNameMemory] = useState({});
   const [loading, setLoading] = useState(true);
@@ -18652,7 +18657,11 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
           getWithRetry(CATALOG_KEY),
           getWithRetry(RECEIVING_NAME_MEMORY_KEY),
         ]);
-        if (qResult.ok && qResult.value) setQueue(JSON.parse(qResult.value));
+        if (qResult.ok && qResult.value) {
+          const loaded = JSON.parse(qResult.value);
+          setQueue(loaded);
+          queueRef.current = loaded;
+        }
         if (cResult.ok && cResult.value) setCatalog(JSON.parse(cResult.value));
         if (nResult.ok && nResult.value) setNameMemory(JSON.parse(nResult.value));
       } catch {}
@@ -18661,6 +18670,7 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
   }, []);
 
   const saveQueue = (next) => {
+    queueRef.current = next;
     setQueue(next);
     saveWithRetry(RECEIVING_QUEUE_KEY, JSON.stringify(next)).catch(() => {});
   };
@@ -18685,12 +18695,20 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
   const selectedBatch = queue.find((b) => b.id === selectedBatchId) || null;
 
   const updateSelectedBatch = (changes) => {
-    const updated = { ...selectedBatch, ...changes };
-    saveQueue(queue.map((b) => (b.id === updated.id ? updated : b)));
+    // Looked up fresh from queueRef rather than closing over the
+    // `selectedBatch` derived value — same fix as ReceivingApp's
+    // updateBatch, and for the same reason: a debounced callback can
+    // hold onto a closure from before the most recent keystroke landed.
+    const current = queueRef.current.find((b) => b.id === selectedBatchId);
+    if (!current) return;
+    const updated = { ...current, ...changes };
+    saveQueue(queueRef.current.map((b) => (b.id === updated.id ? updated : b)));
   };
   const updateLine = (lineId, changes) => {
+    const current = queueRef.current.find((b) => b.id === selectedBatchId);
+    if (!current) return;
     updateSelectedBatch({
-      lines: selectedBatch.lines.map((l) => (l.id === lineId ? { ...l, ...changes } : l)),
+      lines: current.lines.map((l) => (l.id === lineId ? { ...l, ...changes } : l)),
     });
   };
 
@@ -18702,16 +18720,12 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
   // auto-found link — a deliberate pick from the catalog picker
   // (catalogLinkedManually) is never silently replaced or cleared.
   const nameDebounceTimers = useRef({});
-  const selectedBatchRef = useRef(selectedBatch);
-  useEffect(() => {
-    selectedBatchRef.current = selectedBatch;
-  }, [selectedBatch]);
 
   const handleNameChange = (lineId, newName) => {
     updateLine(lineId, { name: newName });
     if (nameDebounceTimers.current[lineId]) clearTimeout(nameDebounceTimers.current[lineId]);
     nameDebounceTimers.current[lineId] = setTimeout(() => {
-      const currentBatch = selectedBatchRef.current;
+      const currentBatch = queueRef.current.find((b) => b.id === selectedBatchId);
       const currentLine = currentBatch && currentBatch.lines.find((l) => l.id === lineId);
       if (!currentLine || currentLine.catalogLinkedManually) return;
       const found = findCatalogMatch(currentLine.name, catalog);
@@ -18778,7 +18792,7 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
     const updatedBatch = stillPending
       ? { ...selectedBatch, lines: updatedLines }
       : { ...selectedBatch, lines: updatedLines, status: "approved", approvedAt: new Date().toISOString() };
-    saveQueue(queue.map((b) => (b.id === selectedBatch.id ? updatedBatch : b)));
+    saveQueue(queueRef.current.map((b) => (b.id === selectedBatch.id ? updatedBatch : b)));
     setConfirmingApprove(false);
     onClose();
   };
@@ -20280,10 +20294,28 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches
   const [targetSearch, setTargetSearch] = useState("");
   const [showCombinePicker, setShowCombinePicker] = useState(false);
 
+  // Reads from batchRef, not the closed-over `batch` prop directly — this
+  // is what actually fixes the "typing a character right as auto-match
+  // fires deletes it" bug. Every call to updateLine used to merge its
+  // change onto whatever `batch` looked like at the moment THIS specific
+  // closure was created — and the debounce timer below holds onto the
+  // closure from the render for the very last keystroke, which is
+  // captured *before* that keystroke's own update has landed in state.
+  // So when the timer fired and called updateLine to set a catalogId, it
+  // was merging that onto a batch snapshot one character behind, quietly
+  // reverting the last thing typed. Reading the ref instead means every
+  // call — no matter which stale closure invoked it — always builds on
+  // top of the truly latest known state.
+  const batchRef = useRef(batch);
+  useEffect(() => {
+    batchRef.current = batch;
+  }, [batch]);
+
   const updateLine = (lineId, changes) => {
+    const currentBatch = batchRef.current;
     onUpdateBatch({
-      ...batch,
-      lines: batch.lines.map((l) => (l.id === lineId ? { ...l, ...changes } : l)),
+      ...currentBatch,
+      lines: currentBatch.lines.map((l) => (l.id === lineId ? { ...l, ...changes } : l)),
     });
   };
 
@@ -20295,10 +20327,6 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches
   // auto-found link — a deliberate pick from the catalog picker
   // (catalogLinkedManually) is never silently replaced or cleared.
   const nameDebounceTimers = useRef({});
-  const batchRef = useRef(batch);
-  useEffect(() => {
-    batchRef.current = batch;
-  }, [batch]);
 
   const handleNameChange = (lineId, newName) => {
     updateLine(lineId, { name: newName });
