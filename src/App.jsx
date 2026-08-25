@@ -19375,6 +19375,13 @@ function ReceivingApp({ onGoHome }) {
   const [showHistory, setShowHistory] = useState(false);
   const [pendingSearch, setPendingSearch] = useState("");
   const [dismissedPageGroups, setDismissedPageGroups] = useState(new Set());
+  // Persist across renders (not React state — nothing here needs to
+  // trigger a re-render on its own, it just needs to remember what it
+  // already decided) so a group's letter is permanent for as long as
+  // that group exists, and no letter ever gets reused for a different
+  // document later.
+  const multiPageGroupLettersRef = useRef(null);
+  const nextGroupLetterIndexRef = useRef(0);
   const [viewingGroupPhotos, setViewingGroupPhotos] = useState(null);
   const [historySearch, setHistorySearch] = useState("");
   const [viewingPhoto, setViewingPhoto] = useState(null);
@@ -19784,14 +19791,12 @@ function ReceivingApp({ onGoHome }) {
   // together as one ambiguous pile. Following scan order instead — "does
   // this page continue an already-open group of the same total, or does
   // it start a new one" — keeps interleaved or back-to-back documents
-  // correctly separated, and each detected group gets its own letter (A,
-  // B, C...) so you can visually match the label against the thumbnail
-  // you can already see on each pending card, rather than combining
-  // blind. When an order number is available on both sides, it's used as
-  // a veto — a sequence match with a clearly different order number is
-  // rejected rather than joined, since that's a much stronger signal
-  // than page order alone that two receipts are actually unrelated.
-  const multiPageGroups = (() => {
+  // correctly separated. When an order number is available on both
+  // sides, it's used as a veto — a sequence match with a clearly
+  // different order number is rejected rather than joined, since that's
+  // a much stronger signal than page order alone that two receipts are
+  // actually unrelated.
+  const rawMultiPageGroups = (() => {
     const rawPending = [...queue.filter((b) => b.status === "pending" && b.totalPages > 1)].sort(
       (a, b) => new Date(a.scannedAt) - new Date(b.scannedAt)
     );
@@ -19820,10 +19825,29 @@ function ReceivingApp({ onGoHome }) {
         });
       }
     });
-    return openGroups
-      .filter((g) => g.batches.length >= 2)
-      .map((g, idx) => ({ ...g, letter: String.fromCharCode(65 + idx) }));
+    return openGroups.filter((g) => g.batches.length >= 2);
   })();
+
+  // Letters are assigned once per group and never reused or reshuffled —
+  // keyed off the id of whichever batch started that group, which never
+  // changes for as long as the group exists. Without this, a letter was
+  // really just "whichever group happens to be first in the list this
+  // render" — recomputed from scratch every time anything changed, so a
+  // totally different set of receipts could silently inherit "A" the
+  // moment the original A group got resolved. Combining or dismissing a
+  // group just means it stops appearing here on later renders; its
+  // letter is never handed to anything else.
+  multiPageGroupLettersRef.current = multiPageGroupLettersRef.current || {};
+  rawMultiPageGroups.forEach((g) => {
+    const key = g.batches[0].id;
+    if (!(key in multiPageGroupLettersRef.current)) {
+      multiPageGroupLettersRef.current[key] = String.fromCharCode(65 + nextGroupLetterIndexRef.current);
+      nextGroupLetterIndexRef.current += 1;
+    }
+  });
+  const multiPageGroups = rawMultiPageGroups
+    .map((g) => ({ ...g, letter: multiPageGroupLettersRef.current[g.batches[0].id] }))
+    .sort((a, b) => a.letter.localeCompare(b.letter));
 
   // Quick lookup so each pending card can show its group letter right
   // next to its own thumbnail, without every card re-deriving the whole
