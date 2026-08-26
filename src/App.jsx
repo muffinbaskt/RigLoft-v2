@@ -13320,6 +13320,31 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
     setReviewItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...changes } : i)));
   };
 
+  // Same debounced re-matching as Receiving's line review — waits for a
+  // pause in typing instead of only ever checking once, at the moment of
+  // the original scan. Without this, correcting a garbled OCR name here
+  // never had any chance of picking up a catalog link, even if the
+  // corrected text would now match something. Uses the functional
+  // setState form throughout, so unlike the receiving version this
+  // doesn't need a ref workaround — `prev` is always genuinely current
+  // no matter when the timer fires.
+  const nameDebounceTimers = useRef({});
+  const handleReviewNameChange = (id, newName) => {
+    updateReviewItem(id, { name: newName });
+    if (nameDebounceTimers.current[id]) clearTimeout(nameDebounceTimers.current[id]);
+    nameDebounceTimers.current[id] = setTimeout(() => {
+      setReviewItems((prev) =>
+        prev.map((i) => {
+          if (i.id !== id || i.catalogLinkedManually) return i;
+          const found = findCatalogMatch(i.name, catalog);
+          if (found && found.id !== i.catalogId) return { ...i, catalogId: found.id };
+          if (!found && i.catalogId) return { ...i, catalogId: null };
+          return i;
+        })
+      );
+    }, 900);
+  };
+
   const removeReviewItem = (id) => {
     setReviewItems((prev) => prev.filter((i) => i.id !== id));
   };
@@ -13488,7 +13513,7 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
                     <div className="flex items-center gap-2 mb-1.5">
                       <input
                         value={item.name}
-                        onChange={(e) => updateReviewItem(item.id, { name: e.target.value })}
+                        onChange={(e) => handleReviewNameChange(item.id, e.target.value)}
                         className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
                       />
                       <input
@@ -13606,6 +13631,7 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
                     updateReviewItem(relinkingReviewItem.id, {
                       catalogId: null,
                       needsTransfer: false,
+                      catalogLinkedManually: false,
                     });
                     setRelinkingReviewItem(null);
                     setCatalogSearch("");
@@ -13627,6 +13653,7 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
                         storage: c.storage,
                         storageDetail: c.storage === "Other" ? c.storageDetail || "" : "",
                         needsTransfer: !!c.needsTransfer,
+                        catalogLinkedManually: true,
                       });
                       onLearnAlias && onLearnAlias(c.id, relinkingReviewItem.name);
                       setRelinkingReviewItem(null);
