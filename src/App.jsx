@@ -19618,6 +19618,8 @@ function BackorderDashboard({ onGoHome }) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [sortNewestFirst, setSortNewestFirst] = useState(false);
+  const [clearTarget, setClearTarget] = useState(null); // a single row, while confirming
+  const [confirmingClearAll, setConfirmingClearAll] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -19632,6 +19634,81 @@ function BackorderDashboard({ onGoHome }) {
       setLoading(false);
     })();
   }, []);
+
+  // Zeroes out backorderQty (and its date) on the actual underlying job
+  // or Love List item — this is a real write, not just hiding the row,
+  // since these entries can genuinely be wrong (like ones generated
+  // before the out-of-order-scan fix) and need to actually go away.
+  const clearOne = (row) => {
+    if (row.targetType === "job") {
+      const nextJobs = jobs.map((j) => {
+        if (j.id !== row.jobId) return j;
+        return {
+          ...j,
+          items: j.items.map((i) =>
+            i.id === row.itemId ? { ...i, backorderQty: 0, backorderReceiptDate: null } : i
+          ),
+        };
+      });
+      setJobs(nextJobs);
+      saveWithRetry(JOBS_KEY, JSON.stringify(nextJobs)).catch(() => {});
+    } else {
+      const nextLists = lists.map((l) => {
+        if (l.id !== row.listId) return l;
+        return {
+          ...l,
+          items: l.items.map((i) =>
+            i.id === row.itemId ? { ...i, backorderQty: 0, backorderReceiptDate: null } : i
+          ),
+        };
+      });
+      setLists(nextLists);
+      saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(nextLists)).catch(() => {});
+    }
+  };
+
+  // Clears every row currently matching the search — this is what makes
+  // "clear all the 3052 ones" a single action: search "3052", then wipe
+  // everything that's actually showing, rather than tapping each one.
+  const clearAllShown = (rowsToClear) => {
+    const jobItemIds = {}; // jobId -> Set of itemIds to clear
+    const listItemIds = {}; // listId -> Set of itemIds to clear
+    rowsToClear.forEach((r) => {
+      if (r.targetType === "job") {
+        (jobItemIds[r.jobId] = jobItemIds[r.jobId] || new Set()).add(r.itemId);
+      } else {
+        (listItemIds[r.listId] = listItemIds[r.listId] || new Set()).add(r.itemId);
+      }
+    });
+    if (Object.keys(jobItemIds).length > 0) {
+      const nextJobs = jobs.map((j) => {
+        const ids = jobItemIds[j.id];
+        if (!ids) return j;
+        return {
+          ...j,
+          items: j.items.map((i) =>
+            ids.has(i.id) ? { ...i, backorderQty: 0, backorderReceiptDate: null } : i
+          ),
+        };
+      });
+      setJobs(nextJobs);
+      saveWithRetry(JOBS_KEY, JSON.stringify(nextJobs)).catch(() => {});
+    }
+    if (Object.keys(listItemIds).length > 0) {
+      const nextLists = lists.map((l) => {
+        const ids = listItemIds[l.id];
+        if (!ids) return l;
+        return {
+          ...l,
+          items: l.items.map((i) =>
+            ids.has(i.id) ? { ...i, backorderQty: 0, backorderReceiptDate: null } : i
+          ),
+        };
+      });
+      setLists(nextLists);
+      saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(nextLists)).catch(() => {});
+    }
+  };
 
   if (loading) {
     return (
@@ -19651,6 +19728,8 @@ function BackorderDashboard({ onGoHome }) {
         if (i.backorderQty > 0) {
           rows.push({
             targetType: "job",
+            jobId: j.id,
+            itemId: i.id,
             targetName: j.name,
             itemName: i.name,
             qty: i.backorderQty,
@@ -19667,6 +19746,8 @@ function BackorderDashboard({ onGoHome }) {
         if (i.backorderQty > 0) {
           rows.push({
             targetType: "love_list",
+            listId: l.id,
+            itemId: i.id,
             targetName: `${l.jobLabel}${l.subJobLabel ? ` — ${l.subJobLabel}` : ""}`,
             itemName: i.name,
             qty: i.backorderQty,
@@ -19712,7 +19793,7 @@ function BackorderDashboard({ onGoHome }) {
         </p>
       </header>
       <main className="max-w-2xl mx-auto px-4 py-5">
-        <div className="flex gap-2 mb-4">
+        <div className="flex gap-2 mb-2">
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -19726,6 +19807,14 @@ function BackorderDashboard({ onGoHome }) {
             {sortNewestFirst ? "Newest first" : "Oldest first"}
           </button>
         </div>
+        {filtered.length > 0 && (
+          <button
+            onClick={() => setConfirmingClearAll(true)}
+            className="text-xs text-slate-500 hover:text-red-400 mb-4 block"
+          >
+            Clear all {filtered.length} shown
+          </button>
+        )}
 
         {filtered.length === 0 ? (
           <p className="text-sm text-slate-500 text-center py-10">
@@ -19741,10 +19830,19 @@ function BackorderDashboard({ onGoHome }) {
                 <div key={idx} className="border border-slate-800 rounded-lg p-3 bg-slate-900/60">
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm text-slate-100 truncate">{r.itemName}</p>
-                    <span className="text-sm font-semibold text-red-300 shrink-0">
-                      {r.qty}
-                      {r.unit ? ` ${r.unit}` : ""}
-                    </span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-sm font-semibold text-red-300">
+                        {r.qty}
+                        {r.unit ? ` ${r.unit}` : ""}
+                      </span>
+                      <button
+                        onClick={() => setClearTarget(r)}
+                        title="Clear this backorder"
+                        className="text-slate-600 hover:text-red-400"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                   <p className="text-xs text-slate-500 mt-0.5">
                     {r.targetType === "job" ? "Job" : "Love List"} · {r.targetName}
@@ -19761,6 +19859,32 @@ function BackorderDashboard({ onGoHome }) {
               );
             })}
           </div>
+        )}
+
+        {clearTarget && (
+          <ConfirmDelete
+            title="Clear this backorder?"
+            message={`"${clearTarget.itemName}" (${clearTarget.qty}${
+              clearTarget.unit ? ` ${clearTarget.unit}` : ""
+            }) will be zeroed out on ${clearTarget.targetName}. This doesn't touch how much you actually have on hand — only the outstanding-backorder number. This can't be undone.`}
+            onConfirm={() => {
+              clearOne(clearTarget);
+              setClearTarget(null);
+            }}
+            onCancel={() => setClearTarget(null)}
+          />
+        )}
+
+        {confirmingClearAll && (
+          <ConfirmDelete
+            title={`Clear all ${filtered.length} shown?`}
+            message="Every backorder entry currently matching your search gets zeroed out. This doesn't touch how much you actually have on hand — only the outstanding-backorder number. This can't be undone."
+            onConfirm={() => {
+              clearAllShown(filtered);
+              setConfirmingClearAll(false);
+            }}
+            onCancel={() => setConfirmingClearAll(false)}
+          />
         )}
       </main>
     </div>
