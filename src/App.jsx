@@ -13076,6 +13076,18 @@ function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onS
             <p className="text-lg font-semibold text-slate-100">Job Lists</p>
             <p className="text-xs text-slate-500 mt-1">Full job inventory tracking</p>
           </button>
+          {isEditor && (
+            <div className="sm:col-span-2 flex justify-center">
+              <button
+                onClick={onSelectReceiving}
+                className="w-full sm:w-1/2 bg-slate-900 border-2 border-slate-800 hover:border-sky-500/60 hover:bg-sky-500/5 rounded-xl p-8 text-center transition-colors"
+              >
+                <Inbox className="w-9 h-9 text-sky-400 mx-auto mb-3" />
+                <p className="text-lg font-semibold text-slate-100">Receiving</p>
+                <p className="text-xs text-slate-500 mt-1">Scan receipts, match items, apply to jobs</p>
+              </button>
+            </div>
+          )}
         </div>
         <button
           onClick={onSelectKiosk}
@@ -13084,15 +13096,6 @@ function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onS
           <Users className="w-5 h-5 text-slate-400" />
           <span className="text-sm font-semibold text-slate-300">Worker Kiosk</span>
         </button>
-        {isEditor && (
-          <button
-            onClick={onSelectReceiving}
-            className="w-full mt-3 flex items-center justify-center gap-2 bg-slate-900 border-2 border-slate-800 hover:border-slate-600 rounded-xl p-4 text-center transition-colors"
-          >
-            <Inbox className="w-5 h-5 text-slate-400" />
-            <span className="text-sm font-semibold text-slate-300">Receiving</span>
-          </button>
-        )}
         {isEditor && (
           <button
             onClick={onSelectBackorders}
