@@ -12942,7 +12942,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   );
 }
 
-function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onSelectKiosk, onSelectReceiving, onSelectBackorders, onRequestLogin, onSignOut }) {
+function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onSelectKiosk, onSelectReceiving, onSelectBackorders, onSelectArchive, onRequestLogin, onSignOut }) {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
@@ -13100,6 +13100,15 @@ function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onS
           >
             <AlertTriangle className="w-5 h-5 text-slate-400" />
             <span className="text-sm font-semibold text-slate-300">Backorders</span>
+          </button>
+        )}
+        {isEditor && (
+          <button
+            onClick={onSelectArchive}
+            className="w-full mt-3 flex items-center justify-center gap-2 bg-slate-900 border-2 border-slate-800 hover:border-slate-600 rounded-xl p-4 text-center transition-colors"
+          >
+            <BookOpen className="w-5 h-5 text-slate-400" />
+            <span className="text-sm font-semibold text-slate-300">Receipt Archive</span>
           </button>
         )}
       </main>
@@ -18682,6 +18691,10 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
 }
 
 const RECEIVING_QUEUE_KEY = "warehub-receiving-queue";
+// Separate from the queue above — this is for receipts you just want on
+// record and searchable, without ever pulling items out of them into a
+// job or Love List. Nothing here ever touches inventory.
+const RECEIPT_ARCHIVE_KEY = "warehub-receipt-archive";
 // Remembers the exact confirmed name for a specific raw OCR string, once
 // you've typed and linked it — separate from catalog matching itself.
 // This is what lets a size-specific line ("...4LB SLEDGE...") auto-fill
@@ -20038,6 +20051,266 @@ function BackorderDashboard({ onGoHome }) {
           />
         )}
       </main>
+    </div>
+  );
+}
+
+// A simple, searchable photo log for receipts you just want on record —
+// no line items, no target, no approval step. Scan it, and it's saved;
+// the only thing you can do afterward is search and look back at it.
+function ReceiptArchive({ onGoHome }) {
+  const [entries, setEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [scanning, setScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState(null);
+  const [scanError, setScanError] = useState("");
+  const [search, setSearch] = useState("");
+  const [viewingEntry, setViewingEntry] = useState(null);
+  const [viewingPhoto, setViewingPhoto] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const entriesRef = useRef([]);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const result = await getWithRetry(RECEIPT_ARCHIVE_KEY);
+        if (result.ok && result.value) {
+          const loaded = JSON.parse(result.value);
+          setEntries(loaded);
+          entriesRef.current = loaded;
+        }
+      } catch {}
+      setLoading(false);
+    })();
+  }, []);
+
+  const saveEntries = (next) => {
+    entriesRef.current = next;
+    setEntries(next);
+    saveWithRetry(RECEIPT_ARCHIVE_KEY, JSON.stringify(next)).catch(() => {});
+  };
+
+  const scanOneToArchive = async (file) => {
+    const base64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(",")[1]);
+      reader.onerror = () => reject(new Error("Couldn't read that image."));
+      reader.readAsDataURL(file);
+    });
+
+    let photoUrl = null;
+    let photoPath = null;
+    const uploadResult = await uploadReceiptScan(file);
+    if (uploadResult.ok) {
+      photoUrl = uploadResult.url;
+      photoPath = uploadResult.path;
+    }
+
+    const res = await fetch("https://vwvppivdpxjvmaazcmmg.supabase.co/functions/v1/scan-receipt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageBase64: base64, mediaType: file.type || "image/jpeg" }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Scan failed.");
+
+    return {
+      id: uniqueId(),
+      photoUrl,
+      photoPath,
+      fullText: data.fullText || "",
+      vendor: data.vendor || "",
+      poNumber: data.poNumber || "",
+      receiptDate: data.receiptDate || "",
+      archivedAt: new Date().toISOString(),
+    };
+  };
+
+  const runArchiveScans = async (fileList) => {
+    setScanning(true);
+    setScanError("");
+    const files = Array.from(fileList);
+    const errors = [];
+    for (let i = 0; i < files.length; i++) {
+      setScanProgress({ current: i + 1, total: files.length });
+      try {
+        const entry = await scanOneToArchive(files[i]);
+        saveEntries([entry, ...entriesRef.current]);
+        playSaveChime();
+      } catch (err) {
+        errors.push(`"${files[i].name}" — ${err.message || String(err)}`);
+      }
+    }
+    if (errors.length > 0) setScanError(errors.join(" · "));
+    setScanning(false);
+    setScanProgress(null);
+  };
+
+  const deleteEntry = (entry) => {
+    if (entry.photoPath) deleteReferenceDocument(entry.photoPath).catch(() => {});
+    saveEntries(entriesRef.current.filter((e) => e.id !== entry.id));
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  const filtered = entries.filter((e) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return [e.fullText, e.vendor, e.poNumber].filter(Boolean).join(" ").toLowerCase().includes(q);
+  });
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const files = Array.from(e.target.files || []);
+          e.target.value = "";
+          if (files.length > 0) runArchiveScans(files);
+        }}
+      />
+      <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
+        <button onClick={onGoHome} className="text-slate-400 hover:text-slate-200 flex items-center gap-1.5">
+          <ChevronLeft className="w-5 h-5" />
+          <span className="text-sm">Back</span>
+        </button>
+        <p className="font-semibold flex items-center gap-1.5">
+          <BookOpen className="w-4 h-4 text-amber-400" />
+          Receipt Archive
+        </p>
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={scanning}
+          className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400 disabled:opacity-50"
+        >
+          <Camera className="w-4 h-4" />
+          {scanning
+            ? scanProgress
+              ? `${scanProgress.current}/${scanProgress.total}...`
+              : "Scanning..."
+            : "Scan"}
+        </button>
+      </header>
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        <p className="text-xs text-slate-500 mb-4">
+          Just a searchable photo log — nothing scanned here ever creates or updates any items on
+          a job or Love List.
+        </p>
+        {scanError && <p className="text-sm text-red-400 mb-4">Couldn't scan that: {scanError}</p>}
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search anything printed on a receipt..."
+          className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+        />
+        {filtered.length === 0 ? (
+          <p className="text-sm text-slate-500 text-center py-10">
+            {entries.length === 0
+              ? "Nothing archived yet — tap Scan to get started."
+              : "Nothing matches that search."}
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {filtered.map((e) => (
+              <button
+                key={e.id}
+                onClick={() => setViewingEntry(e)}
+                className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 flex items-center gap-3 hover:border-slate-700"
+              >
+                {e.photoUrl && (
+                  <img src={e.photoUrl} alt="" className="w-12 h-12 rounded-md object-cover border border-slate-800 shrink-0" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm text-slate-100 truncate">{e.vendor || "Unknown vendor"}</p>
+                  <p className="text-xs text-slate-500">
+                    {[e.poNumber && `PO#${e.poNumber}`, e.receiptDate, formatTaskTimestamp(e.archivedAt)]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </main>
+
+      {viewingEntry && (
+        <div className="fixed inset-0 z-[70] bg-slate-950 text-slate-100 overflow-y-auto">
+          <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
+            <button
+              onClick={() => setViewingEntry(null)}
+              className="text-slate-400 hover:text-slate-200 flex items-center gap-1.5"
+            >
+              <ChevronLeft className="w-5 h-5" />
+              <span className="text-sm">Back</span>
+            </button>
+            <button onClick={() => setDeleteTarget(viewingEntry)} className="text-slate-500 hover:text-red-400">
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </header>
+          <main className="max-w-2xl mx-auto px-4 py-5">
+            <p className="text-sm text-slate-100 font-semibold mb-1">
+              {viewingEntry.vendor || "Unknown vendor"}
+            </p>
+            <p className="text-xs text-slate-500 mb-4">
+              {[viewingEntry.poNumber && `PO#${viewingEntry.poNumber}`, viewingEntry.receiptDate]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+            {viewingEntry.photoUrl && (
+              <button
+                onClick={() => setViewingPhoto(viewingEntry.photoUrl)}
+                className="w-full mb-4 rounded-lg overflow-hidden border border-slate-800"
+              >
+                <img src={viewingEntry.photoUrl} alt="Receipt" className="w-full max-h-56 object-cover" />
+              </button>
+            )}
+            <p className="text-xs font-medium text-slate-400 mb-1.5">Recognized text</p>
+            <p className="text-sm text-slate-300 whitespace-pre-wrap border border-slate-800 rounded-lg p-3 bg-slate-900/60">
+              {viewingEntry.fullText || "Nothing came through legibly on this scan."}
+            </p>
+          </main>
+        </div>
+      )}
+
+      {viewingPhoto && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
+          onClick={() => setViewingPhoto(null)}
+        >
+          <button
+            onClick={() => setViewingPhoto(null)}
+            className="absolute top-4 right-4 text-slate-300 hover:text-white"
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <ZoomableImage key={viewingPhoto} src={viewingPhoto} alt="Receipt" />
+        </div>
+      )}
+
+      {deleteTarget && (
+        <ConfirmDelete
+          title="Delete this archived receipt?"
+          message="The photo and recognized text are both permanently removed. This can't be undone."
+          onConfirm={() => {
+            deleteEntry(deleteTarget);
+            setDeleteTarget(null);
+            setViewingEntry(null);
+          }}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
     </div>
   );
 }
@@ -21729,6 +22002,7 @@ export default function AuthGate() {
           }}
           onSelectReceiving={() => navigateToSection("receiving")}
           onSelectBackorders={() => navigateToSection("backorders")}
+          onSelectArchive={() => navigateToSection("archive")}
           onRequestLogin={() => setShowLogin(true)}
           onSignOut={() => supabase.auth.signOut()}
         />
@@ -21736,6 +22010,8 @@ export default function AuthGate() {
         <ReceivingApp onGoHome={goToLanding} />
       ) : appSection === "backorders" ? (
         <BackorderDashboard onGoHome={goToLanding} />
+      ) : appSection === "archive" ? (
+        <ReceiptArchive onGoHome={goToLanding} />
       ) : appSection === "love" ? (
         <LoveListsApp
           isEditor={isOwner || isManager}
