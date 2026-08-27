@@ -861,7 +861,13 @@ function ItemForm({
         containers: containerName ? [{ name: containerName, qty: finalQtyNeeded }] : [],
         serials: finalSerials,
         status: "green",
-        catalogId: manualCatalogLinkId,
+        // A name-based auto-match is just as real a link as one you
+        // pick manually — it was already being shown as "Linked to catalog
+        // item X", so saving only the manual half was silently leaving
+        // items looking linked in the form while never actually getting a
+        // catalogId, which is exactly why some items were missing the
+        // Vendor button despite the form appearing to show a link.
+        catalogId: effectiveCatalogMatch ? effectiveCatalogMatch.id : null,
         needsTransfer: !!(effectiveCatalogMatch && effectiveCatalogMatch.needsTransfer),
       });
     };
@@ -1473,7 +1479,7 @@ function ItemForm({
                 containers: cleanContainers,
                 serials: finalSerials,
                 status: finalStatus,
-                catalogId: manualCatalogLinkId,
+                catalogId: effectiveCatalogMatch ? effectiveCatalogMatch.id : null,
               });
             }}
             disabled={!canSave}
@@ -2861,6 +2867,66 @@ function CatalogModal({
   const [newCategoryText, setNewCategoryText] = useState("");
   const [vendorPickerOpen, setVendorPickerOpen] = useState(false);
   const [newVendorText, setNewVendorText] = useState("");
+  const [syncConfirmOpen, setSyncConfirmOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState(null); // { linked, checked } after a run completes
+
+  // Fixes the exact gap the "Linked to catalog item X" text used to leave
+  // behind — that display only ever meant a name-based match was FOUND,
+  // never that it was actually saved as a real catalogId unless you also
+  // separately picked it manually. Any item still missing a catalogId
+  // despite a clean name-match gets linked here in one pass, across every
+  // job and every Love List at once — instead of reopening each one by
+  // hand just to hit Save.
+  const syncCatalogLinks = async () => {
+    setSyncing(true);
+    let linked = 0;
+    let checked = 0;
+    try {
+      const [jResult, lResult] = await Promise.all([
+        getWithRetry(JOBS_KEY),
+        getWithRetry(LOVE_LISTS_KEY),
+      ]);
+      if (jResult.ok && jResult.value) {
+        const jobs = JSON.parse(jResult.value);
+        const nextJobs = jobs.map((j) => ({
+          ...j,
+          items: (j.items || []).map((i) => {
+            if (i.catalogId) return i;
+            checked++;
+            const match = i.name && i.name.trim() ? findCatalogMatch(i.name, catalog) : null;
+            if (match) {
+              linked++;
+              return { ...i, catalogId: match.id };
+            }
+            return i;
+          }),
+        }));
+        await saveWithRetry(JOBS_KEY, JSON.stringify(nextJobs));
+      }
+      if (lResult.ok && lResult.value) {
+        const lists = JSON.parse(lResult.value);
+        const nextLists = lists.map((l) => ({
+          ...l,
+          items: (l.items || []).map((i) => {
+            if (i.catalogId) return i;
+            checked++;
+            const match = i.name && i.name.trim() ? findCatalogMatch(i.name, catalog) : null;
+            if (match) {
+              linked++;
+              return { ...i, catalogId: match.id };
+            }
+            return i;
+          }),
+        }));
+        await saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(nextLists));
+      }
+      setSyncResult({ linked, checked });
+    } catch (err) {
+      setSyncResult({ error: err && err.message ? err.message : String(err) });
+    }
+    setSyncing(false);
+  };
 
   const existingCategories = [
     ...new Set(catalog.map((c) => c.category).filter(Boolean)),
@@ -2962,6 +3028,16 @@ function CatalogModal({
                   {selectMode ? "Cancel" : "Select"}
                 </button>
               )}
+              <button
+                onClick={() => {
+                  setSyncResult(null);
+                  setSyncConfirmOpen(true);
+                }}
+                title="Sync catalog links"
+                className="text-slate-400 hover:text-slate-200 p-1.5 rounded-md hover:bg-slate-800"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </button>
               <button
                 onClick={() => setExportOpen(true)}
                 title="Export catalog"
@@ -3227,6 +3303,70 @@ function CatalogModal({
           }}
           onCancel={() => setDeleteTarget(null)}
         />
+      )}
+
+      {syncConfirmOpen && !syncing && !syncResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-1.5">Sync catalog links?</h3>
+            <p className="text-slate-400 text-sm mb-5">
+              Checks every item across every job and Love List. Any item whose name already
+              matches a catalog entry, but doesn't have a real link saved yet, gets linked
+              automatically. Items that already have a link, or don't match anything, are left
+              untouched.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setSyncConfirmOpen(false)}
+                className="flex-1 text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={syncCatalogLinks}
+                className="flex-1 text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Sync
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {syncing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5 flex items-center gap-3">
+            <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin shrink-0" />
+            <p className="text-sm text-slate-300">Checking every item...</p>
+          </div>
+        </div>
+      )}
+
+      {syncResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-1.5">
+              {syncResult.error ? "Sync failed" : "Sync complete"}
+            </h3>
+            <p className="text-slate-400 text-sm mb-5">
+              {syncResult.error
+                ? syncResult.error
+                : `Checked ${syncResult.checked} unlinked item${
+                    syncResult.checked === 1 ? "" : "s"
+                  } — linked ${syncResult.linked} to a matching catalog entry. Reload the page to
+                    see the update reflected wherever you currently have a job or Love List open.`}
+            </p>
+            <button
+              onClick={() => {
+                setSyncResult(null);
+                setSyncConfirmOpen(false);
+              }}
+              className="w-full text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+            >
+              Done
+            </button>
+          </div>
+        </div>
       )}
     </>
   );
