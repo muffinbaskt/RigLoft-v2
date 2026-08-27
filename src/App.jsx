@@ -18877,6 +18877,11 @@ function applyReceiptLineToJob(job, line, catalog) {
       received: finalBackorderQty > 0 ? "partial" : "yes",
       backorderQty: finalBackorderQty,
       backorderReceiptDate: finalBackorderDate,
+      // Same sync as the Love List version — if this line was linked to a
+      // catalog entry but the existing item wasn't, the vendor purchase
+      // record just logged there would have nothing on this item pointing
+      // back to find it.
+      catalogId: line.catalogId || existing.catalogId,
     };
     const nextItems = [...items];
     nextItems[idx] = updated;
@@ -18952,6 +18957,12 @@ function applyReceiptLineToLoveList(list, line, catalog) {
       statusDates: shouldAdvance
         ? { ...existing.statusDates, received: new Date().toISOString().slice(0, 10) }
         : existing.statusDates,
+      // If this receipt's line was linked to a catalog entry but the
+      // existing item wasn't (or pointed somewhere stale), sync it here —
+      // otherwise the vendor purchase record just written to that catalog
+      // entry would have nothing on this item pointing back to find it,
+      // even though the history itself is correctly logged.
+      catalogId: line.catalogId || existing.catalogId,
     };
     const nextItems = [...items];
     nextItems[idx] = updated;
