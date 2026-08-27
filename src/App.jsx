@@ -21500,6 +21500,34 @@ export default function AuthGate() {
   const [appSection, setAppSection] = useState(null); // null = landing, "jobs" | "love"
   const [pendingJobAction, setPendingJobAction] = useState(null);
 
+  // The app doesn't use real URL routing between sections — moving
+  // between Love Lists, Job Lists, Receiving, etc. is all just internal
+  // React state, invisible to the browser. That means a phone's
+  // edge-swipe "back" gesture (which maps to real browser history) had
+  // nothing to actually go back to, and fell through to closing the app
+  // entirely. Pushing a history entry on the way into a section, and
+  // treating a real back-navigation event the same as tapping that
+  // section's own Back button, is what gives the swipe gesture somewhere
+  // real to land instead. This only covers top-level sections (landing
+  // ↔ Love Lists / Job Lists / Receiving / Backorders) — going back one
+  // step at a time *within* a section (e.g. a specific job back to the
+  // job list) isn't wired up the same way, and would need proper routing
+  // to do throughout the whole app.
+  const navigateToSection = (section) => {
+    window.history.pushState({ appSection: section }, "", "");
+    setAppSection(section);
+  };
+  useEffect(() => {
+    const onPopState = () => setAppSection(null);
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+  // Tapping a section's own Back/Home button goes through history.back()
+  // too, rather than setting state directly — that way it consumes the
+  // same history entry the swipe gesture would have, so the two ways of
+  // leaving a section can't get out of sync with each other.
+  const goToLanding = () => window.history.back();
+
   // Only the owner's account can create new Supabase Auth users (the app
   // itself never exposes sign-up), so any *other* real, logged-in account
   // is safely assumed to be the manager — no separate roles table needed
@@ -21535,10 +21563,10 @@ export default function AuthGate() {
         <AppLandingScreen
           isEditor={isOwner}
           isManager={isManager}
-          onSelectLove={() => setAppSection("love")}
+          onSelectLove={() => navigateToSection("love")}
           onSelectJobs={(action) => {
             setPendingJobAction(action || null);
-            setAppSection("jobs");
+            navigateToSection("jobs");
           }}
           onSelectKiosk={async () => {
             // Entering Kiosk mode drops any owner/manager session first —
@@ -21546,22 +21574,22 @@ export default function AuthGate() {
             // showing the kiosk, not just a UI screen that happens to
             // hide the rest of the app.
             if (session) await supabase.auth.signOut();
-            setAppSection("kiosk");
+            navigateToSection("kiosk");
           }}
-          onSelectReceiving={() => setAppSection("receiving")}
-          onSelectBackorders={() => setAppSection("backorders")}
+          onSelectReceiving={() => navigateToSection("receiving")}
+          onSelectBackorders={() => navigateToSection("backorders")}
           onRequestLogin={() => setShowLogin(true)}
           onSignOut={() => supabase.auth.signOut()}
         />
       ) : appSection === "receiving" ? (
-        <ReceivingApp onGoHome={() => setAppSection(null)} />
+        <ReceivingApp onGoHome={goToLanding} />
       ) : appSection === "backorders" ? (
-        <BackorderDashboard onGoHome={() => setAppSection(null)} />
+        <BackorderDashboard onGoHome={goToLanding} />
       ) : appSection === "love" ? (
         <LoveListsApp
           isEditor={isOwner || isManager}
           isOwner={isOwner}
-          onGoHome={() => setAppSection(null)}
+          onGoHome={goToLanding}
         />
       ) : appSection === "kiosk" ? (
         <WorkerKioskApp onRequestStaffLogin={() => setShowLogin(true)} />
@@ -21572,7 +21600,7 @@ export default function AuthGate() {
           managerName={managerName}
           onSignOut={() => supabase.auth.signOut()}
           onRequestLogin={() => setShowLogin(true)}
-          onGoToLanding={() => setAppSection(null)}
+          onGoToLanding={goToLanding}
           initialAction={pendingJobAction}
         />
       )}
@@ -21592,7 +21620,7 @@ export default function AuthGate() {
                 setShowLogin(false);
                 // Real credentials just got verified — that's the only way
                 // out of Kiosk mode back to the full app.
-                if (appSection === "kiosk") setAppSection(null);
+                if (appSection === "kiosk") goToLanding();
               }}
             />
           </div>
