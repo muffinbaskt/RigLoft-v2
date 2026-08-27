@@ -44,6 +44,7 @@ import {
   Home,
   QrCode,
   Bell,
+  AlertTriangle,
 } from "lucide-react";
 
 const STORAGE_OPTIONS = [
@@ -303,6 +304,7 @@ function emptyItem(defaultStorage) {
     needsTransfer: false,
     notes: "",
     backorderQty: 0, // still outstanding from a supplier, set/updated via Receiving
+    backorderReceiptDate: null, // date of whichever receipt most recently set backorderQty — protects against an older, already-superseded receipt overwriting it if processed out of order
   };
 }
 
@@ -2478,24 +2480,18 @@ function CatalogItemForm({ initial, existingCategories = [], existingVendors = [
             </datalist>
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">
-              Usual vendor <span className="text-slate-600">(optional)</span>
-            </label>
-            <input
-              list="catalog-vendor-options"
-              value={item.vendor || ""}
-              onChange={(e) => set("vendor")(e.target.value)}
-              placeholder="e.g. Fastenal, McMaster-Carr"
-              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60"
-            />
-            <datalist id="catalog-vendor-options">
-              {existingVendors.map((v) => (
-                <option key={v} value={v} />
-              ))}
-            </datalist>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Usual vendor</label>
+            <div className="w-full bg-slate-800/50 border border-slate-700 text-sm rounded-md px-3 py-2">
+              {item.vendor ? (
+                <span className="text-slate-200">{item.vendor}</span>
+              ) : (
+                <span className="text-slate-600">Not enough purchase history yet</span>
+              )}
+            </div>
             <p className="text-xs text-slate-600 mt-1">
-              Never shown on job pages — only used to group outstanding items by vendor on the
-              pick list, for ordering purposes.
+              Set automatically from Receiving history — whichever vendor has delivered the most
+              of this item. Never shown on job pages, only used to group outstanding items by
+              vendor on the pick list.
             </p>
           </div>
           <div>
@@ -5954,8 +5950,23 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
   };
 
   const updateSerials = (lineId, value) => {
+    const serials = parseSerials(value);
     setPreview((prev) =>
-      prev.map((p) => (p.lineId === lineId ? { ...p, serials: parseSerials(value) } : p))
+      prev.map((p) => {
+        if (p.lineId !== lineId) return p;
+        // Same convention as every other SME#-linked quantity field in the
+        // app — typing in more SME#s than the current quantity bumps it up
+        // to match, but it's never lowered automatically (some items
+        // genuinely don't have an SME# for every unit).
+        const currentQty = Number(p.qtyNeeded) || 0;
+        const needsBump = serials.length > currentQty;
+        return {
+          ...p,
+          serials,
+          qtyNeeded: needsBump ? serials.length : p.qtyNeeded,
+          qtyDefaulted: needsBump ? false : p.qtyDefaulted,
+        };
+      })
     );
   };
 
@@ -6486,7 +6497,7 @@ function SuggestNewItemModal({ job, managerName, onClose }) {
   );
 }
 
-function ItemCard({ item, selectMode, selected, isEditor, workerTasks = [], onToggleSelect, onEdit, onDelete, onViewSerials, onSuggestEdit, onOpenContainer, onAssignItem, onMergeItem }) {
+function ItemCard({ item, selectMode, selected, isEditor, workerTasks = [], onToggleSelect, onEdit, onDelete, onViewSerials, onSuggestEdit, onOpenContainer, onAssignItem, onMergeItem, onViewVendor }) {
   const handleCardClick = () => {
     if (selectMode) {
       onToggleSelect(item.id);
@@ -6612,6 +6623,17 @@ function ItemCard({ item, selectMode, selected, isEditor, workerTasks = [], onTo
           <span className="text-xs rounded-full px-2.5 py-1 border border-red-500/40 bg-red-500/10 text-red-300">
             {item.backorderQty} on backorder
           </span>
+        )}
+        {item.catalogId && onViewVendor && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onViewVendor(item);
+            }}
+            className="text-xs rounded-full px-2.5 py-1 border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-600 flex items-center gap-1"
+          >
+            🏷️ Vendor
+          </button>
         )}
         {(() => {
           const assignedTaskIds = item.assignedTaskIds || [];
@@ -7971,6 +7993,70 @@ function MergeItemModal({ item, items, onConfirm, onClose }) {
   );
 }
 
+// Shown from either a Job or Love List item card — the purchase history
+// lives on the catalog entry, so this reads straight off that rather
+// than anything specific to the job/list you happened to open it from.
+function VendorBreakdownModal({ catalogItem, onClose }) {
+  const history = catalogItem.vendorHistory || [];
+  const grouped = {};
+  history.forEach((r) => {
+    if (!r.vendor) return;
+    if (!grouped[r.vendor]) grouped[r.vendor] = { qty: 0, amount: 0 };
+    grouped[r.vendor].qty += r.qty || 0;
+    grouped[r.vendor].amount += r.amount || 0;
+  });
+  const rows = Object.entries(grouped)
+    .map(([vendor, data]) => ({ vendor, ...data }))
+    .sort((a, b) => b.amount - a.amount);
+  const totalSpent = rows.reduce((sum, r) => sum + r.amount, 0);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5 max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="text-slate-100 font-semibold text-base truncate">{catalogItem.name}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200 shrink-0 ml-2">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <p className="text-xs text-slate-500 mb-4">
+          Purchase history by vendor{totalSpent > 0 ? ` · $${totalSpent.toFixed(2)} total` : ""}
+        </p>
+        <div className="flex-1 overflow-y-auto space-y-2">
+          {rows.length === 0 ? (
+            <p className="text-sm text-slate-500 text-center py-6">
+              No purchase history recorded yet — this fills in automatically as receipts linked
+              to this item get approved with a vendor and price on them.
+            </p>
+          ) : (
+            rows.map((r) => (
+              <div
+                key={r.vendor}
+                className="border border-slate-800 rounded-lg p-3 flex items-center justify-between gap-2"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm text-slate-100 truncate">
+                    {r.vendor}
+                    {catalogItem.vendor === r.vendor && (
+                      <span className="ml-1.5 text-[10px] rounded-full px-1.5 py-0.5 border bg-amber-500/15 text-amber-300 border-amber-500/40">
+                        Usual
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-xs text-slate-500">{r.qty} received</p>
+                </div>
+                <p className="text-sm font-semibold text-emerald-400 shrink-0">
+                  {r.amount > 0 ? `$${r.amount.toFixed(2)}` : "—"}
+                </p>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function JobInventory({
   job,
   isEditor: rawIsEditor,
@@ -8029,6 +8115,7 @@ function JobInventory({
   const [referenceDocsOpen, setReferenceDocsOpen] = useState(false);
   const [pullFromReceivingOpen, setPullFromReceivingOpen] = useState(false);
   const [mergingItem, setMergingItem] = useState(null);
+  const [viewingVendorFor, setViewingVendorFor] = useState(null); // the catalog item, while its vendor breakdown is open
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [containersOpen, setContainersOpen] = useState(false);
@@ -8525,6 +8612,12 @@ function JobInventory({
     }));
     playSaveChime();
     setMergingItem(null);
+  };
+
+  const handleViewVendor = (item) => {
+    if (!item.catalogId) return;
+    const catalogItem = catalog.find((c) => c.id === item.catalogId);
+    if (catalogItem) setViewingVendorFor(catalogItem);
   };
 
   const requestDeleteItem = (item) => {
@@ -9448,6 +9541,7 @@ function JobInventory({
                             workerTasks={workerTasks}
                             onAssignItem={setAssigningItem}
                             onMergeItem={handleMergeAction}
+                            onViewVendor={handleViewVendor}
                           />
                         ))}
                       </div>
@@ -9474,6 +9568,7 @@ function JobInventory({
                 workerTasks={workerTasks}
                 onAssignItem={setAssigningItem}
                 onMergeItem={handleMergeAction}
+                onViewVendor={handleViewVendor}
               />
             ))}
           </div>
@@ -9849,6 +9944,10 @@ function JobInventory({
           onConfirm={confirmMerge}
           onClose={() => setMergingItem(null)}
         />
+      )}
+
+      {viewingVendorFor && (
+        <VendorBreakdownModal catalogItem={viewingVendorFor} onClose={() => setViewingVendorFor(null)} />
       )}
 
       {suggestEditTarget && (
@@ -12703,7 +12802,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   );
 }
 
-function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onSelectKiosk, onSelectReceiving, onRequestLogin, onSignOut }) {
+function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onSelectKiosk, onSelectReceiving, onSelectBackorders, onRequestLogin, onSignOut }) {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
@@ -12854,6 +12953,15 @@ function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onS
             <span className="text-sm font-semibold text-slate-300">Receiving</span>
           </button>
         )}
+        {isEditor && (
+          <button
+            onClick={onSelectBackorders}
+            className="w-full mt-3 flex items-center justify-center gap-2 bg-slate-900 border-2 border-slate-800 hover:border-slate-600 rounded-xl p-4 text-center transition-colors"
+          >
+            <AlertTriangle className="w-5 h-5 text-slate-400" />
+            <span className="text-sm font-semibold text-slate-300">Backorders</span>
+          </button>
+        )}
       </main>
     </div>
   );
@@ -12988,6 +13096,7 @@ function newLoveListItem(name, qty, extra = {}) {
     receivedBatches: [],
     stagedBatches: [],
     backorderQty: extra.backorderQty || 0, // still outstanding from a supplier, set/updated via Receiving
+    backorderReceiptDate: extra.backorderReceiptDate || null,
   };
 }
 
@@ -14014,6 +14123,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [addingItem, setAddingItem] = useState(false);
   const [showPullFromReceiving, setShowPullFromReceiving] = useState(false);
   const [mergingItem, setMergingItem] = useState(null);
+  const [viewingVendorFor, setViewingVendorFor] = useState(null);
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
   const [showPhotosModal, setShowPhotosModal] = useState(false);
@@ -14956,6 +15066,17 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                     </button>
                   </span>
                 )}
+                {item.catalogId && (
+                  <button
+                    onClick={() => {
+                      const c = catalog.find((c) => c.id === item.catalogId);
+                      if (c) setViewingVendorFor(c);
+                    }}
+                    className="text-xs rounded-full px-2 py-0.5 border border-slate-700 text-slate-500 hover:text-slate-300 hover:border-slate-600 mb-2 inline-flex items-center gap-1"
+                  >
+                    🏷️ Vendor
+                  </button>
+                )}
                 {isEditor ? (
                   <button
                     onClick={() => setRelinkingItem(item)}
@@ -15555,6 +15676,10 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           }}
           onClose={() => setMergingItem(null)}
         />
+      )}
+
+      {viewingVendorFor && (
+        <VendorBreakdownModal catalogItem={viewingVendorFor} onClose={() => setViewingVendorFor(null)} />
       )}
     </div>
   );
@@ -18456,6 +18581,43 @@ function computeJobItemReceived(qtyHave, qtyNeeded) {
 // equals 1 of the other). Anything else (boxes, cases, unlabeled units)
 // is left untouched rather than guessing, since a wrong guess there would
 // silently corrupt real quantities.
+// Checks whether a job/reference number appears anywhere in a PO
+// string — either as the whole thing, or as one dash/space-separated
+// segment within it (PO numbers often look like "1112-3052-2", where the
+// middle segment is the actual job number). Used only to suggest a
+// likely job match, never to auto-assign anything on its own.
+// Whichever vendor has delivered the highest cumulative QUANTITY of an
+// item — not dollar amount — becomes its "usual vendor," computed fresh
+// from the purchase history every time it's needed rather than stored as
+// a separate manually-maintained field that could drift out of date.
+function computeUsualVendor(vendorHistory) {
+  if (!vendorHistory || vendorHistory.length === 0) return null;
+  const totals = {};
+  vendorHistory.forEach((r) => {
+    if (!r.vendor) return;
+    totals[r.vendor] = (totals[r.vendor] || 0) + (r.qty || 0);
+  });
+  let best = null;
+  let bestQty = 0;
+  Object.entries(totals).forEach(([vendor, qty]) => {
+    if (qty > bestQty) {
+      best = vendor;
+      bestQty = qty;
+    }
+  });
+  return best;
+}
+
+function poContainsJobNumber(poNumber, jobNumber) {
+  if (!poNumber || !jobNumber) return false;
+  const normJob = jobNumber.trim().toLowerCase();
+  if (!normJob) return false;
+  const whole = poNumber.trim().toLowerCase();
+  if (whole === normJob) return true;
+  const segments = poNumber.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+  return segments.some((seg) => seg.toLowerCase() === normJob);
+}
+
 function convertQtyForUnit(qty, fromUnit, toUnit) {
   const norm = (u) => (u || "each").trim().toLowerCase();
   const from = norm(fromUnit);
@@ -18553,14 +18715,28 @@ function applyReceiptLineToJob(job, line, catalog) {
         containers.push({ name: "Unassigned", qty: shippedConverted });
       }
     }
+    // Backorder is a snapshot ("as of this receipt, X still outstanding"),
+    // not a cumulative fact like shipped quantity — so if receipts get
+    // processed out of chronological order (scanning a big backlog
+    // newest-first, say), an older receipt's already-stale backorder
+    // number could otherwise overwrite one a newer receipt already
+    // resolved. Only apply it when we can't tell either date, or when
+    // this receipt is genuinely as new or newer than whatever last set it.
+    const canCompareDates = line.receiptDate && existing.backorderReceiptDate;
+    const shouldUpdateBackorder = !canCompareDates || line.receiptDate >= existing.backorderReceiptDate;
+    const finalBackorderQty = shouldUpdateBackorder ? backorderConverted : existing.backorderQty;
+    const finalBackorderDate = shouldUpdateBackorder
+      ? line.receiptDate || existing.backorderReceiptDate
+      : existing.backorderReceiptDate;
     const updated = {
       ...existing,
       containers,
       qtyHave: totalHave(containers),
       status: computeJobItemStatus(totalHave(containers), existing.qtyNeeded),
       ordered: true,
-      received: backorderConverted > 0 ? "partial" : "yes",
-      backorderQty: backorderConverted,
+      received: finalBackorderQty > 0 ? "partial" : "yes",
+      backorderQty: finalBackorderQty,
+      backorderReceiptDate: finalBackorderDate,
     };
     const nextItems = [...items];
     nextItems[idx] = updated;
@@ -18584,6 +18760,7 @@ function applyReceiptLineToJob(job, line, catalog) {
     ordered: true,
     received: line.backorderQty > 0 ? "partial" : line.shippedQty > 0 ? "yes" : "no",
     backorderQty: line.backorderQty,
+    backorderReceiptDate: line.receiptDate || null,
     // Flags this as a fresh item Receiving created rather than matched —
     // lets the item card highlight it and offer a merge, since a brand
     // new name might really just be an existing item under slightly
@@ -18619,11 +18796,18 @@ function applyReceiptLineToLoveList(list, line, catalog) {
     }
     const statusOrder = ["requested", "ordered", "received", "staged", "sent"];
     const shouldAdvance = shippedConverted > 0 && statusOrder.indexOf(existing.status) < statusOrder.indexOf("received");
+    // Same backorder-staleness protection as the Job version — see that
+    // one for the full explanation.
+    const canCompareDates = line.receiptDate && existing.backorderReceiptDate;
+    const shouldUpdateBackorder = !canCompareDates || line.receiptDate >= existing.backorderReceiptDate;
     const updated = {
       ...existing,
       qtyHave: newHave,
       receivedBatches,
-      backorderQty: backorderConverted,
+      backorderQty: shouldUpdateBackorder ? backorderConverted : existing.backorderQty,
+      backorderReceiptDate: shouldUpdateBackorder
+        ? line.receiptDate || existing.backorderReceiptDate
+        : existing.backorderReceiptDate,
       status: shouldAdvance ? "received" : existing.status,
       statusDates: shouldAdvance
         ? { ...existing.statusDates, received: new Date().toISOString().slice(0, 10) }
@@ -18640,6 +18824,7 @@ function applyReceiptLineToLoveList(list, line, catalog) {
     storageDetail: match ? match.storageDetail || "" : "",
     needsTransfer: match ? !!match.needsTransfer : false,
     backorderQty: line.backorderQty,
+    backorderReceiptDate: line.receiptDate || null,
     qtyUnit: line.unit && line.unit.toLowerCase() !== "each" ? line.unit : "",
   });
   fresh.qtyHave = line.shippedQty;
@@ -18718,6 +18903,30 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
     });
   };
 
+  // Same vendor-spend logging as the standalone Receiving screen — see
+  // that one for the full explanation.
+  const recordVendorPurchases = (lines) => {
+    const eligible = lines.filter((l) => l.catalogId && l.vendor && l.vendor.trim() && l.shippedQty > 0);
+    if (eligible.length === 0) return;
+    setCatalog((prev) => {
+      const next = prev.map((c) => {
+        const linesForThis = eligible.filter((l) => l.catalogId === c.id);
+        if (linesForThis.length === 0) return c;
+        const newRecords = linesForThis.map((l) => ({
+          id: uniqueId(),
+          vendor: l.vendor.trim(),
+          qty: l.shippedQty,
+          amount: Math.round((l.unitPrice || 0) * l.shippedQty * 100) / 100,
+          date: l.receiptDate || new Date().toISOString().slice(0, 10),
+        }));
+        const updatedHistory = [...(c.vendorHistory || []), ...newRecords];
+        return { ...c, vendorHistory: updatedHistory, vendor: computeUsualVendor(updatedHistory) || c.vendor };
+      });
+      saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
   const pending = queue.filter((b) => b.status === "pending");
   const selectedBatch = queue.find((b) => b.id === selectedBatchId) || null;
 
@@ -18787,6 +18996,7 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
 
   const approve = () => {
     const validLines = availableLines.filter((l) => l.name.trim());
+    recordVendorPurchases(validLines);
     let updatedTarget = target;
     validLines.forEach((line) => {
       updatedTarget =
@@ -19231,6 +19441,12 @@ function newReceiptBatch(photoUrl, path, lines, meta = {}) {
     // pages actually belong to the same document — used only to narrow
     // down multi-page grouping, not surfaced anywhere else.
     orderNumber: meta.orderNumber || "",
+    // Header fields used for job-matching suggestions, vendor spend
+    // tracking, and protecting backorder numbers from being overwritten
+    // by an older, already-superseded receipt processed out of order.
+    vendor: meta.vendor || "",
+    poNumber: meta.poNumber || "",
+    receiptDate: meta.receiptDate || "",
     scannedAt: new Date().toISOString(),
     status: "pending", // "pending" | "approved" | "discarded" — approved once every line's been applied somewhere
     lines,
@@ -19392,6 +19608,165 @@ function GroupPhotoStepper({ photos, onClose }) {
   );
 }
 
+// One place to see everything currently on backorder, across every job
+// and every Love List at once, sorted by how long it's been waiting.
+// Read-only — this is a look-back view, not another place to edit
+// inventory; go to the actual job or Love List for that.
+function BackorderDashboard({ onGoHome }) {
+  const [jobs, setJobs] = useState([]);
+  const [lists, setLists] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [sortNewestFirst, setSortNewestFirst] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [jResult, lResult] = await Promise.all([
+          getWithRetry(JOBS_KEY),
+          getWithRetry(LOVE_LISTS_KEY),
+        ]);
+        if (jResult.ok && jResult.value) setJobs(JSON.parse(jResult.value));
+        if (lResult.ok && lResult.value) setLists(JSON.parse(lResult.value));
+      } catch {}
+      setLoading(false);
+    })();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  // One flat list, pulled from every job and every Love List at once —
+  // the whole point is not having to check each one individually.
+  const rows = [];
+  jobs
+    .filter((j) => !j.archived && !j.isQuickTransfer)
+    .forEach((j) => {
+      (j.items || []).forEach((i) => {
+        if (i.backorderQty > 0) {
+          rows.push({
+            targetType: "job",
+            targetName: j.name,
+            itemName: i.name,
+            qty: i.backorderQty,
+            unit: i.qtyUnit || "",
+            date: i.backorderReceiptDate || null,
+          });
+        }
+      });
+    });
+  lists
+    .filter((l) => !l.archived)
+    .forEach((l) => {
+      (l.items || []).forEach((i) => {
+        if (i.backorderQty > 0) {
+          rows.push({
+            targetType: "love_list",
+            targetName: `${l.jobLabel}${l.subJobLabel ? ` — ${l.subJobLabel}` : ""}`,
+            itemName: i.name,
+            qty: i.backorderQty,
+            unit: i.qtyUnit || "",
+            date: i.backorderReceiptDate || null,
+          });
+        }
+      });
+    });
+
+  const filtered = rows
+    .filter((r) => {
+      const q = search.trim().toLowerCase();
+      if (!q) return true;
+      return `${r.targetName} ${r.itemName}`.toLowerCase().includes(q);
+    })
+    .sort((a, b) => {
+      // Undated rows (older items that predate backorder-date tracking)
+      // sort to the bottom either way, rather than being scattered
+      // through the middle by string comparison.
+      if (!a.date && !b.date) return 0;
+      if (!a.date) return 1;
+      if (!b.date) return -1;
+      return sortNewestFirst ? b.date.localeCompare(a.date) : a.date.localeCompare(b.date);
+    });
+
+  const daysAgo = (dateStr) => {
+    if (!dateStr) return null;
+    const diff = Date.now() - new Date(dateStr + "T00:00:00").getTime();
+    return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)));
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
+        <button onClick={onGoHome} className="text-slate-400 hover:text-slate-200 flex items-center gap-1.5">
+          <ChevronLeft className="w-5 h-5" />
+          <span className="text-sm">Back</span>
+        </button>
+        <p className="font-semibold flex items-center gap-1.5">
+          <AlertTriangle className="w-4 h-4 text-amber-400" />
+          Backorders ({filtered.length})
+        </p>
+      </header>
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        <div className="flex gap-2 mb-4">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by item or job/list name..."
+            className="flex-1 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+          />
+          <button
+            onClick={() => setSortNewestFirst((v) => !v)}
+            className="text-xs rounded-md px-3 py-2 border border-slate-700 text-slate-300 hover:bg-slate-800 whitespace-nowrap"
+          >
+            {sortNewestFirst ? "Newest first" : "Oldest first"}
+          </button>
+        </div>
+
+        {filtered.length === 0 ? (
+          <p className="text-sm text-slate-500 text-center py-10">
+            {rows.length === 0
+              ? "Nothing on backorder anywhere right now."
+              : "Nothing matches that search."}
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {filtered.map((r, idx) => {
+              const age = daysAgo(r.date);
+              return (
+                <div key={idx} className="border border-slate-800 rounded-lg p-3 bg-slate-900/60">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm text-slate-100 truncate">{r.itemName}</p>
+                    <span className="text-sm font-semibold text-red-300 shrink-0">
+                      {r.qty}
+                      {r.unit ? ` ${r.unit}` : ""}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {r.targetType === "job" ? "Job" : "Love List"} · {r.targetName}
+                    {age !== null && (
+                      <>
+                        {" · "}
+                        <span className={age > 21 ? "text-amber-400" : ""}>
+                          {age === 0 ? "today" : `${age} day${age === 1 ? "" : "s"} ago`}
+                        </span>
+                      </>
+                    )}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
 function ReceivingApp({ onGoHome }) {
   const [queue, setQueue] = useState([]);
   // Kept in sync on every single write, synchronously — this is what a
@@ -19518,6 +19893,15 @@ function ReceivingApp({ onGoHome }) {
         // tracked in, so "12 EA" correctly reads as "1 DZ" when that's
         // what the matching item uses.
         unit: (it.unit || "each").trim(),
+        // Per-unit price, if the receipt actually printed one — used for
+        // vendor spend tracking. 0 means no price data was found.
+        unitPrice: Number(it.unitPrice) > 0 ? Number(it.unitPrice) : 0,
+        // Copied from the batch's own header field — kept on the line so
+        // the backorder-protection check has it available without
+        // needing to thread the whole batch through every function that
+        // touches a line.
+        receiptDate: data.receiptDate || "",
+        vendor: data.vendor || "",
         // Target lives on the LINE, not the whole receipt — a single PO
         // can genuinely cover materials for two different Love Lists
         // and a job all at once, so each line needs to be routable on
@@ -19536,6 +19920,9 @@ function ReceivingApp({ onGoHome }) {
       pageNumber: data.pageNumber,
       totalPages: data.totalPages,
       orderNumber: data.orderNumber,
+      vendor: data.vendor,
+      poNumber: data.poNumber,
+      receiptDate: data.receiptDate,
     });
   };
 
@@ -19652,6 +20039,34 @@ function ReceivingApp({ onGoHome }) {
         const existing = c.aliases || [];
         if (existing.some((a) => normalizeText(a) === normAlias)) return c;
         return { ...c, aliases: [...existing, aliasText.trim()] };
+      });
+      saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
+  // Every approved line that's linked to a catalog item and has both a
+  // vendor and a price logs a purchase record on that catalog entry —
+  // this is what "Usual Vendor" gets computed from, and what the Vendor
+  // breakdown button shows. Deliberately lives on the catalog item, not
+  // the job/list item, since spend history is a property of the item
+  // TYPE across every job over time, not any one job's specific copy.
+  const recordVendorPurchases = (lines) => {
+    const eligible = lines.filter((l) => l.catalogId && l.vendor && l.vendor.trim() && l.shippedQty > 0);
+    if (eligible.length === 0) return;
+    setCatalog((prev) => {
+      const next = prev.map((c) => {
+        const linesForThis = eligible.filter((l) => l.catalogId === c.id);
+        if (linesForThis.length === 0) return c;
+        const newRecords = linesForThis.map((l) => ({
+          id: uniqueId(),
+          vendor: l.vendor.trim(),
+          qty: l.shippedQty,
+          amount: Math.round((l.unitPrice || 0) * l.shippedQty * 100) / 100,
+          date: l.receiptDate || new Date().toISOString().slice(0, 10),
+        }));
+        const updatedHistory = [...(c.vendorHistory || []), ...newRecords];
+        return { ...c, vendorHistory: updatedHistory, vendor: computeUsualVendor(updatedHistory) || c.vendor };
       });
       saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
       return next;
@@ -19797,6 +20212,8 @@ function ReceivingApp({ onGoHome }) {
       (l) => l.name.trim() && l.targetType && l.targetId && !l.approved
     );
     if (assignedLines.length === 0) return;
+
+    recordVendorPurchases(assignedLines);
 
     const jobGroups = {};
     const listGroups = {};
@@ -20407,6 +20824,17 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches
     return count;
   };
 
+  // Suggestion only, never auto-applied — if this receipt's PO number
+  // contains this job's number as a segment (or matches it outright), it
+  // jumps to the top with its own badge. Stronger than item-name overlap
+  // when it's available, since a PO number pointing at a specific job is
+  // about as direct a signal as this can get.
+  const poMatchesTarget = (t) => {
+    if (!batch.poNumber) return false;
+    const jobNumber = assignTargetType === "job" ? t.name : t.jobLabel;
+    return poContainsJobNumber(batch.poNumber, jobNumber);
+  };
+
   const filteredTargets = (assignTargetType === "job" ? jobOptions : listOptions)
     .filter((t) => {
       const q = targetSearch.trim().toLowerCase();
@@ -20418,8 +20846,11 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches
         .toLowerCase();
       return haystack.includes(q);
     })
-    .map((t) => ({ ...t, __matchCount: matchCountFor(t) }))
-    .sort((a, b) => b.__matchCount - a.__matchCount);
+    .map((t) => ({ ...t, __matchCount: matchCountFor(t), __poMatch: poMatchesTarget(t) }))
+    .sort((a, b) => {
+      if (a.__poMatch !== b.__poMatch) return a.__poMatch ? -1 : 1;
+      return b.__matchCount - a.__matchCount;
+    });
 
   const targetLabelFor = (line) => {
     if (!line.targetId) return null;
@@ -20834,7 +21265,9 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches
                         key={t.id}
                         onClick={() => chooseTarget(t)}
                         className={`w-full text-left text-sm rounded-md px-2.5 py-1.5 hover:bg-slate-800 mb-1 ${
-                          isPerfect
+                          t.__poMatch
+                            ? "border border-amber-500/50 bg-amber-500/10"
+                            : isPerfect
                             ? "border border-emerald-500/40 bg-emerald-500/10"
                             : t.__matchCount > 0
                             ? "border border-sky-500/30"
@@ -20848,17 +21281,24 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches
                               {t.subJobLabel ? ` — ${t.subJobLabel}` : ""}
                             </>
                           )}</span>
-                          {t.__matchCount > 0 && (
-                            <span
-                              className={`text-[10px] rounded-full px-1.5 py-0.5 border shrink-0 ${
-                                isPerfect
-                                  ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
-                                  : "bg-sky-500/15 text-sky-300 border-sky-500/40"
-                              }`}
-                            >
-                              {isPerfect ? "✓ Perfect match" : `${t.__matchCount} matching`}
-                            </span>
-                          )}
+                          <span className="flex items-center gap-1 shrink-0">
+                            {t.__poMatch && (
+                              <span className="text-[10px] rounded-full px-1.5 py-0.5 border bg-amber-500/15 text-amber-300 border-amber-500/40">
+                                🎯 PO#{batch.poNumber}
+                              </span>
+                            )}
+                            {t.__matchCount > 0 && (
+                              <span
+                                className={`text-[10px] rounded-full px-1.5 py-0.5 border ${
+                                  isPerfect
+                                    ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                                    : "bg-sky-500/15 text-sky-300 border-sky-500/40"
+                                }`}
+                              >
+                                {isPerfect ? "✓ Perfect match" : `${t.__matchCount} matching`}
+                              </span>
+                            )}
+                          </span>
                         </div>
                         {assignTargetType === "love_list" && (
                           // Most Love Lists share the same jobLabel — this
@@ -20985,11 +21425,14 @@ export default function AuthGate() {
             setAppSection("kiosk");
           }}
           onSelectReceiving={() => setAppSection("receiving")}
+          onSelectBackorders={() => setAppSection("backorders")}
           onRequestLogin={() => setShowLogin(true)}
           onSignOut={() => supabase.auth.signOut()}
         />
       ) : appSection === "receiving" ? (
         <ReceivingApp onGoHome={() => setAppSection(null)} />
+      ) : appSection === "backorders" ? (
+        <BackorderDashboard onGoHome={() => setAppSection(null)} />
       ) : appSection === "love" ? (
         <LoveListsApp
           isEditor={isOwner || isManager}
