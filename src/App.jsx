@@ -20797,10 +20797,17 @@ function ReceiptArchive({ onGoHome }) {
     // an editable working name that starts as either a remembered
     // correction or the raw text (never auto-renamed to a bare catalog
     // name, for the same multi-size-variant reasons Receiving avoids it),
-    // and a catalogId from an initial name match if one's found.
+    // and a catalogId from an initial name match if one's found. Reads
+    // catalogRef, not the `catalog` state variable — this is the exact
+    // same fix as recordVendorPurchasesForLines and learnAlias, and it
+    // was the actual missing piece: this specific line is what decides
+    // catalogId in the first place, so any staleness here meant an item
+    // could come up "No catalog match" even though the entry genuinely
+    // already existed, and — since a manual link starts fresh from
+    // whatever's current — re-linking by hand always "fixed" it.
     const items = (data.items || []).map((it) => {
       const rawName = it.name || "";
-      const match = rawName.trim() ? findCatalogMatch(rawName, catalog) : null;
+      const match = rawName.trim() ? findCatalogMatch(rawName, catalogRef.current) : null;
       const remembered = nameMemory[normalizeText(rawName)];
       return {
         id: uniqueId(),
@@ -20899,7 +20906,7 @@ function ReceiptArchive({ onGoHome }) {
       const line = entry && entry.items.find((l) => l.id === lineId);
       if (!line) return;
       if (!line.catalogLinkedManually) {
-        const found = findCatalogMatch(line.name, catalog);
+        const found = findCatalogMatch(line.name, catalogRef.current);
         if (found && found.id !== line.catalogId) {
           updateArchiveLine(entryId, lineId, { catalogId: found.id });
         } else if (!found && line.catalogId) {
