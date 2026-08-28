@@ -2883,9 +2883,10 @@ function CatalogModal({
     let linked = 0;
     let checked = 0;
     try {
-      const [jResult, lResult] = await Promise.all([
+      const [jResult, lResult, aResult] = await Promise.all([
         getWithRetry(JOBS_KEY),
         getWithRetry(LOVE_LISTS_KEY),
+        getWithRetry(RECEIPT_ARCHIVE_KEY),
       ]);
       if (jResult.ok && jResult.value) {
         const jobs = JSON.parse(jResult.value);
@@ -2920,6 +2921,23 @@ function CatalogModal({
           }),
         }));
         await saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(nextLists));
+      }
+      if (aResult.ok && aResult.value) {
+        const archiveEntries = JSON.parse(aResult.value);
+        const nextEntries = archiveEntries.map((e) => ({
+          ...e,
+          items: (e.items || []).map((i) => {
+            if (i.catalogId) return i;
+            checked++;
+            const match = i.name && i.name.trim() ? findCatalogMatch(i.name, catalog) : null;
+            if (match) {
+              linked++;
+              return { ...i, catalogId: match.id };
+            }
+            return i;
+          }),
+        }));
+        await saveWithRetry(RECEIPT_ARCHIVE_KEY, JSON.stringify(nextEntries));
       }
       setSyncResult({ linked, checked });
     } catch (err) {
@@ -3310,10 +3328,10 @@ function CatalogModal({
           <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
             <h3 className="text-slate-100 font-semibold mb-1.5">Sync catalog links?</h3>
             <p className="text-slate-400 text-sm mb-5">
-              Checks every item across every job and Love List. Any item whose name already
-              matches a catalog entry, but doesn't have a real link saved yet, gets linked
-              automatically. Items that already have a link, or don't match anything, are left
-              untouched.
+              Checks every item across every job, Love List, and archived receipt. Any item whose
+              name already matches a catalog entry, but doesn't have a real link saved yet, gets
+              linked automatically. Items that already have a link, or don't match anything, are
+              left untouched.
             </p>
             <div className="flex gap-3">
               <button
@@ -3354,7 +3372,8 @@ function CatalogModal({
                 : `Checked ${syncResult.checked} unlinked item${
                     syncResult.checked === 1 ? "" : "s"
                   } — linked ${syncResult.linked} to a matching catalog entry. Reload the page to
-                    see the update reflected wherever you currently have a job or Love List open.`}
+                    see the update reflected wherever you currently have a job, Love List, or the
+                    Receipt Archive open.`}
             </p>
             <button
               onClick={() => {
