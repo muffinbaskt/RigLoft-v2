@@ -20975,6 +20975,24 @@ function ReceiptArchive({ onGoHome }) {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Scan failed.");
 
+    // Fetched fresh from storage right here, rather than trusting
+    // catalogRef — this is the one match attempt that's genuinely hard
+    // to retry (everything after it, the debounced re-check on typing or
+    // a manual Sync, naturally happens later and picks up whatever's
+    // current by then). A stale in-memory snapshot at exactly this
+    // moment — another tab editing the catalog at the same time, say —
+    // could otherwise mean a real catalog entry gets missed on the one
+    // attempt that's supposed to just work automatically.
+    let matchCatalog = catalogRef.current;
+    const freshCatalogResult = await getWithRetry(CATALOG_KEY);
+    if (freshCatalogResult.ok && freshCatalogResult.value) {
+      try {
+        matchCatalog = JSON.parse(freshCatalogResult.value);
+        catalogRef.current = matchCatalog;
+        setCatalog(matchCatalog);
+      } catch {}
+    }
+
     // Same line shape as Receiving — a raw OCR name that never changes,
     // an editable working name that starts as either a remembered
     // correction or the raw text (never auto-renamed to a bare catalog
@@ -20989,7 +21007,7 @@ function ReceiptArchive({ onGoHome }) {
     // whatever's current — re-linking by hand always "fixed" it.
     const items = (data.items || []).map((it) => {
       const rawName = it.name || "";
-      const match = rawName.trim() ? findCatalogMatch(rawName, catalogRef.current) : null;
+      const match = rawName.trim() ? findCatalogMatch(rawName, matchCatalog) : null;
       const remembered = nameMemory[normalizeText(rawName)];
       return {
         id: uniqueId(),
