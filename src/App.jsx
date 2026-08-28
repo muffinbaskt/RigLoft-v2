@@ -2879,6 +2879,17 @@ function CatalogModal({
   const [costOverviewOpen, setCostOverviewOpen] = useState(false);
   const [costOverviewSearch, setCostOverviewSearch] = useState("");
   const [viewingVendorForCatalogId, setViewingVendorForCatalogId] = useState(null);
+  // Layered on top of the catalog prop for vendor-history changes made
+  // from inside this screen — the prop itself only ever refreshes when
+  // the app reloads, so without this, clearing or deleting a purchase
+  // record would look like it "came back" the moment you reopened
+  // anything showing that item's history.
+  const [vendorHistoryOverrides, setVendorHistoryOverrides] = useState({});
+  const applyVendorOverride = (catalogId, changes) =>
+    setVendorHistoryOverrides((prev) => ({ ...prev, [catalogId]: changes }));
+  const catalogWithOverrides = catalog.map((c) =>
+    vendorHistoryOverrides[c.id] ? { ...c, ...vendorHistoryOverrides[c.id] } : c
+  );
 
   // Fixes the exact gap the "Linked to catalog item X" text used to leave
   // behind — that display only ever meant a name-based match was FOUND,
@@ -3728,7 +3739,7 @@ function CatalogModal({
             </div>
             <div className="flex-1 overflow-y-auto px-5 py-4">
               {(() => {
-                const withHistory = catalog
+                const withHistory = catalogWithOverrides
                   .filter((c) => (c.vendorHistory || []).length > 0)
                   .map((c) => ({
                     ...c,
@@ -3751,7 +3762,7 @@ function CatalogModal({
                 if (withHistory.length === 0) {
                   return (
                     <p className="text-sm text-slate-500 text-center py-6">
-                      {catalog.some((c) => (c.vendorHistory || []).length > 0)
+                      {catalogWithOverrides.some((c) => (c.vendorHistory || []).length > 0)
                         ? "Nothing matches that search."
                         : "No purchase history logged anywhere yet."}
                     </p>
@@ -3793,9 +3804,13 @@ function CatalogModal({
 
       {viewingVendorForCatalogId &&
         (() => {
-          const item = catalog.find((c) => c.id === viewingVendorForCatalogId);
+          const item = catalogWithOverrides.find((c) => c.id === viewingVendorForCatalogId);
           return item ? (
-            <VendorBreakdownModal catalogItem={item} onClose={() => setViewingVendorForCatalogId(null)} />
+            <VendorBreakdownModal
+              catalogItem={item}
+              onClose={() => setViewingVendorForCatalogId(null)}
+              onChange={applyVendorOverride}
+            />
           ) : null;
         })()}
     </>
@@ -8571,19 +8586,24 @@ function MergeItemModal({ item, items, onConfirm, onClose }) {
 // Shown from either a Job or Love List item card — the purchase history
 // lives on the catalog entry, so this reads straight off that rather
 // than anything specific to the job/list you happened to open it from.
-function VendorBreakdownModal({ catalogItem, onClose }) {
+function VendorBreakdownModal({ catalogItem, onClose, onChange }) {
   const [history, setHistory] = useState(catalogItem.vendorHistory || []);
   const [showIndividual, setShowIndividual] = useState(false);
   const [deleteRecordTarget, setDeleteRecordTarget] = useState(null);
   const [confirmingClearAll, setConfirmingClearAll] = useState(false);
 
   const persist = async (nextHistory) => {
+    const nextVendor = computeUsualVendor(nextHistory) || "";
+    // Tells whichever screen opened this modal right away — without
+    // this, closing and reopening (a fresh instance, since this modal
+    // fully unmounts rather than just hiding) would read the parent's
+    // still-stale catalog data and show the old entries again, even
+    // though storage was already correctly updated.
+    if (onChange) onChange(catalogItem.id, { vendorHistory: nextHistory, vendor: nextVendor });
     const result = await getWithRetry(CATALOG_KEY);
     if (result.ok && result.value) {
       const next = JSON.parse(result.value).map((c) =>
-        c.id === catalogItem.id
-          ? { ...c, vendorHistory: nextHistory, vendor: computeUsualVendor(nextHistory) || "" }
-          : c
+        c.id === catalogItem.id ? { ...c, vendorHistory: nextHistory, vendor: nextVendor } : c
       );
       await saveWithRetry(CATALOG_KEY, JSON.stringify(next));
     }
@@ -8788,6 +8808,13 @@ function JobInventory({
   const [pullFromReceivingOpen, setPullFromReceivingOpen] = useState(false);
   const [mergingItem, setMergingItem] = useState(null);
   const [viewingVendorFor, setViewingVendorFor] = useState(null); // the catalog item, while its vendor breakdown is open
+  // Layered on top of catalog for vendor-history changes made from
+  // inside this modal — the catalog prop itself only refreshes on
+  // reload, so without this, closing and reopening the same item's
+  // Vendor breakdown would show the pre-clear entries again.
+  const [vendorHistoryOverrides, setVendorHistoryOverrides] = useState({});
+  const applyVendorOverride = (catalogId, changes) =>
+    setVendorHistoryOverrides((prev) => ({ ...prev, [catalogId]: changes }));
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [containersOpen, setContainersOpen] = useState(false);
@@ -9288,8 +9315,7 @@ function JobInventory({
 
   const handleViewVendor = (item) => {
     if (!item.catalogId) return;
-    const catalogItem = catalog.find((c) => c.id === item.catalogId);
-    if (catalogItem) setViewingVendorFor(catalogItem);
+    setViewingVendorFor(item.catalogId);
   };
 
   const requestDeleteItem = (item) => {
@@ -10620,9 +10646,18 @@ function JobInventory({
         />
       )}
 
-      {viewingVendorFor && (
-        <VendorBreakdownModal catalogItem={viewingVendorFor} onClose={() => setViewingVendorFor(null)} />
-      )}
+      {viewingVendorFor &&
+        (() => {
+          const item = catalog.find((c) => c.id === viewingVendorFor);
+          const merged = item && vendorHistoryOverrides[item.id] ? { ...item, ...vendorHistoryOverrides[item.id] } : item;
+          return merged ? (
+            <VendorBreakdownModal
+              catalogItem={merged}
+              onClose={() => setViewingVendorFor(null)}
+              onChange={applyVendorOverride}
+            />
+          ) : null;
+        })()}
 
       {suggestEditTarget && (
         <SuggestEditModal
@@ -14810,6 +14845,13 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [showPullFromReceiving, setShowPullFromReceiving] = useState(false);
   const [mergingItem, setMergingItem] = useState(null);
   const [viewingVendorFor, setViewingVendorFor] = useState(null);
+  // Layered on top of catalog for vendor-history changes made from
+  // inside this modal — the catalog prop itself only refreshes on
+  // reload, so without this, closing and reopening the same item's
+  // Vendor breakdown would show the pre-clear entries again.
+  const [vendorHistoryOverrides, setVendorHistoryOverrides] = useState({});
+  const applyVendorOverride = (catalogId, changes) =>
+    setVendorHistoryOverrides((prev) => ({ ...prev, [catalogId]: changes }));
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
   const [showPhotosModal, setShowPhotosModal] = useState(false);
@@ -15759,10 +15801,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                 )}
                 {item.catalogId && (
                   <button
-                    onClick={() => {
-                      const c = catalog.find((c) => c.id === item.catalogId);
-                      if (c) setViewingVendorFor(c);
-                    }}
+                    onClick={() => setViewingVendorFor(item.catalogId)}
                     className="text-xs rounded-full px-2 py-0.5 border border-slate-700 text-slate-500 hover:text-slate-300 hover:border-slate-600 mb-2 inline-flex items-center gap-1"
                   >
                     🏷️ Vendor
@@ -16369,9 +16408,18 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         />
       )}
 
-      {viewingVendorFor && (
-        <VendorBreakdownModal catalogItem={viewingVendorFor} onClose={() => setViewingVendorFor(null)} />
-      )}
+      {viewingVendorFor &&
+        (() => {
+          const item = catalog.find((c) => c.id === viewingVendorFor);
+          const merged = item && vendorHistoryOverrides[item.id] ? { ...item, ...vendorHistoryOverrides[item.id] } : item;
+          return merged ? (
+            <VendorBreakdownModal
+              catalogItem={merged}
+              onClose={() => setViewingVendorFor(null)}
+              onChange={applyVendorOverride}
+            />
+          ) : null;
+        })()}
     </div>
   );
 }
