@@ -13619,7 +13619,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   );
 }
 
-function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onSelectKiosk, onSelectReceiving, onSelectBackorders, onSelectArchive, onRequestLogin, onSignOut }) {
+function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onSelectKiosk, onSelectReceiving, onSelectBackorders, onSelectArchive, pendingSuggestionCount = 0, onRequestLogin, onSignOut }) {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
@@ -13747,8 +13747,13 @@ function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onS
           </button>
           <button
             onClick={() => onSelectJobs()}
-            className="bg-slate-900 border-2 border-slate-800 hover:border-amber-500/60 hover:bg-amber-500/5 rounded-xl p-8 text-center transition-colors"
+            className="relative bg-slate-900 border-2 border-slate-800 hover:border-amber-500/60 hover:bg-amber-500/5 rounded-xl p-8 text-center transition-colors"
           >
+            {isEditor && pendingSuggestionCount > 0 && (
+              <span className="absolute -top-2 -right-2 bg-amber-500 text-slate-950 text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center border-2 border-slate-950">
+                {pendingSuggestionCount > 9 ? "9+" : pendingSuggestionCount}
+              </span>
+            )}
             <Briefcase className="w-9 h-9 text-amber-400 mx-auto mb-3" />
             <p className="text-lg font-semibold text-slate-100">Job Lists</p>
             <p className="text-xs text-slate-500 mt-1">Full job inventory tracking</p>
@@ -23119,6 +23124,28 @@ export default function AuthGate() {
     ? session.user?.user_metadata?.name || session.user?.email || "Manager"
     : null;
 
+  // Same pending-suggestion count Job Lists already tracks internally,
+  // just fetched here too so the landing screen can show the same
+  // notification bubble before you've even opened Job Lists — no need
+  // to go in just to find out there's something waiting for review.
+  const [pendingSuggestionCount, setPendingSuggestionCount] = useState(0);
+  useEffect(() => {
+    if (!isOwner) return;
+    let cancelled = false;
+    const refresh = async () => {
+      const result = await fetchPendingSuggestions();
+      if (!cancelled && result.ok) setPendingSuggestionCount(result.suggestions.length);
+    };
+    refresh();
+    // Also re-checks whenever you land back on the home screen — covers
+    // returning here right after approving or denying something inside
+    // Job Lists, so the bubble doesn't keep showing a stale count.
+    if (appSection === null) refresh();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOwner, appSection]);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
@@ -23159,6 +23186,7 @@ export default function AuthGate() {
           onSelectReceiving={() => navigateToSection("receiving")}
           onSelectBackorders={() => navigateToSection("backorders")}
           onSelectArchive={() => navigateToSection("archive")}
+          pendingSuggestionCount={pendingSuggestionCount}
           onRequestLogin={() => setShowLogin(true)}
           onSignOut={() => supabase.auth.signOut()}
         />
