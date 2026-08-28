@@ -470,6 +470,23 @@ function findCatalogMatch(name, catalog) {
     );
     return candidates[0];
   }
+  // Squashed substring: catches a name typed as separate words matching
+  // a catalog entry written as one compound word, or vice versa (e.g.
+  // "Jet Pack" vs "Lanyards (JetPack)") — neither the word-respecting
+  // substring check above nor the whole-word token-overlap check below
+  // can bridge a word that's split in one string but joined in the
+  // other, since squashing "jet pack" only ever produces "jetpack" as a
+  // single token, never matching "jet" or "pack" as separate tokens.
+  const squashCandidates = catalog.filter((c) => {
+    const cSquash = normalizeText(c.name).replace(/\s+/g, "");
+    return cSquash.length > 2 && (squashName.includes(cSquash) || cSquash.includes(squashName));
+  });
+  if (squashCandidates.length > 0) {
+    squashCandidates.sort(
+      (a, b) => Math.abs(a.name.length - name.length) - Math.abs(b.name.length - name.length)
+    );
+    return squashCandidates[0];
+  }
   // Token-overlap fallback: catches reordered words and extra descriptive
   // words on either side (e.g. "EZ 60 TC gun" vs "TC-60 (EZ 60)")
   const nameTokens = tokenSet(name);
