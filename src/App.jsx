@@ -45,6 +45,7 @@ import {
   QrCode,
   Bell,
   AlertTriangle,
+  DollarSign,
 } from "lucide-react";
 
 const STORAGE_OPTIONS = [
@@ -2875,6 +2876,9 @@ function CatalogModal({
   const [unlinkedItems, setUnlinkedItems] = useState([]);
   const [linkingUnlinked, setLinkingUnlinked] = useState(null); // the row being linked, while its picker is open
   const [unlinkedCatalogSearch, setUnlinkedCatalogSearch] = useState("");
+  const [costOverviewOpen, setCostOverviewOpen] = useState(false);
+  const [costOverviewSearch, setCostOverviewSearch] = useState("");
+  const [viewingVendorForCatalogId, setViewingVendorForCatalogId] = useState(null);
 
   // Fixes the exact gap the "Linked to catalog item X" text used to leave
   // behind — that display only ever meant a name-based match was FOUND,
@@ -3265,6 +3269,13 @@ function CatalogModal({
                 className="text-slate-400 hover:text-slate-200 p-1.5 rounded-md hover:bg-slate-800"
               >
                 <Search className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => setCostOverviewOpen(true)}
+                title="Cost overview — every item's vendor spend at once"
+                className="text-slate-400 hover:text-slate-200 p-1.5 rounded-md hover:bg-slate-800"
+              >
+                <DollarSign className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setExportOpen(true)}
@@ -3696,6 +3707,97 @@ function CatalogModal({
           </div>
         </div>
       )}
+
+      {costOverviewOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-md max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold text-sm">Cost overview</h3>
+              <button onClick={() => setCostOverviewOpen(false)} className="text-slate-400 hover:text-slate-200">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-5 pt-4 shrink-0">
+              <input
+                autoFocus
+                value={costOverviewSearch}
+                onChange={(e) => setCostOverviewSearch(e.target.value)}
+                placeholder="Search by item or vendor..."
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {(() => {
+                const withHistory = catalog
+                  .filter((c) => (c.vendorHistory || []).length > 0)
+                  .map((c) => ({
+                    ...c,
+                    totalSpent: c.vendorHistory.reduce((s, r) => s + (r.amount || 0), 0),
+                    totalQty: c.vendorHistory.reduce((s, r) => s + (r.qty || 0), 0),
+                  }))
+                  .filter((c) => {
+                    const q = costOverviewSearch.trim().toLowerCase();
+                    if (!q) return true;
+                    return (
+                      c.name.toLowerCase().includes(q) ||
+                      (c.vendor || "").toLowerCase().includes(q) ||
+                      (c.vendorHistory || []).some((r) => (r.vendor || "").toLowerCase().includes(q))
+                    );
+                  })
+                  .sort((a, b) => b.totalSpent - a.totalSpent);
+
+                const grandTotal = withHistory.reduce((s, c) => s + c.totalSpent, 0);
+
+                if (withHistory.length === 0) {
+                  return (
+                    <p className="text-sm text-slate-500 text-center py-6">
+                      {catalog.some((c) => (c.vendorHistory || []).length > 0)
+                        ? "Nothing matches that search."
+                        : "No purchase history logged anywhere yet."}
+                    </p>
+                  );
+                }
+
+                return (
+                  <>
+                    <p className="text-xs text-slate-500 mb-3">
+                      {withHistory.length} item{withHistory.length === 1 ? "" : "s"} with history ·
+                      ${grandTotal.toFixed(2)} total
+                    </p>
+                    <div className="space-y-1.5">
+                      {withHistory.map((c) => (
+                        <button
+                          key={c.id}
+                          onClick={() => setViewingVendorForCatalogId(c.id)}
+                          className="w-full text-left border border-slate-800 rounded-lg p-2.5 hover:border-slate-700 flex items-center justify-between gap-2"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-sm text-slate-100 truncate">{c.name}</p>
+                            <p className="text-xs text-slate-500">
+                              {c.vendor || "No usual vendor"} · {c.totalQty} received
+                            </p>
+                          </div>
+                          <p className="text-sm font-semibold text-emerald-400 shrink-0">
+                            ${c.totalSpent.toFixed(2)}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {viewingVendorForCatalogId &&
+        (() => {
+          const item = catalog.find((c) => c.id === viewingVendorForCatalogId);
+          return item ? (
+            <VendorBreakdownModal catalogItem={item} onClose={() => setViewingVendorForCatalogId(null)} />
+          ) : null;
+        })()}
     </>
   );
 }
@@ -8470,7 +8572,34 @@ function MergeItemModal({ item, items, onConfirm, onClose }) {
 // lives on the catalog entry, so this reads straight off that rather
 // than anything specific to the job/list you happened to open it from.
 function VendorBreakdownModal({ catalogItem, onClose }) {
-  const history = catalogItem.vendorHistory || [];
+  const [history, setHistory] = useState(catalogItem.vendorHistory || []);
+  const [showIndividual, setShowIndividual] = useState(false);
+  const [deleteRecordTarget, setDeleteRecordTarget] = useState(null);
+  const [confirmingClearAll, setConfirmingClearAll] = useState(false);
+
+  const persist = async (nextHistory) => {
+    const result = await getWithRetry(CATALOG_KEY);
+    if (result.ok && result.value) {
+      const next = JSON.parse(result.value).map((c) =>
+        c.id === catalogItem.id
+          ? { ...c, vendorHistory: nextHistory, vendor: computeUsualVendor(nextHistory) || "" }
+          : c
+      );
+      await saveWithRetry(CATALOG_KEY, JSON.stringify(next));
+    }
+  };
+
+  const deleteRecord = (recordId) => {
+    const next = history.filter((r) => r.id !== recordId);
+    setHistory(next);
+    persist(next);
+  };
+
+  const clearAll = () => {
+    setHistory([]);
+    persist([]);
+  };
+
   const grouped = {};
   history.forEach((r) => {
     if (!r.vendor) return;
@@ -8482,6 +8611,7 @@ function VendorBreakdownModal({ catalogItem, onClose }) {
     .map(([vendor, data]) => ({ vendor, ...data }))
     .sort((a, b) => b.amount - a.amount);
   const totalSpent = rows.reduce((sum, r) => sum + r.amount, 0);
+  const individualSorted = [...history].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
@@ -8502,30 +8632,99 @@ function VendorBreakdownModal({ catalogItem, onClose }) {
               to this item get approved with a vendor and price on them.
             </p>
           ) : (
-            rows.map((r) => (
-              <div
-                key={r.vendor}
-                className="border border-slate-800 rounded-lg p-3 flex items-center justify-between gap-2"
-              >
-                <div className="min-w-0">
-                  <p className="text-sm text-slate-100 truncate">
-                    {r.vendor}
-                    {catalogItem.vendor === r.vendor && (
-                      <span className="ml-1.5 text-[10px] rounded-full px-1.5 py-0.5 border bg-amber-500/15 text-amber-300 border-amber-500/40">
-                        Usual
-                      </span>
-                    )}
+            <>
+              {rows.map((r) => (
+                <div
+                  key={r.vendor}
+                  className="border border-slate-800 rounded-lg p-3 flex items-center justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm text-slate-100 truncate">
+                      {r.vendor}
+                      {catalogItem.vendor === r.vendor && (
+                        <span className="ml-1.5 text-[10px] rounded-full px-1.5 py-0.5 border bg-amber-500/15 text-amber-300 border-amber-500/40">
+                          Usual
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-xs text-slate-500">{r.qty} received</p>
+                  </div>
+                  <p className="text-sm font-semibold text-emerald-400 shrink-0">
+                    {r.amount > 0 ? `$${r.amount.toFixed(2)}` : "—"}
                   </p>
-                  <p className="text-xs text-slate-500">{r.qty} received</p>
                 </div>
-                <p className="text-sm font-semibold text-emerald-400 shrink-0">
-                  {r.amount > 0 ? `$${r.amount.toFixed(2)}` : "—"}
-                </p>
-              </div>
-            ))
+              ))}
+
+              <button
+                onClick={() => setShowIndividual((v) => !v)}
+                className="text-xs text-slate-500 hover:text-slate-300 pt-1"
+              >
+                {showIndividual ? "▲ Hide" : "▼ Show"} individual purchases ({history.length}) — for
+                removing duplicates or bad entries
+              </button>
+
+              {showIndividual && (
+                <div className="space-y-1.5 pt-1">
+                  {individualSorted.map((r) => (
+                    <div
+                      key={r.id}
+                      className="flex items-center justify-between gap-2 text-xs border border-slate-800 rounded-md px-2.5 py-2 bg-slate-900/60"
+                    >
+                      <span className="text-slate-300 truncate">
+                        {r.vendor} · {r.qty} · {r.date || "no date"}
+                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-emerald-400 font-medium">
+                          {r.amount > 0 ? `$${r.amount.toFixed(2)}` : "—"}
+                        </span>
+                        <button
+                          onClick={() => setDeleteRecordTarget(r)}
+                          className="text-slate-600 hover:text-red-400"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <button
+                onClick={() => setConfirmingClearAll(true)}
+                className="text-xs text-slate-600 hover:text-red-400 pt-2 block"
+              >
+                Clear all history for this item
+              </button>
+            </>
           )}
         </div>
       </div>
+
+      {deleteRecordTarget && (
+        <ConfirmDelete
+          title="Remove this purchase record?"
+          message={`${deleteRecordTarget.vendor} · ${deleteRecordTarget.qty} · ${
+            deleteRecordTarget.date || "no date"
+          } will be permanently removed from this item's history. This can't be undone.`}
+          onConfirm={() => {
+            deleteRecord(deleteRecordTarget.id);
+            setDeleteRecordTarget(null);
+          }}
+          onCancel={() => setDeleteRecordTarget(null)}
+        />
+      )}
+
+      {confirmingClearAll && (
+        <ConfirmDelete
+          title="Clear all history for this item?"
+          message="Every vendor purchase record for this catalog item is permanently removed, and its Usual Vendor resets until new receipts come in. This can't be undone."
+          onConfirm={() => {
+            clearAll();
+            setConfirmingClearAll(false);
+          }}
+          onCancel={() => setConfirmingClearAll(false)}
+        />
+      )}
     </div>
   );
 }
