@@ -20826,9 +20826,9 @@ function ReceiptArchive({ onGoHome }) {
   // re-matching by name itself — that way a manual link made after the
   // fact can trigger the exact same logging a scan-time match would have.
   const recordVendorPurchasesForLines = (lines, vendor, receiptDate) => {
-    if (!vendor || !vendor.trim()) return [];
+    if (!vendor || !vendor.trim()) return { summary: [], recordIdByLine: {} };
     const eligible = (lines || []).filter((l) => l.catalogId && l.shippedQty > 0);
-    if (eligible.length === 0) return [];
+    if (eligible.length === 0) return { summary: [], recordIdByLine: {} };
 
     // Computed synchronously against catalogRef (always current, unlike
     // the `catalog` state variable during a rapid bulk scan) rather than
@@ -20838,16 +20838,24 @@ function ReceiptArchive({ onGoHome }) {
     // "Vendor spend logged" on the receipt could come back empty even
     // when the catalog itself eventually got updated correctly.
     const summary = [];
+    // Which specific record each line created — this is what lets a
+    // later correction find and retract exactly that one record instead
+    // of only ever being able to add more.
+    const recordIdByLine = {};
     const nextCatalog = catalogRef.current.map((c) => {
       const linesForThis = eligible.filter((l) => l.catalogId === c.id);
       if (linesForThis.length === 0) return c;
-      const newRecords = linesForThis.map((l) => ({
-        id: uniqueId(),
-        vendor: vendor.trim(),
-        qty: l.shippedQty,
-        amount: Math.round((l.unitPrice || 0) * l.shippedQty * 100) / 100,
-        date: receiptDate || new Date().toISOString().slice(0, 10),
-      }));
+      const newRecords = linesForThis.map((l) => {
+        const rec = {
+          id: uniqueId(),
+          vendor: vendor.trim(),
+          qty: l.shippedQty,
+          amount: Math.round((l.unitPrice || 0) * l.shippedQty * 100) / 100,
+          date: receiptDate || new Date().toISOString().slice(0, 10),
+        };
+        recordIdByLine[l.id] = rec.id;
+        return rec;
+      });
       summary.push({
         catalogName: c.name,
         qty: linesForThis.reduce((s, l) => s + l.shippedQty, 0),
@@ -20857,7 +20865,68 @@ function ReceiptArchive({ onGoHome }) {
       return { ...c, vendorHistory: updatedHistory, vendor: computeUsualVendor(updatedHistory) || c.vendor };
     });
     saveCatalog(nextCatalog);
-    return summary;
+    return { summary, recordIdByLine };
+  };
+
+  // Removes one specific vendor-history record by id, wherever it lives
+  // in the catalog — used when a line's link changes (a name correction
+  // re-matching it, or a manual relink) so the OLD record actually goes
+  // away instead of just sitting there forever alongside the new one.
+  const removeVendorRecord = (recordId) => {
+    if (!recordId) return;
+    const nextCatalog = catalogRef.current.map((c) => {
+      if (!(c.vendorHistory || []).some((r) => r.id === recordId)) return c;
+      const updatedHistory = c.vendorHistory.filter((r) => r.id !== recordId);
+      return { ...c, vendorHistory: updatedHistory, vendor: computeUsualVendor(updatedHistory) || "" };
+    });
+    saveCatalog(nextCatalog);
+  };
+
+  // Rebuilds the receipt's displayed "Vendor spend logged" summary from
+  // scratch, based purely on whatever vendorRecordId each current line
+  // actually points to — rather than incrementally mutating a running
+  // total, which is exactly what let stale entries accumulate before.
+  // This is always correct by construction: if a line no longer points
+  // to a record, it can't contribute to the summary, full stop.
+  const recomputeVendorSummaryForEntry = (entryId) => {
+    const entry = entriesRef.current.find((e) => e.id === entryId);
+    if (!entry) return;
+    const grouped = {};
+    entry.items.forEach((l) => {
+      if (!l.vendorRecordId) return;
+      const c = catalogRef.current.find((cat) =>
+        (cat.vendorHistory || []).some((r) => r.id === l.vendorRecordId)
+      );
+      const rec = c && c.vendorHistory.find((r) => r.id === l.vendorRecordId);
+      if (!c || !rec) return;
+      if (!grouped[c.id]) grouped[c.id] = { catalogName: c.name, qty: 0, amount: 0 };
+      grouped[c.id].qty += rec.qty || 0;
+      grouped[c.id].amount += rec.amount || 0;
+    });
+    const nextEntries = entriesRef.current.map((e) =>
+      e.id === entryId ? { ...e, vendorSummary: Object.values(grouped) } : e
+    );
+    saveEntries(nextEntries);
+    setViewingEntry((prev) => (prev && prev.id === entryId ? nextEntries.find((e) => e.id === entryId) : prev));
+  };
+
+  // The single entry point for "this line's link just changed" — always
+  // retracts whatever the line previously logged (if anything) before
+  // logging anything new, so correcting a name or relinking a line
+  // replaces its contribution instead of adding to it.
+  const syncVendorSpendForLine = (entry, line, newCatalogId) => {
+    if (line.vendorRecordId) removeVendorRecord(line.vendorRecordId);
+    let newRecordId = null;
+    if (newCatalogId && line.shippedQty > 0 && entry.vendor) {
+      const { recordIdByLine } = recordVendorPurchasesForLines(
+        [{ ...line, catalogId: newCatalogId }],
+        entry.vendor,
+        entry.receiptDate
+      );
+      newRecordId = recordIdByLine[line.id] || null;
+    }
+    updateArchiveLine(entry.id, line.id, { vendorRecordId: newRecordId });
+    recomputeVendorSummaryForEntry(entry.id);
   };
 
   // Same alias-learning as Receiving — linking a garbled OCR string to a
@@ -20922,6 +20991,10 @@ function ReceiptArchive({ onGoHome }) {
         rawName,
         name: remembered || rawName,
         catalogId: match ? match.id : null,
+        // Set once the vendor-spend record for this line actually gets
+        // created below — this is what lets a later correction find and
+        // retract exactly that record instead of only ever adding more.
+        vendorRecordId: null,
         backorderQty: Number(it.backorderQty) > 0 ? Number(it.backorderQty) : 0,
         shippedQty: Number(it.shippedQty) > 0 ? Number(it.shippedQty) : 0,
         unit: (it.unit || "each").trim(),
@@ -20933,7 +21006,14 @@ function ReceiptArchive({ onGoHome }) {
     // it's a side effect on the catalog only, completely separate from
     // the archive entry itself; editing an item's link later on can
     // trigger this same logging retroactively too.
-    const vendorSummary = recordVendorPurchasesForLines(items, data.vendor, data.receiptDate);
+    const { summary: vendorSummary, recordIdByLine } = recordVendorPurchasesForLines(
+      items,
+      data.vendor,
+      data.receiptDate
+    );
+    const itemsWithRecordIds = items.map((it) =>
+      recordIdByLine[it.id] ? { ...it, vendorRecordId: recordIdByLine[it.id] } : it
+    );
 
     return {
       id: uniqueId(),
@@ -20946,7 +21026,7 @@ function ReceiptArchive({ onGoHome }) {
       receiptDate: data.receiptDate || "",
       // Editable — a garbled OCR name and its catalog link can both be
       // corrected from the detail view, same as Receiving.
-      items,
+      items: itemsWithRecordIds,
       archivedAt: new Date().toISOString(),
       vendorSummary,
     };
@@ -21017,9 +21097,10 @@ function ReceiptArchive({ onGoHome }) {
         const found = findCatalogMatch(line.name, catalogRef.current);
         if (found && found.id !== line.catalogId) {
           updateArchiveLine(entryId, lineId, { catalogId: found.id });
-          logVendorSpendForLine(entry, line, found.id);
+          syncVendorSpendForLine(entry, line, found.id);
         } else if (!found && line.catalogId) {
           updateArchiveLine(entryId, lineId, { catalogId: null });
+          syncVendorSpendForLine(entry, line, null);
         }
       }
       if (line.rawName) {
@@ -21031,35 +21112,16 @@ function ReceiptArchive({ onGoHome }) {
   };
 
   // Linking (or unlinking) is the deliberate action that teaches the
-  // catalog alias and remembers the name — and if this line has shipped
-  // quantity and a vendor on the receipt but never got logged at scan
-  // time (because nothing matched yet), linking it now logs that vendor
-  // purchase retroactively instead of it being lost for good.
-  // Shared by both the manual "Change" link and the debounced auto-match
-  // while typing — a line getting linked should log its vendor purchase
-  // the same way regardless of which of those two actions did the
-  // linking. This was the piece missing from the auto-match path: it set
-  // catalogId correctly but never took this step, which is exactly why
-  // typing a name into a match required an extra manual relink before
-  // the price actually counted toward anything.
-  const logVendorSpendForLine = (entry, line, catalogId) => {
-    if (!(line.shippedQty > 0 && entry.vendor)) return;
-    const summary = recordVendorPurchasesForLines([{ ...line, catalogId }], entry.vendor, entry.receiptDate);
-    if (summary.length === 0) return;
-    const nextEntries = entriesRef.current.map((e) =>
-      e.id === entry.id ? { ...e, vendorSummary: [...(e.vendorSummary || []), ...summary] } : e
-    );
-    saveEntries(nextEntries);
-    setViewingEntry((prev) => (prev && prev.id === entry.id ? nextEntries.find((e) => e.id === entry.id) : prev));
-  };
-
+  // catalog alias and remembers the name. Vendor-spend syncing is shared
+  // with the debounced auto-match above via syncVendorSpendForLine — a
+  // line getting (re)linked should always retract whatever it previously
+  // logged before logging anything new, whichever of the two actions did
+  // the linking.
   const handleLineLink = (entry, line, catalogItem) => {
     const catalogId = catalogItem ? catalogItem.id : null;
     updateArchiveLine(entry.id, line.id, { catalogId, catalogLinkedManually: !!catalogItem });
-    if (catalogItem) {
-      learnAlias(catalogItem.id, line.rawName);
-      logVendorSpendForLine(entry, line, catalogId);
-    }
+    if (catalogItem) learnAlias(catalogItem.id, line.rawName);
+    syncVendorSpendForLine(entry, line, catalogId);
     if (line.rawName) {
       const finalName = line.name.trim();
       const nextMemory = { ...nameMemory, [normalizeText(line.rawName)]: finalName };
