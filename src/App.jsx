@@ -2870,6 +2870,11 @@ function CatalogModal({
   const [syncConfirmOpen, setSyncConfirmOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState(null); // { linked, checked } after a run completes
+  const [unlinkedOpen, setUnlinkedOpen] = useState(false);
+  const [unlinkedLoading, setUnlinkedLoading] = useState(false);
+  const [unlinkedItems, setUnlinkedItems] = useState([]);
+  const [linkingUnlinked, setLinkingUnlinked] = useState(null); // the row being linked, while its picker is open
+  const [unlinkedCatalogSearch, setUnlinkedCatalogSearch] = useState("");
 
   // Fixes the exact gap the "Linked to catalog item X" text used to leave
   // behind — that display only ever meant a name-based match was FOUND,
@@ -2924,6 +2929,12 @@ function CatalogModal({
       }
       if (aResult.ok && aResult.value) {
         const archiveEntries = JSON.parse(aResult.value);
+        // Collected as we go — anything that gets linked here AND has
+        // shipped quantity and a vendor on its receipt needs the same
+        // vendor-spend logging a manual link would trigger, otherwise a
+        // bulk sync silently leaves cost history incomplete for exactly
+        // the items it was supposed to fix.
+        const newlyEligible = []; // { catalogId, catalogName, entryId, shippedQty, unitPrice, vendor, receiptDate }
         const nextEntries = archiveEntries.map((e) => ({
           ...e,
           items: (e.items || []).map((i) => {
@@ -2932,11 +2943,67 @@ function CatalogModal({
             const match = i.name && i.name.trim() ? findCatalogMatch(i.name, catalog) : null;
             if (match) {
               linked++;
+              if (i.shippedQty > 0 && e.vendor) {
+                newlyEligible.push({
+                  catalogId: match.id,
+                  catalogName: match.name,
+                  entryId: e.id,
+                  shippedQty: i.shippedQty,
+                  unitPrice: i.unitPrice || 0,
+                  vendor: e.vendor,
+                  receiptDate: e.receiptDate,
+                });
+              }
               return { ...i, catalogId: match.id };
             }
             return i;
           }),
         }));
+
+        if (newlyEligible.length > 0) {
+          const cResult = await getWithRetry(CATALOG_KEY);
+          if (cResult.ok && cResult.value) {
+            const recordsByCatalogId = {};
+            newlyEligible.forEach((l) => {
+              const record = {
+                id: uniqueId(),
+                vendor: l.vendor.trim(),
+                qty: l.shippedQty,
+                amount: Math.round(l.unitPrice * l.shippedQty * 100) / 100,
+                date: l.receiptDate || new Date().toISOString().slice(0, 10),
+              };
+              (recordsByCatalogId[l.catalogId] = recordsByCatalogId[l.catalogId] || []).push(record);
+            });
+            const nextCatalog = JSON.parse(cResult.value).map((c) => {
+              const newRecords = recordsByCatalogId[c.id];
+              if (!newRecords) return c;
+              const updatedHistory = [...(c.vendorHistory || []), ...newRecords];
+              return { ...c, vendorHistory: updatedHistory, vendor: computeUsualVendor(updatedHistory) || c.vendor };
+            });
+            await saveWithRetry(CATALOG_KEY, JSON.stringify(nextCatalog));
+          }
+          // Also reflected on each entry's own displayed summary, same
+          // shape the Archive detail view already knows how to render.
+          const byEntry = {};
+          newlyEligible.forEach((l) => {
+            const amount = Math.round(l.unitPrice * l.shippedQty * 100) / 100;
+            (byEntry[l.entryId] = byEntry[l.entryId] || []).push({
+              catalogName: l.catalogName,
+              qty: l.shippedQty,
+              amount,
+            });
+          });
+          Object.entries(byEntry).forEach(([entryId, additions]) => {
+            const idx = nextEntries.findIndex((e) => e.id === entryId);
+            if (idx !== -1) {
+              nextEntries[idx] = {
+                ...nextEntries[idx],
+                vendorSummary: [...(nextEntries[idx].vendorSummary || []), ...additions],
+              };
+            }
+          });
+        }
+
         await saveWithRetry(RECEIPT_ARCHIVE_KEY, JSON.stringify(nextEntries));
       }
       setSyncResult({ linked, checked });
@@ -2944,6 +3011,142 @@ function CatalogModal({
       setSyncResult({ error: err && err.message ? err.message : String(err) });
     }
     setSyncing(false);
+  };
+
+  // A one-off locator, not something meant to stay in daily use — after
+  // a big cleanup like Sync Catalog, this is for tracking down whatever
+  // it genuinely couldn't match on its own (no name overlap at all),
+  // rather than hunting through every job, list, and archived receipt
+  // by hand to find them.
+  const findUnlinkedItems = async () => {
+    setUnlinkedLoading(true);
+    setUnlinkedOpen(true);
+    const rows = [];
+    try {
+      const [jResult, lResult, aResult] = await Promise.all([
+        getWithRetry(JOBS_KEY),
+        getWithRetry(LOVE_LISTS_KEY),
+        getWithRetry(RECEIPT_ARCHIVE_KEY),
+      ]);
+      if (jResult.ok && jResult.value) {
+        JSON.parse(jResult.value).forEach((j) => {
+          (j.items || []).forEach((i) => {
+            if (!i.catalogId && i.name && i.name.trim()) {
+              rows.push({ source: "job", targetId: j.id, targetLabel: j.name, itemId: i.id, itemName: i.name });
+            }
+          });
+        });
+      }
+      if (lResult.ok && lResult.value) {
+        JSON.parse(lResult.value).forEach((l) => {
+          (l.items || []).forEach((i) => {
+            if (!i.catalogId && i.name && i.name.trim()) {
+              rows.push({
+                source: "love_list",
+                targetId: l.id,
+                targetLabel: `${l.jobLabel}${l.subJobLabel ? ` — ${l.subJobLabel}` : ""}`,
+                itemId: i.id,
+                itemName: i.name,
+              });
+            }
+          });
+        });
+      }
+      if (aResult.ok && aResult.value) {
+        JSON.parse(aResult.value).forEach((e) => {
+          (e.items || []).forEach((i) => {
+            if (!i.catalogId && i.name && i.name.trim()) {
+              rows.push({
+                source: "archive",
+                targetId: e.id,
+                targetLabel: `${e.vendor || "Unknown vendor"}${e.receiptDate ? ` · ${e.receiptDate}` : ""}`,
+                itemId: i.id,
+                itemName: i.name,
+              });
+            }
+          });
+        });
+      }
+    } catch {}
+    setUnlinkedItems(rows);
+    setUnlinkedLoading(false);
+  };
+
+  // Links one row directly from the locator — writes straight to
+  // whichever store it actually lives in (job, Love List, or archive),
+  // so fixing something found here doesn't require navigating away to
+  // wherever it happens to sit.
+  const linkUnlinkedItem = async (row, catalogItem) => {
+    if (row.source === "job") {
+      const result = await getWithRetry(JOBS_KEY);
+      if (result.ok && result.value) {
+        const jobs = JSON.parse(result.value).map((j) =>
+          j.id !== row.targetId
+            ? j
+            : { ...j, items: j.items.map((i) => (i.id === row.itemId ? { ...i, catalogId: catalogItem.id } : i)) }
+        );
+        await saveWithRetry(JOBS_KEY, JSON.stringify(jobs));
+      }
+    } else if (row.source === "love_list") {
+      const result = await getWithRetry(LOVE_LISTS_KEY);
+      if (result.ok && result.value) {
+        const lists = JSON.parse(result.value).map((l) =>
+          l.id !== row.targetId
+            ? l
+            : { ...l, items: l.items.map((i) => (i.id === row.itemId ? { ...i, catalogId: catalogItem.id } : i)) }
+        );
+        await saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(lists));
+      }
+    } else {
+      const result = await getWithRetry(RECEIPT_ARCHIVE_KEY);
+      if (result.ok && result.value) {
+        const allEntries = JSON.parse(result.value);
+        const targetEntry = allEntries.find((e) => e.id === row.targetId);
+        const targetItem = targetEntry && targetEntry.items.find((i) => i.id === row.itemId);
+        const entries = allEntries.map((e) =>
+          e.id !== row.targetId
+            ? e
+            : { ...e, items: e.items.map((i) => (i.id === row.itemId ? { ...i, catalogId: catalogItem.id } : i)) }
+        );
+
+        // Same vendor-spend logging the Archive's own "Change" button
+        // does — a link made from this locator should count exactly the
+        // same as one made from inside the receipt itself.
+        if (targetItem && targetItem.shippedQty > 0 && targetEntry.vendor) {
+          const record = {
+            id: uniqueId(),
+            vendor: targetEntry.vendor.trim(),
+            qty: targetItem.shippedQty,
+            amount: Math.round((targetItem.unitPrice || 0) * targetItem.shippedQty * 100) / 100,
+            date: targetEntry.receiptDate || new Date().toISOString().slice(0, 10),
+          };
+          const cResult = await getWithRetry(CATALOG_KEY);
+          if (cResult.ok && cResult.value) {
+            const nextCatalog = JSON.parse(cResult.value).map((c) => {
+              if (c.id !== catalogItem.id) return c;
+              const updatedHistory = [...(c.vendorHistory || []), record];
+              return { ...c, vendorHistory: updatedHistory, vendor: computeUsualVendor(updatedHistory) || c.vendor };
+            });
+            await saveWithRetry(CATALOG_KEY, JSON.stringify(nextCatalog));
+          }
+          const entryIdx = entries.findIndex((e) => e.id === row.targetId);
+          if (entryIdx !== -1) {
+            entries[entryIdx] = {
+              ...entries[entryIdx],
+              vendorSummary: [
+                ...(entries[entryIdx].vendorSummary || []),
+                { catalogName: catalogItem.name, qty: record.qty, amount: record.amount },
+              ],
+            };
+          }
+        }
+
+        await saveWithRetry(RECEIPT_ARCHIVE_KEY, JSON.stringify(entries));
+      }
+    }
+    setUnlinkedItems((prev) => prev.filter((r) => !(r.source === row.source && r.itemId === row.itemId)));
+    setLinkingUnlinked(null);
+    setUnlinkedCatalogSearch("");
   };
 
   const existingCategories = [
@@ -3055,6 +3258,13 @@ function CatalogModal({
                 className="text-slate-400 hover:text-slate-200 p-1.5 rounded-md hover:bg-slate-800"
               >
                 <RotateCcw className="w-4 h-4" />
+              </button>
+              <button
+                onClick={findUnlinkedItems}
+                title="Find unlinked items"
+                className="text-slate-400 hover:text-slate-200 p-1.5 rounded-md hover:bg-slate-800"
+              >
+                <Search className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setExportOpen(true)}
@@ -3384,6 +3594,105 @@ function CatalogModal({
             >
               Done
             </button>
+          </div>
+        </div>
+      )}
+
+      {unlinkedOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-md max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold text-sm">
+                Unlinked items {!unlinkedLoading && `(${unlinkedItems.length})`}
+              </h3>
+              <button onClick={() => setUnlinkedOpen(false)} className="text-slate-400 hover:text-slate-200">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {unlinkedLoading ? (
+                <div className="flex items-center gap-3 py-4">
+                  <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin shrink-0" />
+                  <p className="text-sm text-slate-400">Checking every job, list, and archived receipt...</p>
+                </div>
+              ) : unlinkedItems.length === 0 ? (
+                <p className="text-sm text-slate-500 text-center py-6">
+                  Nothing unlinked anywhere — everything's connected to something in the catalog.
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  {unlinkedItems.map((row) => (
+                    <div
+                      key={`${row.source}:${row.itemId}`}
+                      className="border border-slate-800 rounded-lg p-2.5 bg-slate-900/60"
+                    >
+                      <p className="text-sm text-slate-100">{row.itemName}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {row.source === "job" ? "Job" : row.source === "love_list" ? "Love List" : "Archived receipt"}{" "}
+                        · {row.targetLabel}
+                      </p>
+                      <button
+                        onClick={() => {
+                          setLinkingUnlinked(row);
+                          setUnlinkedCatalogSearch("");
+                        }}
+                        className="text-[11px] text-amber-400 hover:underline decoration-dotted mt-1"
+                      >
+                        🔍 Link to catalog
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {linkingUnlinked && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4 py-8">
+          <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold text-sm truncate">
+                Link "{linkingUnlinked.itemName}" to...
+              </h3>
+              <button
+                onClick={() => {
+                  setLinkingUnlinked(null);
+                  setUnlinkedCatalogSearch("");
+                }}
+                className="text-slate-400 hover:text-slate-200 shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-5 pt-4 shrink-0">
+              <input
+                autoFocus
+                value={unlinkedCatalogSearch}
+                onChange={(e) => setUnlinkedCatalogSearch(e.target.value)}
+                placeholder="Search catalog..."
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {catalog
+                .filter((c) => c.name.toLowerCase().includes(unlinkedCatalogSearch.trim().toLowerCase()))
+                .slice(0, 50)
+                .map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => linkUnlinkedItem(linkingUnlinked, c)}
+                    className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-800 hover:border-slate-700 mb-1.5"
+                  >
+                    <p className="text-slate-100">{c.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {c.storage}
+                      {c.needsTransfer ? " · 🚚 needs transfer" : ""}
+                    </p>
+                  </button>
+                ))}
+            </div>
           </div>
         </div>
       )}
