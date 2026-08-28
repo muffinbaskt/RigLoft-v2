@@ -20085,6 +20085,7 @@ function ReceiptArchive({ onGoHome }) {
   const [viewingEntry, setViewingEntry] = useState(null);
   const [viewingPhoto, setViewingPhoto] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [confirmingDeleteAll, setConfirmingDeleteAll] = useState(false);
   const [relinkingLine, setRelinkingLine] = useState(null);
   const [catalogSearch, setCatalogSearch] = useState("");
   const entriesRef = useRef([]);
@@ -20268,6 +20269,17 @@ function ReceiptArchive({ onGoHome }) {
     saveEntries(entriesRef.current.filter((e) => e.id !== entry.id));
   };
 
+  // Deletes every archive entry currently matching the search, photos
+  // included — this is what makes "delete all" scoped to what you're
+  // actually looking at rather than always wiping the entire archive.
+  const deleteAllShown = (entriesToDelete) => {
+    entriesToDelete.forEach((e) => {
+      if (e.photoPath) deleteReferenceDocument(e.photoPath).catch(() => {});
+    });
+    const idsToDelete = new Set(entriesToDelete.map((e) => e.id));
+    saveEntries(entriesRef.current.filter((e) => !idsToDelete.has(e.id)));
+  };
+
   // Applies a change to one line on one archived entry, keeping the
   // persisted entries list and whatever's currently open in the detail
   // view in sync with each other.
@@ -20407,8 +20419,16 @@ function ReceiptArchive({ onGoHome }) {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search anything printed on a receipt..."
-          className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+          className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
         />
+        {filtered.length > 0 && (
+          <button
+            onClick={() => setConfirmingDeleteAll(true)}
+            className="text-xs text-slate-500 hover:text-red-400 mb-4 block"
+          >
+            Delete all {filtered.length} shown
+          </button>
+        )}
         {filtered.length === 0 ? (
           <p className="text-sm text-slate-500 text-center py-10">
             {entries.length === 0
@@ -20434,6 +20454,15 @@ function ReceiptArchive({ onGoHome }) {
                       .join(" · ")}
                   </p>
                 </div>
+                <span
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    setDeleteTarget(e);
+                  }}
+                  className="text-slate-600 hover:text-red-400 shrink-0 p-1"
+                >
+                  <X className="w-4 h-4" />
+                </span>
               </button>
             ))}
           </div>
@@ -20650,6 +20679,18 @@ function ReceiptArchive({ onGoHome }) {
             setViewingEntry(null);
           }}
           onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+
+      {confirmingDeleteAll && (
+        <ConfirmDelete
+          title={`Delete all ${filtered.length} shown?`}
+          message="Every archived receipt currently matching your search — photos and recognized text both — gets permanently deleted. This can't be undone."
+          onConfirm={() => {
+            deleteAllShown(filtered);
+            setConfirmingDeleteAll(false);
+          }}
+          onCancel={() => setConfirmingDeleteAll(false)}
         />
       )}
     </div>
