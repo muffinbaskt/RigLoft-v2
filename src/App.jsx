@@ -21183,7 +21183,16 @@ function ReceiptArchive({ onGoHome }) {
   const filtered = entries.filter((e) => {
     const q = search.trim().toLowerCase();
     if (!q) return true;
-    return [e.fullText, e.vendor, e.poNumber].filter(Boolean).join(" ").toLowerCase().includes(q);
+    // Item names are searched separately from the raw OCR text — a
+    // corrected or custom name (like a nickname typed in after linking)
+    // may never appear anywhere in the original document's text at all,
+    // so fullText alone would never find it.
+    const itemNames = (e.items || []).flatMap((it) => [it.name, it.rawName]);
+    return [e.fullText, e.vendor, e.poNumber, ...itemNames]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .includes(q);
   });
 
   return (
@@ -21232,7 +21241,7 @@ function ReceiptArchive({ onGoHome }) {
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search anything printed on a receipt..."
+          placeholder="Search item names, vendor, or anything printed on a receipt..."
           className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
         />
         {filtered.length > 0 && (
