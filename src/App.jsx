@@ -20664,6 +20664,7 @@ function ReceiptArchive({ onGoHome }) {
   const [relinkingLine, setRelinkingLine] = useState(null);
   const [catalogSearch, setCatalogSearch] = useState("");
   const entriesRef = useRef([]);
+  const catalogRef = useRef([]);
   const fileInputRef = useRef(null);
   const nameDebounceTimers = useRef({});
 
@@ -20680,7 +20681,11 @@ function ReceiptArchive({ onGoHome }) {
           setEntries(loaded);
           entriesRef.current = loaded;
         }
-        if (cResult.ok && cResult.value) setCatalog(JSON.parse(cResult.value));
+        if (cResult.ok && cResult.value) {
+          const loadedCatalog = JSON.parse(cResult.value);
+          setCatalog(loadedCatalog);
+          catalogRef.current = loadedCatalog;
+        }
         if (nResult.ok && nResult.value) setNameMemory(JSON.parse(nResult.value));
       } catch {}
       setLoading(false);
@@ -20691,6 +20696,18 @@ function ReceiptArchive({ onGoHome }) {
     entriesRef.current = next;
     setEntries(next);
     saveWithRetry(RECEIPT_ARCHIVE_KEY, JSON.stringify(next)).catch(() => {});
+  };
+
+  // Same fix as the bulk-scan queue bug from earlier — reads and writes
+  // always go through catalogRef, kept synchronously current, rather
+  // than the `catalog` state variable directly. Without this, a rapid
+  // bulk scan calling this repeatedly could have each call working off
+  // a catalog snapshot from before the previous call's update landed,
+  // silently overwriting it.
+  const saveCatalog = (next) => {
+    catalogRef.current = next;
+    setCatalog(next);
+    saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
   };
 
   // Vendor spend is a catalog-level concern, not a job/list one — so an
@@ -20705,29 +20722,33 @@ function ReceiptArchive({ onGoHome }) {
     const eligible = (lines || []).filter((l) => l.catalogId && l.shippedQty > 0);
     if (eligible.length === 0) return [];
 
+    // Computed synchronously against catalogRef (always current, unlike
+    // the `catalog` state variable during a rapid bulk scan) rather than
+    // mutating `summary` inside a setState updater and returning it
+    // right after — that relied on React having already run the updater
+    // by then, which isn't guaranteed, so the summary used to show
+    // "Vendor spend logged" on the receipt could come back empty even
+    // when the catalog itself eventually got updated correctly.
     const summary = [];
-    setCatalog((prev) => {
-      const next = prev.map((c) => {
-        const linesForThis = eligible.filter((l) => l.catalogId === c.id);
-        if (linesForThis.length === 0) return c;
-        const newRecords = linesForThis.map((l) => ({
-          id: uniqueId(),
-          vendor: vendor.trim(),
-          qty: l.shippedQty,
-          amount: Math.round((l.unitPrice || 0) * l.shippedQty * 100) / 100,
-          date: receiptDate || new Date().toISOString().slice(0, 10),
-        }));
-        summary.push({
-          catalogName: c.name,
-          qty: linesForThis.reduce((s, l) => s + l.shippedQty, 0),
-          amount: newRecords.reduce((s, r) => s + r.amount, 0),
-        });
-        const updatedHistory = [...(c.vendorHistory || []), ...newRecords];
-        return { ...c, vendorHistory: updatedHistory, vendor: computeUsualVendor(updatedHistory) || c.vendor };
+    const nextCatalog = catalogRef.current.map((c) => {
+      const linesForThis = eligible.filter((l) => l.catalogId === c.id);
+      if (linesForThis.length === 0) return c;
+      const newRecords = linesForThis.map((l) => ({
+        id: uniqueId(),
+        vendor: vendor.trim(),
+        qty: l.shippedQty,
+        amount: Math.round((l.unitPrice || 0) * l.shippedQty * 100) / 100,
+        date: receiptDate || new Date().toISOString().slice(0, 10),
+      }));
+      summary.push({
+        catalogName: c.name,
+        qty: linesForThis.reduce((s, l) => s + l.shippedQty, 0),
+        amount: newRecords.reduce((s, r) => s + r.amount, 0),
       });
-      saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
-      return next;
+      const updatedHistory = [...(c.vendorHistory || []), ...newRecords];
+      return { ...c, vendorHistory: updatedHistory, vendor: computeUsualVendor(updatedHistory) || c.vendor };
     });
+    saveCatalog(nextCatalog);
     return summary;
   };
 
@@ -20738,17 +20759,14 @@ function ReceiptArchive({ onGoHome }) {
   const learnAlias = (catalogId, aliasText) => {
     if (!catalogId || !aliasText || !aliasText.trim()) return;
     const normAlias = normalizeText(aliasText.trim());
-    setCatalog((prev) => {
-      const next = prev.map((c) => {
-        if (c.id !== catalogId) return c;
-        if (normalizeText(c.name) === normAlias) return c;
-        const existing = c.aliases || [];
-        if (existing.some((a) => normalizeText(a) === normAlias)) return c;
-        return { ...c, aliases: [...existing, aliasText.trim()] };
-      });
-      saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
-      return next;
+    const next = catalogRef.current.map((c) => {
+      if (c.id !== catalogId) return c;
+      if (normalizeText(c.name) === normAlias) return c;
+      const existing = c.aliases || [];
+      if (existing.some((a) => normalizeText(a) === normAlias)) return c;
+      return { ...c, aliases: [...existing, aliasText.trim()] };
     });
+    saveCatalog(next);
   };
 
   const scanOneToArchive = async (file) => {
