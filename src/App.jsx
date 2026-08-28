@@ -20063,6 +20063,7 @@ function BackorderDashboard({ onGoHome }) {
 // the only thing you can do afterward is search and look back at it.
 function ReceiptArchive({ onGoHome }) {
   const [entries, setEntries] = useState([]);
+  const [catalog, setCatalog] = useState([]);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(null);
@@ -20077,12 +20078,16 @@ function ReceiptArchive({ onGoHome }) {
   useEffect(() => {
     (async () => {
       try {
-        const result = await getWithRetry(RECEIPT_ARCHIVE_KEY);
-        if (result.ok && result.value) {
-          const loaded = JSON.parse(result.value);
+        const [eResult, cResult] = await Promise.all([
+          getWithRetry(RECEIPT_ARCHIVE_KEY),
+          getWithRetry(CATALOG_KEY),
+        ]);
+        if (eResult.ok && eResult.value) {
+          const loaded = JSON.parse(eResult.value);
           setEntries(loaded);
           entriesRef.current = loaded;
         }
+        if (cResult.ok && cResult.value) setCatalog(JSON.parse(cResult.value));
       } catch {}
       setLoading(false);
     })();
@@ -20092,6 +20097,51 @@ function ReceiptArchive({ onGoHome }) {
     entriesRef.current = next;
     setEntries(next);
     saveWithRetry(RECEIPT_ARCHIVE_KEY, JSON.stringify(next)).catch(() => {});
+  };
+
+  // Vendor spend is a catalog-level concern, not a job/list one — so an
+  // archived receipt can still feed it, even though (unlike Receiving)
+  // nothing here ever gets applied to any job or Love List's inventory.
+  // Matches each line by name against the catalog, same engine used
+  // everywhere else, and logs a purchase record on anything that hits.
+  const recordVendorPurchasesFromArchive = (items, vendor, receiptDate) => {
+    if (!vendor || !vendor.trim()) return [];
+    const eligible = (items || [])
+      .map((it) => ({
+        name: it.name || "",
+        shippedQty: Number(it.shippedQty) > 0 ? Number(it.shippedQty) : 0,
+        unitPrice: Number(it.unitPrice) > 0 ? Number(it.unitPrice) : 0,
+      }))
+      .filter((it) => it.shippedQty > 0 && it.name.trim())
+      .map((it) => ({ ...it, match: findCatalogMatch(it.name, catalog) }))
+      .filter((it) => it.match);
+
+    if (eligible.length === 0) return [];
+
+    const summary = [];
+    setCatalog((prev) => {
+      const next = prev.map((c) => {
+        const linesForThis = eligible.filter((l) => l.match.id === c.id);
+        if (linesForThis.length === 0) return c;
+        const newRecords = linesForThis.map((l) => ({
+          id: uniqueId(),
+          vendor: vendor.trim(),
+          qty: l.shippedQty,
+          amount: Math.round(l.unitPrice * l.shippedQty * 100) / 100,
+          date: receiptDate || new Date().toISOString().slice(0, 10),
+        }));
+        summary.push({
+          catalogName: c.name,
+          qty: linesForThis.reduce((s, l) => s + l.shippedQty, 0),
+          amount: newRecords.reduce((s, r) => s + r.amount, 0),
+        });
+        const updatedHistory = [...(c.vendorHistory || []), ...newRecords];
+        return { ...c, vendorHistory: updatedHistory, vendor: computeUsualVendor(updatedHistory) || c.vendor };
+      });
+      saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+    return summary;
   };
 
   const scanOneToArchive = async (file) => {
@@ -20118,6 +20168,12 @@ function ReceiptArchive({ onGoHome }) {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Scan failed.");
 
+    // Catalog vendor-spend logging happens right here at scan time —
+    // it's a side effect on the catalog only, completely separate from
+    // the archive entry itself, which never gets touched again after
+    // this (no items, no target, no approval step for archived receipts).
+    const vendorSummary = recordVendorPurchasesFromArchive(data.items, data.vendor, data.receiptDate);
+
     return {
       id: uniqueId(),
       photoUrl,
@@ -20127,6 +20183,7 @@ function ReceiptArchive({ onGoHome }) {
       poNumber: data.poNumber || "",
       receiptDate: data.receiptDate || "",
       archivedAt: new Date().toISOString(),
+      vendorSummary,
     };
   };
 
@@ -20207,8 +20264,9 @@ function ReceiptArchive({ onGoHome }) {
       </header>
       <main className="max-w-2xl mx-auto px-4 py-5">
         <p className="text-xs text-slate-500 mb-4">
-          Just a searchable photo log — nothing scanned here ever creates or updates any items on
-          a job or Love List.
+          A searchable photo log — nothing here creates or updates any items on a job or Love
+          List. Items that match your catalog by name still log vendor spend and cost history,
+          same as an approved receipt would.
         </p>
         {scanError && <p className="text-sm text-red-400 mb-4">Couldn't scan that: {scanError}</p>}
         <input
@@ -20278,6 +20336,26 @@ function ReceiptArchive({ onGoHome }) {
               >
                 <img src={viewingEntry.photoUrl} alt="Receipt" className="w-full max-h-56 object-cover" />
               </button>
+            )}
+            {viewingEntry.vendorSummary && viewingEntry.vendorSummary.length > 0 && (
+              <div className="mb-4">
+                <p className="text-xs font-medium text-slate-400 mb-1.5">🏷️ Vendor spend logged</p>
+                <div className="space-y-1.5">
+                  {viewingEntry.vendorSummary.map((s, i) => (
+                    <div
+                      key={i}
+                      className="flex items-center justify-between text-sm border border-slate-800 rounded-md px-3 py-2 bg-slate-900/60"
+                    >
+                      <span className="text-slate-200">
+                        {s.catalogName} <span className="text-slate-500">× {s.qty}</span>
+                      </span>
+                      <span className="text-emerald-400 font-semibold">
+                        {s.amount > 0 ? `$${s.amount.toFixed(2)}` : "—"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
             <p className="text-xs font-medium text-slate-400 mb-1.5">Recognized text</p>
             <p className="text-sm text-slate-300 whitespace-pre-wrap border border-slate-800 rounded-lg p-3 bg-slate-900/60">
