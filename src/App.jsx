@@ -20909,6 +20909,7 @@ function ReceiptArchive({ onGoHome }) {
         const found = findCatalogMatch(line.name, catalogRef.current);
         if (found && found.id !== line.catalogId) {
           updateArchiveLine(entryId, lineId, { catalogId: found.id });
+          logVendorSpendForLine(entry, line, found.id);
         } else if (!found && line.catalogId) {
           updateArchiveLine(entryId, lineId, { catalogId: null });
         }
@@ -20926,27 +20927,30 @@ function ReceiptArchive({ onGoHome }) {
   // quantity and a vendor on the receipt but never got logged at scan
   // time (because nothing matched yet), linking it now logs that vendor
   // purchase retroactively instead of it being lost for good.
+  // Shared by both the manual "Change" link and the debounced auto-match
+  // while typing — a line getting linked should log its vendor purchase
+  // the same way regardless of which of those two actions did the
+  // linking. This was the piece missing from the auto-match path: it set
+  // catalogId correctly but never took this step, which is exactly why
+  // typing a name into a match required an extra manual relink before
+  // the price actually counted toward anything.
+  const logVendorSpendForLine = (entry, line, catalogId) => {
+    if (!(line.shippedQty > 0 && entry.vendor)) return;
+    const summary = recordVendorPurchasesForLines([{ ...line, catalogId }], entry.vendor, entry.receiptDate);
+    if (summary.length === 0) return;
+    const nextEntries = entriesRef.current.map((e) =>
+      e.id === entry.id ? { ...e, vendorSummary: [...(e.vendorSummary || []), ...summary] } : e
+    );
+    saveEntries(nextEntries);
+    setViewingEntry((prev) => (prev && prev.id === entry.id ? nextEntries.find((e) => e.id === entry.id) : prev));
+  };
+
   const handleLineLink = (entry, line, catalogItem) => {
     const catalogId = catalogItem ? catalogItem.id : null;
     updateArchiveLine(entry.id, line.id, { catalogId, catalogLinkedManually: !!catalogItem });
     if (catalogItem) {
       learnAlias(catalogItem.id, line.rawName);
-      if (line.shippedQty > 0 && entry.vendor) {
-        const summary = recordVendorPurchasesForLines(
-          [{ ...line, catalogId }],
-          entry.vendor,
-          entry.receiptDate
-        );
-        if (summary.length > 0) {
-          const nextVendorSummary = [...(entry.vendorSummary || []), ...summary];
-          updateArchiveLine(entry.id, line.id, {}); // no-op, just to re-sync viewingEntry timing
-          const nextEntries = entriesRef.current.map((e) =>
-            e.id === entry.id ? { ...e, vendorSummary: nextVendorSummary } : e
-          );
-          saveEntries(nextEntries);
-          setViewingEntry((prev) => (prev && prev.id === entry.id ? nextEntries.find((e) => e.id === entry.id) : prev));
-        }
-      }
+      logVendorSpendForLine(entry, line, catalogId);
     }
     if (line.rawName) {
       const finalName = line.name.trim();
