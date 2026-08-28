@@ -6637,7 +6637,7 @@ function SuggestNewItemModal({ job, managerName, onClose }) {
   );
 }
 
-function ItemCard({ item, selectMode, selected, isEditor, workerTasks = [], onToggleSelect, onEdit, onDelete, onViewSerials, onSuggestEdit, onOpenContainer, onAssignItem, onMergeItem, onViewVendor }) {
+function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTasks = [], onToggleSelect, onEdit, onDelete, onViewSerials, onSuggestEdit, onOpenContainer, onAssignItem, onMergeItem, onViewVendor }) {
   const handleCardClick = () => {
     if (selectMode) {
       onToggleSelect(item.id);
@@ -6682,6 +6682,11 @@ function ItemCard({ item, selectMode, selected, isEditor, workerTasks = [], onTo
             <p className="text-sm text-slate-500">
               Have {item.qtyHave} of {item.qtyNeeded}
               {item.qtyUnit ? ` ${item.qtyUnit}` : ""} needed
+            </p>
+            <p className="text-xs text-slate-600 mt-0.5">
+              {item.catalogId
+                ? `🔗 ${catalog.find((c) => c.id === item.catalogId)?.name || "Linked catalog item"}`
+                : "Not linked to catalog"}
             </p>
             <div className="mt-1.5 h-1.5 w-full max-w-[160px] rounded-full bg-slate-800 overflow-hidden">
               <div
@@ -9682,6 +9687,7 @@ function JobInventory({
                             onAssignItem={setAssigningItem}
                             onMergeItem={handleMergeAction}
                             onViewVendor={handleViewVendor}
+                            catalog={catalog}
                           />
                         ))}
                       </div>
@@ -9709,6 +9715,7 @@ function JobInventory({
                 onAssignItem={setAssigningItem}
                 onMergeItem={handleMergeAction}
                 onViewVendor={handleViewVendor}
+                catalog={catalog}
               />
             ))}
           </div>
@@ -15182,6 +15189,11 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                       </p>
                     )}
                     {subline && <p className="text-xs text-slate-500 truncate">{subline}</p>}
+                    <p className="text-xs text-slate-600">
+                      {item.catalogId
+                        ? `🔗 ${catalog.find((c) => c.id === item.catalogId)?.name || "Linked catalog item"}`
+                        : "Not linked to catalog"}
+                    </p>
                   </div>
                   {isEditor && (
                     <button
@@ -20064,6 +20076,7 @@ function BackorderDashboard({ onGoHome }) {
 function ReceiptArchive({ onGoHome }) {
   const [entries, setEntries] = useState([]);
   const [catalog, setCatalog] = useState([]);
+  const [nameMemory, setNameMemory] = useState({});
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(null);
@@ -20072,15 +20085,19 @@ function ReceiptArchive({ onGoHome }) {
   const [viewingEntry, setViewingEntry] = useState(null);
   const [viewingPhoto, setViewingPhoto] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [relinkingLine, setRelinkingLine] = useState(null);
+  const [catalogSearch, setCatalogSearch] = useState("");
   const entriesRef = useRef([]);
   const fileInputRef = useRef(null);
+  const nameDebounceTimers = useRef({});
 
   useEffect(() => {
     (async () => {
       try {
-        const [eResult, cResult] = await Promise.all([
+        const [eResult, cResult, nResult] = await Promise.all([
           getWithRetry(RECEIPT_ARCHIVE_KEY),
           getWithRetry(CATALOG_KEY),
+          getWithRetry(RECEIVING_NAME_MEMORY_KEY),
         ]);
         if (eResult.ok && eResult.value) {
           const loaded = JSON.parse(eResult.value);
@@ -20088,6 +20105,7 @@ function ReceiptArchive({ onGoHome }) {
           entriesRef.current = loaded;
         }
         if (cResult.ok && cResult.value) setCatalog(JSON.parse(cResult.value));
+        if (nResult.ok && nResult.value) setNameMemory(JSON.parse(nResult.value));
       } catch {}
       setLoading(false);
     })();
@@ -20102,32 +20120,25 @@ function ReceiptArchive({ onGoHome }) {
   // Vendor spend is a catalog-level concern, not a job/list one — so an
   // archived receipt can still feed it, even though (unlike Receiving)
   // nothing here ever gets applied to any job or Love List's inventory.
-  // Matches each line by name against the catalog, same engine used
-  // everywhere else, and logs a purchase record on anything that hits.
-  const recordVendorPurchasesFromArchive = (items, vendor, receiptDate) => {
+  // Takes lines that already know which catalog entry they're linked to
+  // (resolved once at scan time, or updated later by hand) rather than
+  // re-matching by name itself — that way a manual link made after the
+  // fact can trigger the exact same logging a scan-time match would have.
+  const recordVendorPurchasesForLines = (lines, vendor, receiptDate) => {
     if (!vendor || !vendor.trim()) return [];
-    const eligible = (items || [])
-      .map((it) => ({
-        name: it.name || "",
-        shippedQty: Number(it.shippedQty) > 0 ? Number(it.shippedQty) : 0,
-        unitPrice: Number(it.unitPrice) > 0 ? Number(it.unitPrice) : 0,
-      }))
-      .filter((it) => it.shippedQty > 0 && it.name.trim())
-      .map((it) => ({ ...it, match: findCatalogMatch(it.name, catalog) }))
-      .filter((it) => it.match);
-
+    const eligible = (lines || []).filter((l) => l.catalogId && l.shippedQty > 0);
     if (eligible.length === 0) return [];
 
     const summary = [];
     setCatalog((prev) => {
       const next = prev.map((c) => {
-        const linesForThis = eligible.filter((l) => l.match.id === c.id);
+        const linesForThis = eligible.filter((l) => l.catalogId === c.id);
         if (linesForThis.length === 0) return c;
         const newRecords = linesForThis.map((l) => ({
           id: uniqueId(),
           vendor: vendor.trim(),
           qty: l.shippedQty,
-          amount: Math.round(l.unitPrice * l.shippedQty * 100) / 100,
+          amount: Math.round((l.unitPrice || 0) * l.shippedQty * 100) / 100,
           date: receiptDate || new Date().toISOString().slice(0, 10),
         }));
         summary.push({
@@ -20142,6 +20153,26 @@ function ReceiptArchive({ onGoHome }) {
       return next;
     });
     return summary;
+  };
+
+  // Same alias-learning as Receiving — linking a garbled OCR string to a
+  // catalog item teaches that exact phrase for next time, so future
+  // receipts (here or in Receiving) from the same supplier auto-match
+  // instead of needing a manual link again.
+  const learnAlias = (catalogId, aliasText) => {
+    if (!catalogId || !aliasText || !aliasText.trim()) return;
+    const normAlias = normalizeText(aliasText.trim());
+    setCatalog((prev) => {
+      const next = prev.map((c) => {
+        if (c.id !== catalogId) return c;
+        if (normalizeText(c.name) === normAlias) return c;
+        const existing = c.aliases || [];
+        if (existing.some((a) => normalizeText(a) === normAlias)) return c;
+        return { ...c, aliases: [...existing, aliasText.trim()] };
+      });
+      saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
   };
 
   const scanOneToArchive = async (file) => {
@@ -20168,11 +20199,32 @@ function ReceiptArchive({ onGoHome }) {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Scan failed.");
 
+    // Same line shape as Receiving — a raw OCR name that never changes,
+    // an editable working name that starts as either a remembered
+    // correction or the raw text (never auto-renamed to a bare catalog
+    // name, for the same multi-size-variant reasons Receiving avoids it),
+    // and a catalogId from an initial name match if one's found.
+    const items = (data.items || []).map((it) => {
+      const rawName = it.name || "";
+      const match = rawName.trim() ? findCatalogMatch(rawName, catalog) : null;
+      const remembered = nameMemory[normalizeText(rawName)];
+      return {
+        id: uniqueId(),
+        rawName,
+        name: remembered || rawName,
+        catalogId: match ? match.id : null,
+        backorderQty: Number(it.backorderQty) > 0 ? Number(it.backorderQty) : 0,
+        shippedQty: Number(it.shippedQty) > 0 ? Number(it.shippedQty) : 0,
+        unit: (it.unit || "each").trim(),
+        unitPrice: Number(it.unitPrice) > 0 ? Number(it.unitPrice) : 0,
+      };
+    });
+
     // Catalog vendor-spend logging happens right here at scan time —
     // it's a side effect on the catalog only, completely separate from
-    // the archive entry itself, which never gets touched again after
-    // this (no items, no target, no approval step for archived receipts).
-    const vendorSummary = recordVendorPurchasesFromArchive(data.items, data.vendor, data.receiptDate);
+    // the archive entry itself; editing an item's link later on can
+    // trigger this same logging retroactively too.
+    const vendorSummary = recordVendorPurchasesForLines(items, data.vendor, data.receiptDate);
 
     return {
       id: uniqueId(),
@@ -20180,8 +20232,12 @@ function ReceiptArchive({ onGoHome }) {
       photoPath,
       fullText: data.fullText || "",
       vendor: data.vendor || "",
+      vendorAddress: data.vendorAddress || "",
       poNumber: data.poNumber || "",
       receiptDate: data.receiptDate || "",
+      // Editable — a garbled OCR name and its catalog link can both be
+      // corrected from the detail view, same as Receiving.
+      items,
       archivedAt: new Date().toISOString(),
       vendorSummary,
     };
@@ -20210,6 +20266,84 @@ function ReceiptArchive({ onGoHome }) {
   const deleteEntry = (entry) => {
     if (entry.photoPath) deleteReferenceDocument(entry.photoPath).catch(() => {});
     saveEntries(entriesRef.current.filter((e) => e.id !== entry.id));
+  };
+
+  // Applies a change to one line on one archived entry, keeping the
+  // persisted entries list and whatever's currently open in the detail
+  // view in sync with each other.
+  const updateArchiveLine = (entryId, lineId, changes) => {
+    const nextEntries = entriesRef.current.map((e) => {
+      if (e.id !== entryId) return e;
+      return { ...e, items: e.items.map((l) => (l.id === lineId ? { ...l, ...changes } : l)) };
+    });
+    saveEntries(nextEntries);
+    setViewingEntry((prev) => (prev && prev.id === entryId ? nextEntries.find((e) => e.id === entryId) : prev));
+  };
+
+  // Same debounced re-matching as Receiving and the Love List scan
+  // review — waits for a pause in typing, always re-checks against the
+  // current full text, and never overrides a link you picked manually.
+  // Once it settles, the confirmed name is remembered against this
+  // line's original raw text, same as approving a line in Receiving does.
+  const handleLineNameChange = (entryId, lineId, newName) => {
+    updateArchiveLine(entryId, lineId, { name: newName });
+    const timerKey = `${entryId}:${lineId}`;
+    if (nameDebounceTimers.current[timerKey]) clearTimeout(nameDebounceTimers.current[timerKey]);
+    nameDebounceTimers.current[timerKey] = setTimeout(() => {
+      const entry = entriesRef.current.find((e) => e.id === entryId);
+      const line = entry && entry.items.find((l) => l.id === lineId);
+      if (!line) return;
+      if (!line.catalogLinkedManually) {
+        const found = findCatalogMatch(line.name, catalog);
+        if (found && found.id !== line.catalogId) {
+          updateArchiveLine(entryId, lineId, { catalogId: found.id });
+        } else if (!found && line.catalogId) {
+          updateArchiveLine(entryId, lineId, { catalogId: null });
+        }
+      }
+      if (line.rawName) {
+        const nextMemory = { ...nameMemory, [normalizeText(line.rawName)]: line.name.trim() };
+        setNameMemory(nextMemory);
+        saveWithRetry(RECEIVING_NAME_MEMORY_KEY, JSON.stringify(nextMemory)).catch(() => {});
+      }
+    }, 900);
+  };
+
+  // Linking (or unlinking) is the deliberate action that teaches the
+  // catalog alias and remembers the name — and if this line has shipped
+  // quantity and a vendor on the receipt but never got logged at scan
+  // time (because nothing matched yet), linking it now logs that vendor
+  // purchase retroactively instead of it being lost for good.
+  const handleLineLink = (entry, line, catalogItem) => {
+    const catalogId = catalogItem ? catalogItem.id : null;
+    updateArchiveLine(entry.id, line.id, { catalogId, catalogLinkedManually: !!catalogItem });
+    if (catalogItem) {
+      learnAlias(catalogItem.id, line.rawName);
+      if (line.shippedQty > 0 && entry.vendor) {
+        const summary = recordVendorPurchasesForLines(
+          [{ ...line, catalogId }],
+          entry.vendor,
+          entry.receiptDate
+        );
+        if (summary.length > 0) {
+          const nextVendorSummary = [...(entry.vendorSummary || []), ...summary];
+          updateArchiveLine(entry.id, line.id, {}); // no-op, just to re-sync viewingEntry timing
+          const nextEntries = entriesRef.current.map((e) =>
+            e.id === entry.id ? { ...e, vendorSummary: nextVendorSummary } : e
+          );
+          saveEntries(nextEntries);
+          setViewingEntry((prev) => (prev && prev.id === entry.id ? nextEntries.find((e) => e.id === entry.id) : prev));
+        }
+      }
+    }
+    if (line.rawName) {
+      const finalName = line.name.trim();
+      const nextMemory = { ...nameMemory, [normalizeText(line.rawName)]: finalName };
+      setNameMemory(nextMemory);
+      saveWithRetry(RECEIVING_NAME_MEMORY_KEY, JSON.stringify(nextMemory)).catch(() => {});
+    }
+    setRelinkingLine(null);
+    setCatalogSearch("");
   };
 
   if (loading) {
@@ -20321,14 +20455,23 @@ function ReceiptArchive({ onGoHome }) {
             </button>
           </header>
           <main className="max-w-2xl mx-auto px-4 py-5">
-            <p className="text-sm text-slate-100 font-semibold mb-1">
-              {viewingEntry.vendor || "Unknown vendor"}
-            </p>
-            <p className="text-xs text-slate-500 mb-4">
-              {[viewingEntry.poNumber && `PO#${viewingEntry.poNumber}`, viewingEntry.receiptDate]
-                .filter(Boolean)
-                .join(" · ")}
-            </p>
+            <div className="border border-slate-800 rounded-lg p-3 bg-slate-900/60 mb-4">
+              <p className="text-sm font-semibold text-slate-100">
+                {viewingEntry.vendor || "Unknown vendor"}
+              </p>
+              {viewingEntry.vendorAddress && (
+                <p className="text-xs text-slate-500 mt-0.5">{viewingEntry.vendorAddress}</p>
+              )}
+              <p className="text-xs text-slate-500 mt-1.5">
+                {[
+                  viewingEntry.receiptDate && `Date: ${viewingEntry.receiptDate}`,
+                  viewingEntry.poNumber && `PO: ${viewingEntry.poNumber}`,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || "No date or PO number found"}
+              </p>
+            </div>
+
             {viewingEntry.photoUrl && (
               <button
                 onClick={() => setViewingPhoto(viewingEntry.photoUrl)}
@@ -20337,6 +20480,7 @@ function ReceiptArchive({ onGoHome }) {
                 <img src={viewingEntry.photoUrl} alt="Receipt" className="w-full max-h-56 object-cover" />
               </button>
             )}
+
             {viewingEntry.vendorSummary && viewingEntry.vendorSummary.length > 0 && (
               <div className="mb-4">
                 <p className="text-xs font-medium text-slate-400 mb-1.5">🏷️ Vendor spend logged</p>
@@ -20357,11 +20501,127 @@ function ReceiptArchive({ onGoHome }) {
                 </div>
               </div>
             )}
-            <p className="text-xs font-medium text-slate-400 mb-1.5">Recognized text</p>
-            <p className="text-sm text-slate-300 whitespace-pre-wrap border border-slate-800 rounded-lg p-3 bg-slate-900/60">
-              {viewingEntry.fullText || "Nothing came through legibly on this scan."}
-            </p>
+
+            {/* Item name and catalog link are both editable — everything
+                else (qty, price, target) stays read-only, since there's
+                still no assigning these to a job/list, unlike Receiving. */}
+            {viewingEntry.items && viewingEntry.items.length > 0 && (
+              <div className="mb-4">
+                <p className="text-xs font-medium text-slate-400 mb-1.5">
+                  Line items ({viewingEntry.items.length})
+                </p>
+                <div className="space-y-1.5">
+                  {viewingEntry.items.map((it) => {
+                    const match = it.catalogId ? catalog.find((c) => c.id === it.catalogId) : null;
+                    return (
+                      <div key={it.id} className="border border-slate-800 rounded-lg p-2.5 bg-slate-900/60">
+                        <input
+                          value={it.name}
+                          onChange={(e) => handleLineNameChange(viewingEntry.id, it.id, e.target.value)}
+                          className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 mb-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                        />
+                        <p className="text-xs text-slate-500 mb-1">
+                          {[
+                            it.shippedQty > 0 && `Shipped ${it.shippedQty}${it.unit && it.unit.toLowerCase() !== "each" ? ` ${it.unit}` : ""}`,
+                            it.backorderQty > 0 && `${it.backorderQty} backorder`,
+                            it.unitPrice > 0 && `$${it.unitPrice.toFixed(2)} each`,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ") || "No quantity or price recognized"}
+                        </p>
+                        {match ? (
+                          <button
+                            onClick={() => {
+                              setRelinkingLine(it);
+                              setCatalogSearch("");
+                            }}
+                            className="text-[11px] text-emerald-400 hover:underline decoration-dotted"
+                          >
+                            🔗 linked to "{match.name}" · Change
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setRelinkingLine(it);
+                              setCatalogSearch("");
+                            }}
+                            className="text-[11px] text-slate-500 hover:text-slate-300 hover:underline decoration-dotted"
+                          >
+                            No catalog match — 🔍 link manually
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <details className="text-xs">
+              <summary className="text-slate-500 hover:text-slate-300 cursor-pointer select-none">
+                Show full recognized text
+              </summary>
+              <p className="text-sm text-slate-300 whitespace-pre-wrap border border-slate-800 rounded-lg p-3 bg-slate-900/60 mt-2">
+                {viewingEntry.fullText || "Nothing came through legibly on this scan."}
+              </p>
+            </details>
           </main>
+        </div>
+      )}
+
+      {relinkingLine && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 px-4 py-8">
+          <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold text-sm truncate">
+                Link "{relinkingLine.name}" to...
+              </h3>
+              <button
+                onClick={() => {
+                  setRelinkingLine(null);
+                  setCatalogSearch("");
+                }}
+                className="text-slate-400 hover:text-slate-200 shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-5 pt-4 shrink-0">
+              <input
+                autoFocus
+                value={catalogSearch}
+                onChange={(e) => setCatalogSearch(e.target.value)}
+                placeholder="Search catalog..."
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {relinkingLine.catalogId && (
+                <button
+                  onClick={() => handleLineLink(viewingEntry, relinkingLine, null)}
+                  className="w-full text-left text-sm rounded-md px-3 py-2 border border-red-800/40 text-red-400 hover:bg-red-500/10 mb-2"
+                >
+                  Unlink from catalog
+                </button>
+              )}
+              {catalog
+                .filter((c) => c.name.toLowerCase().includes(catalogSearch.trim().toLowerCase()))
+                .slice(0, 50)
+                .map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => handleLineLink(viewingEntry, relinkingLine, c)}
+                    className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-800 hover:border-slate-700 mb-1.5"
+                  >
+                    <p className="text-slate-100">{c.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {c.storage}
+                      {c.needsTransfer ? " · 🚚 needs transfer" : ""}
+                    </p>
+                  </button>
+                ))}
+            </div>
+          </div>
         </div>
       )}
 
