@@ -694,6 +694,13 @@ function ItemForm({
   catalog = [],
   onSaveCatalogItem,
   isQuickTransfer = false,
+  // When true, this is a non-editor proposing a change rather than an
+  // editor making one directly — same exact form, same full visibility
+  // into everything (containers, gang, category, storage, catalog link),
+  // just routed to onSuggest instead of onSave so the owner reviews it
+  // first.
+  suggestMode = false,
+  onSuggest,
 }) {
   const [item, setItem] = useState(
     migrateItemContainers({
@@ -712,6 +719,7 @@ function ItemForm({
     (initial.containers && initial.containers[0] && initial.containers[0].name) || ""
   );
   const set = (field) => (val) => setItem((prev) => ({ ...prev, [field]: val }));
+  const [suggestNote, setSuggestNote] = useState("");
 
   const existingCatalogMatch = item.name.trim() ? findCatalogMatch(item.name, catalog) : null;
 
@@ -1051,6 +1059,12 @@ function ItemForm({
         </div>
 
         <div className="p-5 space-y-4 overflow-y-auto flex-1 min-h-0">
+          {suggestMode && (
+            <p className="text-xs text-slate-500 -mt-1">
+              You're viewing this job without edit access — this is exactly what the owner sees.
+              Change whatever needs updating below; nothing takes effect until they approve it.
+            </p>
+          )}
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">Item name</label>
             <input
@@ -1413,7 +1427,7 @@ function ItemForm({
             />
           </div>
 
-          {onSaveCatalogItem && (
+          {onSaveCatalogItem && !suggestMode && (
             <label className="flex items-start gap-2 text-xs text-slate-300 cursor-pointer select-none bg-slate-800/50 border border-slate-700 rounded-md p-2.5">
               <input
                 type="checkbox"
@@ -1429,6 +1443,21 @@ function ItemForm({
             </label>
           )}
         </div>
+
+        {suggestMode && (
+          <div className="px-5 pb-4">
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              Note (optional)
+            </label>
+            <textarea
+              value={suggestNote}
+              onChange={(e) => setSuggestNote(e.target.value)}
+              placeholder="Anything else the owner should know..."
+              rows={2}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 resize-none"
+            />
+          </div>
+        )}
 
         <div className="flex gap-3 px-5 py-4 border-t border-slate-800 shrink-0">
           <button
@@ -1460,6 +1489,24 @@ function ItemForm({
                 ? "yellow"
                 : "red";
 
+              const { _formKey, ...itemToSave } = item;
+              const finalItem = {
+                ...itemToSave,
+                qtyNeeded: finalQtyNeeded,
+                qtyHave: finalQtyHave,
+                containers: cleanContainers,
+                serials: finalSerials,
+                status: finalStatus,
+                catalogId: effectiveCatalogMatch ? effectiveCatalogMatch.id : null,
+              };
+
+              playSaveChime();
+
+              if (suggestMode) {
+                onSuggest(finalItem, suggestNote);
+                return;
+              }
+
               if (addToCatalog && onSaveCatalogItem) {
                 onSaveCatalogItem({
                   id: effectiveCatalogMatch ? effectiveCatalogMatch.id : uniqueId(),
@@ -1470,23 +1517,12 @@ function ItemForm({
                 });
               }
 
-              playSaveChime();
-
-              const { _formKey, ...itemToSave } = item;
-              onSave({
-                ...itemToSave,
-                qtyNeeded: finalQtyNeeded,
-                qtyHave: finalQtyHave,
-                containers: cleanContainers,
-                serials: finalSerials,
-                status: finalStatus,
-                catalogId: effectiveCatalogMatch ? effectiveCatalogMatch.id : null,
-              });
+              onSave(finalItem);
             }}
             disabled={!canSave}
             className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40 disabled:hover:bg-amber-500"
           >
-            Save item
+            {suggestMode ? "Suggest changes" : "Save item"}
           </button>
         </div>
       </div>
@@ -4416,21 +4452,39 @@ function SuggestionsInboxModal({
       ) : (
         <>
           <p className="text-sm text-slate-100 font-semibold">{s.payload.itemName}</p>
-          <p className="text-xs text-slate-500">
-            Qty have → {s.payload.qtyHave}
-            {s.payload.container?.clear
-              ? " · removed from container"
-              : s.payload.container
-              ? ` · ${s.payload.container.name}: ${s.payload.container.qty}`
-              : ""}
-            {" · "}
-            {s.payload.ordered ? "Ordered" : "Not ordered"} ·{" "}
-            {normalizeReceived(s.payload.received) === "yes"
-              ? "Received"
-              : normalizeReceived(s.payload.received) === "partial"
-              ? "Partially received"
-              : "Not received"}
-          </p>
+          {s.payload.proposedItem ? (
+            <p className="text-xs text-slate-500">
+              Qty: {s.payload.proposedItem.qtyHave}/{s.payload.proposedItem.qtyNeeded}
+              {s.payload.proposedItem.qtyUnit ? ` ${s.payload.proposedItem.qtyUnit}` : ""}
+              {" · "}
+              {(s.payload.proposedItem.containers || []).length > 0
+                ? s.payload.proposedItem.containers.map((c) => `${c.name}: ${c.qty}`).join(", ")
+                : "No containers"}
+              {" · "}
+              {s.payload.proposedItem.ordered ? "Ordered" : "Not ordered"} ·{" "}
+              {normalizeReceived(s.payload.proposedItem.received) === "yes"
+                ? "Received"
+                : normalizeReceived(s.payload.proposedItem.received) === "partial"
+                ? "Partially received"
+                : "Not received"}
+            </p>
+          ) : (
+            <p className="text-xs text-slate-500">
+              Qty have → {s.payload.qtyHave}
+              {s.payload.container?.clear
+                ? " · removed from container"
+                : s.payload.container
+                ? ` · ${s.payload.container.name}: ${s.payload.container.qty}`
+                : ""}
+              {" · "}
+              {s.payload.ordered ? "Ordered" : "Not ordered"} ·{" "}
+              {normalizeReceived(s.payload.received) === "yes"
+                ? "Received"
+                : normalizeReceived(s.payload.received) === "partial"
+                ? "Partially received"
+                : "Not received"}
+            </p>
+          )}
         </>
       )}
       {s.note && <p className="text-xs text-slate-400 italic mt-1.5">"{s.note}"</p>}
@@ -8827,6 +8881,7 @@ function JobInventory({
   const [pickListOpen, setPickListOpen] = useState(false);
   const [todoListOpen, setTodoListOpen] = useState(false);
   const [suggestEditTarget, setSuggestEditTarget] = useState(null);
+  const [suggestionSentConfirm, setSuggestionSentConfirm] = useState(false);
   const [suggestNewItemOpen, setSuggestNewItemOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
@@ -10660,12 +10715,55 @@ function JobInventory({
         })()}
 
       {suggestEditTarget && (
-        <SuggestEditModal
-          job={job}
-          item={suggestEditTarget}
-          managerName={managerName}
-          onClose={() => setSuggestEditTarget(null)}
+        <ItemForm
+          key={suggestEditTarget.id}
+          initial={suggestEditTarget}
+          containerOptions={containerOptions}
+          onAddContainer={addContainer}
+          categoryOptions={categoryOptions}
+          onAddCategory={addCategory}
+          onCancel={() => setSuggestEditTarget(null)}
+          existingItems={items}
+          catalog={catalog}
+          isQuickTransfer={!!job.isQuickTransfer}
+          suggestMode
+          onSuggest={async (finalItem, note) => {
+            const result = await submitSuggestion({
+              jobId: job.id,
+              itemId: suggestEditTarget.id,
+              type: "edit_item",
+              payload: { itemName: suggestEditTarget.name, proposedItem: finalItem },
+              note,
+              submittedBy: managerName,
+            });
+            setSuggestEditTarget(null);
+            if (result.ok) setSuggestionSentConfirm(true);
+          }}
         />
+      )}
+
+      {suggestionSentConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+          onClick={() => setSuggestionSentConfirm(false)}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5 text-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto mb-3" />
+            <h3 className="text-slate-100 font-semibold mb-1.5">Suggestion sent</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              The job owner will review it before anything changes.
+            </p>
+            <button
+              onClick={() => setSuggestionSentConfirm(false)}
+              className="w-full text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+            >
+              Done
+            </button>
+          </div>
+        </div>
       )}
 
       {suggestNewItemOpen && (
@@ -12426,19 +12524,22 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
     }
     if (s.suggestion_type === "edit_item") {
       const before = job.items.find((i) => String(i.id) === String(s.item_id));
-      const previousState = before
-        ? {
-            containers: before.containers || [],
-            qtyHave: before.qtyHave,
-            ordered: before.ordered,
-            received: before.received,
-            status: before.status,
-          }
-        : null;
+      // A full snapshot now, not just the narrow subset the old suggestion
+      // form used to touch — since a suggestion can now propose a change
+      // to genuinely any field (name, gang, category, storage, catalog
+      // link, multiple containers), reverting it later needs everything
+      // to restore correctly, not just quantity and container.
+      const previousState = before ? { ...before } : null;
       updateJobById(s.job_id, (prevJob) => ({
         ...prevJob,
         items: prevJob.items.map((i) => {
           if (String(i.id) !== String(s.item_id)) return i;
+          if (s.payload.proposedItem) {
+            // Current shape — a full proposed item, applied wholesale.
+            return { ...s.payload.proposedItem, id: i.id };
+          }
+          // Older shape, kept working for anything already pending from
+          // before this — a narrow, field-by-field suggestion.
           let containers = i.containers || [];
           if (s.payload.container?.clear) {
             containers = [];
@@ -12459,10 +12560,17 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
             status,
           };
         }),
-        containerOptions:
-          s.payload.container && s.payload.container.name
+        containerOptions: (() => {
+          if (s.payload.proposedItem) {
+            const newNames = (s.payload.proposedItem.containers || [])
+              .map((c) => c.name)
+              .filter(Boolean);
+            return [...new Set([...prevJob.containerOptions, ...newNames])];
+          }
+          return s.payload.container && s.payload.container.name
             ? [...new Set([...prevJob.containerOptions, s.payload.container.name])]
-            : prevJob.containerOptions,
+            : prevJob.containerOptions;
+        })(),
         activityLog: [
           {
             id: uniqueId(),
