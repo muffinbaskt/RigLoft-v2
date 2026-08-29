@@ -21360,6 +21360,39 @@ function ReceiptArchive({ onGoHome }) {
               <Trash2 className="w-4 h-4" />
             </button>
           </header>
+          {(() => {
+            // Steps through whatever's currently filtered (respects an
+            // active search), so this stays in sync with the list you
+            // actually came from instead of always cycling the full
+            // archive.
+            const idx = filtered.findIndex((e) => e.id === viewingEntry.id);
+            const prevEntry = idx > 0 ? filtered[idx - 1] : null;
+            const nextEntry = idx !== -1 && idx < filtered.length - 1 ? filtered[idx + 1] : null;
+            if (idx === -1 || (!prevEntry && !nextEntry)) return null;
+            return (
+              <div className="border-b border-slate-800 px-4 py-2 flex items-center justify-between bg-slate-950/60">
+                <button
+                  onClick={() => prevEntry && setViewingEntry(prevEntry)}
+                  disabled={!prevEntry}
+                  className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 disabled:opacity-30 disabled:hover:text-slate-400"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  Previous
+                </button>
+                <span className="text-xs text-slate-600">
+                  {idx + 1} of {filtered.length}
+                </span>
+                <button
+                  onClick={() => nextEntry && setViewingEntry(nextEntry)}
+                  disabled={!nextEntry}
+                  className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 disabled:opacity-30 disabled:hover:text-slate-400"
+                >
+                  Next
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            );
+          })()}
           <main className="max-w-2xl mx-auto px-4 py-5">
             <div className="border border-slate-800 rounded-lg p-3 bg-slate-900/60 mb-4">
               <p className="text-sm font-semibold text-slate-100">
