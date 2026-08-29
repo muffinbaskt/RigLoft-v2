@@ -21585,21 +21585,41 @@ function ReceiptArchive({ onGoHome }) {
       )}
 
       {confirmingSendToReceiving && (
-        <ConfirmDelete
-          title="Send to Receiving?"
-          message={
-            confirmingSendToReceiving.sentToReceiving
-              ? "This creates ANOTHER pending receipt in Receiving with the same photo and items — you already sent this one once. Only do this if the first one was approved, discarded, or otherwise didn't cover everything."
-              : "Creates a new pending receipt in Receiving with the same photo and line items, so they can be assigned to a job or Love List. This entry stays right here too — nothing is removed from the Archive. If any items already logged vendor spend while sitting here, that gets retracted first, since Receiving's own approval will log it properly once each item is actually applied somewhere."
-          }
-          onConfirm={async () => {
-            setSendingToReceiving(true);
-            await sendToReceiving(confirmingSendToReceiving);
-            setSendingToReceiving(false);
-            setConfirmingSendToReceiving(null);
-          }}
-          onCancel={() => setConfirmingSendToReceiving(null)}
-        />
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 px-4"
+          onClick={() => setConfirmingSendToReceiving(null)}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-slate-100 font-semibold mb-1.5">Send to Receiving?</h3>
+            <p className="text-slate-400 text-sm mb-5">
+              {confirmingSendToReceiving.sentToReceiving
+                ? "This creates ANOTHER pending receipt in Receiving with the same photo and items — you already sent this one once. Only do this if the first one was approved, discarded, or otherwise didn't cover everything."
+                : "Creates a new pending receipt in Receiving with the same photo and line items, so they can be assigned to a job or Love List. This entry stays right here too — nothing is removed from the Archive. If any items already logged vendor spend while sitting here, that gets retracted first, since Receiving's own approval will log it properly once each item is actually applied somewhere."}
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmingSendToReceiving(null)}
+                className="flex-1 text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  setSendingToReceiving(true);
+                  await sendToReceiving(confirmingSendToReceiving);
+                  setSendingToReceiving(false);
+                  setConfirmingSendToReceiving(null);
+                }}
+                className="flex-1 text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {sendingToReceiving && (
