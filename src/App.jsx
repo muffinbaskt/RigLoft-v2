@@ -20791,6 +20791,8 @@ function ReceiptArchive({ onGoHome }) {
   const [viewingPhoto, setViewingPhoto] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [confirmingDeleteAll, setConfirmingDeleteAll] = useState(false);
+  const [confirmingSendToReceiving, setConfirmingSendToReceiving] = useState(null);
+  const [sendingToReceiving, setSendingToReceiving] = useState(false);
   const [relinkingLine, setRelinkingLine] = useState(null);
   const [catalogSearch, setCatalogSearch] = useState("");
   const entriesRef = useRef([]);
@@ -21097,6 +21099,58 @@ function ReceiptArchive({ onGoHome }) {
     saveEntries(entriesRef.current.filter((e) => e.id !== entry.id));
   };
 
+  // Converts an archived receipt into a real pending batch in Receiving,
+  // so its items can actually be assigned to a job or Love List — the
+  // same photo and line data, just handed to the workflow that has an
+  // approval step. Any vendor spend already logged while this sat in the
+  // Archive gets retracted first, since Receiving's own approval will
+  // log it properly once each item is actually applied somewhere —
+  // letting both stand would double-count anything already linked here.
+  const sendToReceiving = async (entry) => {
+    entry.items.forEach((it) => {
+      if (it.vendorRecordId) removeVendorRecord(it.vendorRecordId);
+    });
+
+    const lines = entry.items.map((it) => ({
+      id: uniqueId(),
+      rawName: it.rawName,
+      name: it.name,
+      catalogId: it.catalogId,
+      catalogLinkedManually: !!it.catalogLinkedManually,
+      targetType: null,
+      targetId: null,
+      approved: false,
+      unit: it.unit,
+      unitPrice: it.unitPrice,
+      receiptDate: entry.receiptDate,
+      vendor: entry.vendor,
+      backorderQty: it.backorderQty,
+      shippedQty: it.shippedQty,
+    }));
+
+    const newBatch = newReceiptBatch(entry.photoUrl, entry.photoPath, lines, {
+      vendor: entry.vendor,
+      poNumber: entry.poNumber,
+      receiptDate: entry.receiptDate,
+    });
+    newBatch.label = entry.vendor ? `${entry.vendor} (from Archive)` : "";
+
+    const queueResult = await getWithRetry(RECEIVING_QUEUE_KEY);
+    const queue = queueResult.ok && queueResult.value ? JSON.parse(queueResult.value) : [];
+    await saveWithRetry(RECEIVING_QUEUE_KEY, JSON.stringify([newBatch, ...queue]));
+
+    // The archive entry stays fully intact — same photo, full text,
+    // still searchable — this is purely a label so it's not confusing
+    // to later find the same receipt sitting in two places at once.
+    const nextEntries = entriesRef.current.map((e) =>
+      e.id === entry.id
+        ? { ...e, sentToReceiving: true, items: e.items.map((it) => ({ ...it, vendorRecordId: null })) }
+        : e
+    );
+    saveEntries(nextEntries);
+    setViewingEntry((prev) => (prev && prev.id === entry.id ? nextEntries.find((e) => e.id === entry.id) : prev));
+  };
+
   // Deletes every archive entry currently matching the search, photos
   // included — this is what makes "delete all" scoped to what you're
   // actually looking at rather than always wiping the entire archive.
@@ -21322,7 +21376,20 @@ function ReceiptArchive({ onGoHome }) {
                   .filter(Boolean)
                   .join(" · ") || "No date or PO number found"}
               </p>
+              {viewingEntry.sentToReceiving && (
+                <p className="text-xs text-sky-400 mt-1.5">📥 Already sent to Receiving</p>
+              )}
             </div>
+
+            <button
+              onClick={() => setConfirmingSendToReceiving(viewingEntry)}
+              className="w-full text-left text-xs text-slate-400 hover:text-slate-200 border border-dashed border-slate-700 rounded-md px-3 py-2 mb-4"
+            >
+              📥{" "}
+              {viewingEntry.sentToReceiving
+                ? "Send to Receiving again (creates another pending receipt)"
+                : "Send to Receiving — assign these items to a job or Love List"}
+            </button>
 
             {viewingEntry.photoUrl && (
               <button
@@ -21515,6 +21582,33 @@ function ReceiptArchive({ onGoHome }) {
           }}
           onCancel={() => setConfirmingDeleteAll(false)}
         />
+      )}
+
+      {confirmingSendToReceiving && (
+        <ConfirmDelete
+          title="Send to Receiving?"
+          message={
+            confirmingSendToReceiving.sentToReceiving
+              ? "This creates ANOTHER pending receipt in Receiving with the same photo and items — you already sent this one once. Only do this if the first one was approved, discarded, or otherwise didn't cover everything."
+              : "Creates a new pending receipt in Receiving with the same photo and line items, so they can be assigned to a job or Love List. This entry stays right here too — nothing is removed from the Archive. If any items already logged vendor spend while sitting here, that gets retracted first, since Receiving's own approval will log it properly once each item is actually applied somewhere."
+          }
+          onConfirm={async () => {
+            setSendingToReceiving(true);
+            await sendToReceiving(confirmingSendToReceiving);
+            setSendingToReceiving(false);
+            setConfirmingSendToReceiving(null);
+          }}
+          onCancel={() => setConfirmingSendToReceiving(null)}
+        />
+      )}
+
+      {sendingToReceiving && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5 flex items-center gap-3">
+            <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin shrink-0" />
+            <p className="text-sm text-slate-300">Sending to Receiving...</p>
+          </div>
+        </div>
       )}
     </div>
   );
