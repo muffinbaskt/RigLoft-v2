@@ -7153,7 +7153,7 @@ function SuggestNewItemModal({ job, managerName, onClose }) {
   );
 }
 
-function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTasks = [], onToggleSelect, onEdit, onDelete, onViewSerials, onSuggestEdit, onOpenContainer, onAssignItem, onMergeItem, onViewVendor }) {
+function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTasks = [], onToggleSelect, onEdit, onDelete, onViewSerials, onSuggestEdit, onOpenContainer, onAssignItem, onMergeItem, onViewVendor, onViewReceipt }) {
   const handleCardClick = () => {
     if (selectMode) {
       onToggleSelect(item.id);
@@ -7294,6 +7294,17 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
             className="text-xs rounded-full px-2.5 py-1 border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-600 flex items-center gap-1"
           >
             🏷️ Vendor
+          </button>
+        )}
+        {item.sourceReceipt && onViewReceipt && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onViewReceipt(item);
+            }}
+            className="text-xs rounded-full px-2.5 py-1 border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-600 flex items-center gap-1"
+          >
+            🧾 Receipt
           </button>
         )}
         {(() => {
@@ -8657,6 +8668,72 @@ function MergeItemModal({ item, items, onConfirm, onClose }) {
 // Shown from either a Job or Love List item card — the purchase history
 // lives on the catalog entry, so this reads straight off that rather
 // than anything specific to the job/list you happened to open it from.
+// Read-only look at whichever receipt most recently touched this
+// specific item — a self-contained snapshot rather than a live lookup,
+// so it still works even if the original Receiving history entry (or
+// archived receipt) it came from was since deleted or cleared.
+function SourceReceiptModal({ sourceReceipt, onClose }) {
+  const [viewingPhoto, setViewingPhoto] = useState(false);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5 max-h-[80vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-slate-100 font-semibold text-base">
+            {sourceReceipt.label || sourceReceipt.vendor || "Receipt"}
+          </h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200 shrink-0 ml-2">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <p className="text-xs text-slate-500 mb-4">
+          {[
+            sourceReceipt.vendor && sourceReceipt.label && `Vendor: ${sourceReceipt.vendor}`,
+            sourceReceipt.receiptDate && `Date: ${sourceReceipt.receiptDate}`,
+            sourceReceipt.poNumber && `PO: ${sourceReceipt.poNumber}`,
+          ]
+            .filter(Boolean)
+            .join(" · ") || "No further details recorded"}
+        </p>
+        {sourceReceipt.photoUrl ? (
+          <>
+            <button
+              onClick={() => setViewingPhoto(true)}
+              className="w-full rounded-lg overflow-hidden border border-slate-800"
+            >
+              <img src={sourceReceipt.photoUrl} alt="Receipt" className="w-full max-h-64 object-cover" />
+            </button>
+            {(sourceReceipt.extraPhotoUrls || []).length > 0 && (
+              <div className="grid grid-cols-4 gap-1.5 mt-1.5">
+                {sourceReceipt.extraPhotoUrls.map((url, i) => (
+                  <button key={i} className="rounded-md overflow-hidden border border-slate-800">
+                    <img src={url} alt={`Page ${i + 2}`} className="w-full h-14 object-cover" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="text-sm text-slate-500 text-center py-6">No photo saved with this receipt.</p>
+        )}
+      </div>
+      {viewingPhoto && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
+          onClick={() => setViewingPhoto(false)}
+        >
+          <button
+            onClick={() => setViewingPhoto(false)}
+            className="absolute top-4 right-4 text-slate-300 hover:text-white"
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <ZoomableImage key={sourceReceipt.photoUrl} src={sourceReceipt.photoUrl} alt="Receipt" />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function VendorBreakdownModal({ catalogItem, onClose, onChange }) {
   const [history, setHistory] = useState(catalogItem.vendorHistory || []);
   const [showIndividual, setShowIndividual] = useState(false);
@@ -8886,6 +8963,7 @@ function JobInventory({
   const [vendorHistoryOverrides, setVendorHistoryOverrides] = useState({});
   const applyVendorOverride = (catalogId, changes) =>
     setVendorHistoryOverrides((prev) => ({ ...prev, [catalogId]: changes }));
+  const [viewingReceiptFor, setViewingReceiptFor] = useState(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [containersOpen, setContainersOpen] = useState(false);
@@ -9388,6 +9466,11 @@ function JobInventory({
   const handleViewVendor = (item) => {
     if (!item.catalogId) return;
     setViewingVendorFor(item.catalogId);
+  };
+
+  const handleViewReceipt = (item) => {
+    if (!item.sourceReceipt) return;
+    setViewingReceiptFor(item.sourceReceipt);
   };
 
   const requestDeleteItem = (item) => {
@@ -10312,6 +10395,7 @@ function JobInventory({
                             onAssignItem={setAssigningItem}
                             onMergeItem={handleMergeAction}
                             onViewVendor={handleViewVendor}
+                            onViewReceipt={handleViewReceipt}
                             catalog={catalog}
                           />
                         ))}
@@ -10340,6 +10424,7 @@ function JobInventory({
                 onAssignItem={setAssigningItem}
                 onMergeItem={handleMergeAction}
                 onViewVendor={handleViewVendor}
+                onViewReceipt={handleViewReceipt}
                 catalog={catalog}
               />
             ))}
@@ -10730,6 +10815,10 @@ function JobInventory({
             />
           ) : null;
         })()}
+
+      {viewingReceiptFor && (
+        <SourceReceiptModal sourceReceipt={viewingReceiptFor} onClose={() => setViewingReceiptFor(null)} />
+      )}
 
       {suggestEditTarget && (
         <ItemForm
@@ -14982,6 +15071,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [vendorHistoryOverrides, setVendorHistoryOverrides] = useState({});
   const applyVendorOverride = (catalogId, changes) =>
     setVendorHistoryOverrides((prev) => ({ ...prev, [catalogId]: changes }));
+  const [viewingReceiptFor, setViewingReceiptFor] = useState(null);
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
   const [showPhotosModal, setShowPhotosModal] = useState(false);
@@ -15937,6 +16027,14 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                     🏷️ Vendor
                   </button>
                 )}
+                {item.sourceReceipt && (
+                  <button
+                    onClick={() => setViewingReceiptFor(item.sourceReceipt)}
+                    className="text-xs rounded-full px-2 py-0.5 border border-slate-700 text-slate-500 hover:text-slate-300 hover:border-slate-600 mb-2 inline-flex items-center gap-1"
+                  >
+                    🧾 Receipt
+                  </button>
+                )}
                 {isEditor ? (
                   <button
                     onClick={() => setRelinkingItem(item)}
@@ -16550,6 +16648,10 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
             />
           ) : null;
         })()}
+
+      {viewingReceiptFor && (
+        <SourceReceiptModal sourceReceipt={viewingReceiptFor} onClose={() => setViewingReceiptFor(null)} />
+      )}
     </div>
   );
 }
@@ -19557,7 +19659,26 @@ function attachReceiptPhotoToLoveList(list, batch) {
   return { ...list, referenceImages: [...(list.referenceImages || []), ...newUrls] };
 }
 
-function applyReceiptLineToJob(job, line, catalog) {
+// A self-contained snapshot of whichever receipt most recently touched
+// this item — photo included — rather than a reference to the batch
+// itself. Receiving history and archive entries can both be deleted or
+// cleared independently, so a live lookup could easily end up pointing
+// at nothing; this survives that by carrying everything a read-only
+// "Receipt" view actually needs.
+function buildSourceReceiptSnapshot(batch) {
+  if (!batch) return null;
+  return {
+    photoUrl: batch.photoUrl || null,
+    photoPath: batch.photoPath || null,
+    extraPhotoUrls: batch.extraPhotoUrls || [],
+    label: batch.label || "",
+    vendor: batch.vendor || "",
+    receiptDate: batch.receiptDate || "",
+    poNumber: batch.poNumber || "",
+  };
+}
+
+function applyReceiptLineToJob(job, line, catalog, batch) {
   const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
   const items = job.items || [];
   // Matching by name, not catalogId — several real, differently-sized
@@ -19615,6 +19736,7 @@ function applyReceiptLineToJob(job, line, catalog) {
       // record just logged there would have nothing on this item pointing
       // back to find it.
       catalogId: line.catalogId || existing.catalogId,
+      sourceReceipt: buildSourceReceiptSnapshot(batch) || existing.sourceReceipt,
     };
     const nextItems = [...items];
     nextItems[idx] = updated;
@@ -19645,11 +19767,12 @@ function applyReceiptLineToJob(job, line, catalog) {
     // different wording (a size variant, a typo) rather than genuinely
     // new stock.
     importedViaReceiving: true,
+    sourceReceipt: buildSourceReceiptSnapshot(batch),
   };
   return { ...job, items: [...items, fresh] };
 }
 
-function applyReceiptLineToLoveList(list, line, catalog) {
+function applyReceiptLineToLoveList(list, line, catalog, batch) {
   const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
   const items = list.items || [];
   // Same fix as the Job version — match by name, not catalog link, since
@@ -19696,6 +19819,7 @@ function applyReceiptLineToLoveList(list, line, catalog) {
       // entry would have nothing on this item pointing back to find it,
       // even though the history itself is correctly logged.
       catalogId: line.catalogId || existing.catalogId,
+      sourceReceipt: buildSourceReceiptSnapshot(batch) || existing.sourceReceipt,
     };
     const nextItems = [...items];
     nextItems[idx] = updated;
@@ -19715,6 +19839,7 @@ function applyReceiptLineToLoveList(list, line, catalog) {
   // Same flag as the Job version — a new item Receiving created rather
   // than matched, so it can be highlighted and offered a merge.
   fresh.importedViaReceiving = true;
+  fresh.sourceReceipt = buildSourceReceiptSnapshot(batch);
   if (line.shippedQty > 0) {
     fresh.status = "received";
     fresh.statusDates.received = new Date().toISOString().slice(0, 10);
@@ -19885,8 +20010,8 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
     validLines.forEach((line) => {
       updatedTarget =
         targetType === "job"
-          ? applyReceiptLineToJob(updatedTarget, line, catalog)
-          : applyReceiptLineToLoveList(updatedTarget, line, catalog);
+          ? applyReceiptLineToJob(updatedTarget, line, catalog, selectedBatch)
+          : applyReceiptLineToLoveList(updatedTarget, line, catalog, selectedBatch);
     });
     if (validLines.length > 0) {
       updatedTarget =
@@ -22090,14 +22215,14 @@ function ReceivingApp({ onGoHome }) {
   // here), and the backorder figure is set to whatever this receipt says
   // is still outstanding. No match at all means a brand new item, using
   // the catalog entry's usual defaults if one was linked.
-  const applyLineToJob = (job, line) => applyReceiptLineToJob(job, line, catalog);
+  const applyLineToJob = (job, line, batch) => applyReceiptLineToJob(job, line, catalog, batch);
 
   // Same idea for a Love List — existing item gets Have bumped (with the
   // same "catch up the received-batch history" treatment the qty box
   // already does elsewhere, so the delivery record stays honest even
   // though this arrived through Receiving instead of the usual stepper),
   // status only advances if something actually showed up.
-  const applyLineToLoveList = (list, line) => applyReceiptLineToLoveList(list, line, catalog);
+  const applyLineToLoveList = (list, line, batch) => applyReceiptLineToLoveList(list, line, catalog, batch);
 
   // Only processes lines that actually have a target assigned — lines
   // still waiting on a decision stay behind in the batch untouched. That
@@ -22128,7 +22253,7 @@ function ReceivingApp({ onGoHome }) {
         if (!jobLines) return j;
         let updated = j;
         jobLines.forEach((line) => {
-          updated = applyLineToJob(updated, line);
+          updated = applyLineToJob(updated, line, batch);
         });
         // One photo, attached once, regardless of how many lines from
         // this receipt ended up on this particular job.
@@ -22145,7 +22270,7 @@ function ReceivingApp({ onGoHome }) {
         if (!listLines) return l;
         let updated = l;
         listLines.forEach((line) => {
-          updated = applyLineToLoveList(updated, line);
+          updated = applyLineToLoveList(updated, line, batch);
         });
         updated = attachReceiptPhotoToLoveList(updated, batch);
         return updated;
