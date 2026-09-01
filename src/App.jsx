@@ -11050,23 +11050,38 @@ function JobInventory({
               )}
               {items
                 .filter((i) => i.id !== linkingSubstituteItem.id && i.substituteForItemId !== linkingSubstituteItem.id)
-                .filter((i) => i.name.toLowerCase().includes(substituteSearch.trim().toLowerCase()))
-                .map((i) => (
-                  <button
-                    key={i.id}
-                    onClick={() => linkSubstitute(linkingSubstituteItem, i)}
-                    className={`w-full text-left text-sm rounded-md px-3 py-2 border mb-1.5 ${
-                      linkingSubstituteItem.substituteForItemId === i.id
-                        ? "border-sky-500/50 bg-sky-500/10 text-sky-300"
-                        : "border-slate-800 hover:border-slate-700 text-slate-100"
-                    }`}
-                  >
-                    {i.name}
-                    <span className="text-xs text-slate-500 ml-1.5">
-                      ({i.qtyHave} of {i.qtyNeeded})
-                    </span>
-                  </button>
-                ))}
+                .filter((i) => {
+                  const q = substituteSearch.trim().toLowerCase();
+                  if (!q) return true;
+                  // Also searches whatever catalog item this is linked
+                  // to, not just its own typed name — this is exactly
+                  // the situation the whole feature exists for: several
+                  // differently-named items (old and new tool models,
+                  // say) sharing one generic catalog entry, so finding
+                  // them by that shared name is often more useful than
+                  // needing to already know the specific part number.
+                  const catalogName = i.catalogId ? (catalog.find((c) => c.id === i.catalogId) || {}).name || "" : "";
+                  return `${i.name} ${catalogName}`.toLowerCase().includes(q);
+                })
+                .map((i) => {
+                  const catalogName = i.catalogId ? (catalog.find((c) => c.id === i.catalogId) || {}).name || "" : "";
+                  return (
+                    <button
+                      key={i.id}
+                      onClick={() => linkSubstitute(linkingSubstituteItem, i)}
+                      className={`w-full text-left text-sm rounded-md px-3 py-2 border mb-1.5 ${
+                        linkingSubstituteItem.substituteForItemId === i.id
+                          ? "border-sky-500/50 bg-sky-500/10 text-sky-300"
+                          : "border-slate-800 hover:border-slate-700 text-slate-100"
+                      }`}
+                    >
+                      {i.name}
+                      <span className="text-xs text-slate-500 ml-1.5">
+                        ({i.qtyHave} of {i.qtyNeeded}){catalogName ? ` · ${catalogName}` : ""}
+                      </span>
+                    </button>
+                  );
+                })}
             </div>
           </div>
         </div>
