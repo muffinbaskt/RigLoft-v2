@@ -7532,7 +7532,7 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
 
 function ConfirmDelete({ title, message, confirmLabel = "Delete", onConfirm, onCancel }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" onClick={onCancel}>
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 px-4" onClick={onCancel}>
       <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
         <h3 className="text-slate-100 font-semibold mb-1.5">{title}</h3>
         <p className="text-slate-400 text-sm mb-5">{message}</p>
