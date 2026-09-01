@@ -10282,14 +10282,6 @@ function JobInventory({
               labels={{ All: "All containers" }}
             />
           </div>
-          <div className="flex-1 min-w-0">
-            <Select
-              value={categoryFilter}
-              onChange={setCategoryFilter}
-              options={["All", ...[...categoryOptions].sort((a, b) => a.localeCompare(b))]}
-              labels={{ All: "All categories" }}
-            />
-          </div>
         </div>
         <div className="flex items-center gap-2 mb-4">
           <div className="w-3.5 shrink-0" />
