@@ -895,6 +895,11 @@ function ItemForm({
       const containerName = qtContainerText.trim();
       playSaveChime();
       const { _formKey, ...itemToSave } = item;
+      // Same defensive fix as the regular branch — reading these two
+      // fresh from existingItems rather than this form's own frozen
+      // snapshot, even though Quick Transfer items aren't expected to
+      // ever have either set through this form's own UI.
+      const liveSaved = existingItems.find((i) => i.id === initial.id);
       onSave({
         ...itemToSave,
         qtyNeeded: finalQtyNeeded,
@@ -910,6 +915,8 @@ function ItemForm({
         // Vendor button despite the form appearing to show a link.
         catalogId: effectiveCatalogMatch ? effectiveCatalogMatch.id : null,
         needsTransfer: !!(effectiveCatalogMatch && effectiveCatalogMatch.needsTransfer),
+        substituteForItemId: liveSaved ? liveSaved.substituteForItemId : item.substituteForItemId,
+        assignedTaskIds: liveSaved ? liveSaved.assignedTaskIds : item.assignedTaskIds,
       });
     };
 
@@ -1579,6 +1586,15 @@ function ItemForm({
                 : "red";
 
               const { _formKey, ...itemToSave } = item;
+              // substituteForItemId and assignedTaskIds are managed by
+              // their own separate, immediately-persisted pickers
+              // (Counts toward / Assign) rather than the "type things
+              // then hit Save" flow the rest of this form uses. Reading
+              // them fresh from existingItems here — instead of trusting
+              // this form's own local snapshot, frozen since the moment
+              // it opened — is what stops Save from silently reverting a
+              // link made while the form was still sitting open.
+              const liveSaved = existingItems.find((i) => i.id === initial.id);
               const finalItem = {
                 ...itemToSave,
                 qtyNeeded: finalQtyNeeded,
@@ -1587,6 +1603,8 @@ function ItemForm({
                 serials: finalSerials,
                 status: finalStatus,
                 catalogId: effectiveCatalogMatch ? effectiveCatalogMatch.id : null,
+                substituteForItemId: liveSaved ? liveSaved.substituteForItemId : item.substituteForItemId,
+                assignedTaskIds: liveSaved ? liveSaved.assignedTaskIds : item.assignedTaskIds,
               };
 
               playSaveChime();
