@@ -4977,30 +4977,8 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
               </p>
             ) : (
               <>
-                {photoDocs.length > 0 && (
-                  <div className="grid grid-cols-2 gap-2.5 mb-4">
-                    {photoDocs.map((doc) => (
-                      <div key={doc.id} className="relative group">
-                        <button
-                          onClick={() => setViewingUrl(doc.url)}
-                          className="block w-full aspect-square rounded-lg overflow-hidden border border-slate-800"
-                        >
-                          <img src={doc.url} alt="" className="w-full h-full object-cover" />
-                        </button>
-                        {isEditor && (
-                          <button
-                            onClick={() => setDeleteTarget(doc)}
-                            className="absolute top-1.5 right-1.5 bg-slate-950/80 text-slate-300 hover:text-red-400 rounded-full p-1"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
                 {fileDocs.length > 0 && (
-                  <div className="space-y-2">
+                  <div className="space-y-2 mb-4">
                     {fileDocs.map((doc) => (
                       <div
                         key={doc.id}
@@ -5021,6 +4999,28 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
                             className="text-slate-600 hover:text-red-400 shrink-0"
                           >
                             <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {photoDocs.length > 0 && (
+                  <div className="grid grid-cols-2 gap-2.5 mb-4">
+                    {photoDocs.map((doc) => (
+                      <div key={doc.id} className="relative group">
+                        <button
+                          onClick={() => setViewingUrl(doc.url)}
+                          className="block w-full aspect-square rounded-lg overflow-hidden border border-slate-800"
+                        >
+                          <img src={doc.url} alt="" className="w-full h-full object-cover" />
+                        </button>
+                        {isEditor && (
+                          <button
+                            onClick={() => setDeleteTarget(doc)}
+                            className="absolute top-1.5 right-1.5 bg-slate-950/80 text-slate-300 hover:text-red-400 rounded-full p-1"
+                          >
+                            <X className="w-3.5 h-3.5" />
                           </button>
                         )}
                       </div>
