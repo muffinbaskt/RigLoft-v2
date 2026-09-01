@@ -46,6 +46,7 @@ import {
   Bell,
   AlertTriangle,
   DollarSign,
+  Shuffle,
 } from "lucide-react";
 
 const STORAGE_OPTIONS = [
@@ -306,6 +307,13 @@ function emptyItem(defaultStorage) {
     notes: "",
     backorderQty: 0, // still outstanding from a supplier, set/updated via Receiving
     backorderReceiptDate: null, // date of whichever receipt most recently set backorderQty — protects against an older, already-superseded receipt overwriting it if processed out of order
+    // Points at another item's id, within the same job — "this item's
+    // qty counts toward that item's requirement." Used purely for the
+    // combined Have/Needed display; both items stay fully independent
+    // otherwise (own containers, own serials, own transfer tracking),
+    // since the actual transfer record already lists items separately
+    // and that distinction needs to survive.
+    substituteForItemId: null,
   };
 }
 
@@ -3262,6 +3270,7 @@ function CatalogModal({
     return (
       <CatalogItemForm
         initial={editing}
+        catalog={catalog}
         existingCategories={existingCategories}
         existingVendors={existingVendors}
         onSave={(item) => {
@@ -3269,8 +3278,7 @@ function CatalogModal({
           setEditing(null);
         }}
         onCancel={() => setEditing(null)}
-      />
-    );
+      />    );
   }
 
   if (bulkAdding) {
@@ -7153,7 +7161,7 @@ function SuggestNewItemModal({ job, managerName, onClose }) {
   );
 }
 
-function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTasks = [], onToggleSelect, onEdit, onDelete, onViewSerials, onSuggestEdit, onOpenContainer, onAssignItem, onMergeItem, onViewVendor, onViewReceipt }) {
+function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTasks = [], onToggleSelect, onEdit, onDelete, onViewSerials, onSuggestEdit, onOpenContainer, onAssignItem, onMergeItem, onViewVendor, onViewReceipt, combinedInfo, substituteTargetName, onLinkSubstitute }) {
   const handleCardClick = () => {
     if (selectMode) {
       onToggleSelect(item.id);
@@ -7161,6 +7169,15 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
       onSuggestEdit(item);
     }
   };
+
+  // Display-only — the underlying item.qtyHave and item.status are never
+  // touched by this, so containers, serials, and transfer tracking all
+  // stay exactly as accurate as they always were. This only changes what
+  // the card shows when another item has been linked as counting toward
+  // this one's requirement (a substitute tool model, say).
+  const displayHave = combinedInfo ? combinedInfo.qtyHave : item.qtyHave;
+  const displayStatus =
+    displayHave >= item.qtyNeeded ? "green" : displayHave > 0 ? "yellow" : "red";
 
   return (
     <div
@@ -7191,14 +7208,22 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
             />
           )}
           <div className="mt-1">
-            <StatusDot status={item.status} />
+            <StatusDot status={displayStatus} />
           </div>
           <div className="min-w-0 flex-1">
             <p className="font-semibold text-slate-100 truncate">{item.name}</p>
             <p className="text-sm text-slate-500">
-              Have {item.qtyHave} of {item.qtyNeeded}
+              Have {displayHave} of {item.qtyNeeded}
               {item.qtyUnit ? ` ${item.qtyUnit}` : ""} needed
             </p>
+            {combinedInfo && (
+              <p className="text-xs text-sky-400 mt-0.5">
+                🔀 Combined with {combinedInfo.contributors.map((c) => `${c.name} (${c.qtyHave})`).join(", ")}
+              </p>
+            )}
+            {substituteTargetName && (
+              <p className="text-xs text-sky-400 mt-0.5">↳ Counts toward "{substituteTargetName}"</p>
+            )}
             <p className="text-xs text-slate-600 mt-0.5">
               {item.catalogId
                 ? `🔗 ${catalog.find((c) => c.id === item.catalogId)?.name || "Linked catalog item"}`
@@ -7207,16 +7232,16 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
             <div className="mt-1.5 h-1.5 w-full max-w-[160px] rounded-full bg-slate-800 overflow-hidden">
               <div
                 className={`h-full rounded-full ${
-                  item.qtyHave >= item.qtyNeeded
+                  displayHave >= item.qtyNeeded
                     ? "bg-emerald-500"
-                    : item.qtyHave > 0
+                    : displayHave > 0
                     ? "bg-amber-400"
                     : "bg-red-500"
                 }`}
                 style={{
                   width: `${
                     item.qtyNeeded > 0
-                      ? Math.min(100, (item.qtyHave / item.qtyNeeded) * 100)
+                      ? Math.min(100, (displayHave / item.qtyNeeded) * 100)
                       : 100
                   }%`,
                 }}
@@ -7305,6 +7330,17 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
             className="text-xs rounded-full px-2.5 py-1 border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-600 flex items-center gap-1"
           >
             🧾 Receipt
+          </button>
+        )}
+        {isEditor && onLinkSubstitute && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onLinkSubstitute(item);
+            }}
+            className="text-xs rounded-full px-2.5 py-1 border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-600 flex items-center gap-1"
+          >
+            🔀 {item.substituteForItemId ? "Change" : "Counts toward..."}
           </button>
         )}
         {(() => {
@@ -8964,6 +9000,7 @@ function JobInventory({
   const applyVendorOverride = (catalogId, changes) =>
     setVendorHistoryOverrides((prev) => ({ ...prev, [catalogId]: changes }));
   const [viewingReceiptFor, setViewingReceiptFor] = useState(null);
+  const [linkingSubstituteItem, setLinkingSubstituteItem] = useState(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [containersOpen, setContainersOpen] = useState(false);
@@ -9471,6 +9508,46 @@ function JobInventory({
   const handleViewReceipt = (item) => {
     if (!item.sourceReceipt) return;
     setViewingReceiptFor(item.sourceReceipt);
+  };
+
+  // Items that point at another item via substituteForItemId get their
+  // qty folded into that item's displayed Have/Needed — purely a display
+  // combination. Containers, serials, and transfer tracking all stay
+  // fully separate per item underneath, since the actual transfer record
+  // already lists each item on its own and that distinction has to
+  // survive — this is only about the dashboard correctly showing the
+  // requirement as satisfied when it's being filled by a mix of two
+  // interchangeable things (an old and new tool model, say).
+  const combinedTotals = {}; // targetItemId -> { qtyHave, contributors: [{id, name, qtyHave}] }
+  items.forEach((i) => {
+    if (!i.substituteForItemId) return;
+    const target = items.find((t) => t.id === i.substituteForItemId);
+    if (!target) return;
+    if (!combinedTotals[target.id]) {
+      combinedTotals[target.id] = { qtyHave: target.qtyHave, contributors: [] };
+    }
+    combinedTotals[target.id].qtyHave += i.qtyHave;
+    combinedTotals[target.id].contributors.push({ id: i.id, name: i.name, qtyHave: i.qtyHave });
+  });
+
+  const linkSubstitute = (item, targetItem) => {
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      items: (prevJob.items || []).map((i) =>
+        i.id === item.id ? { ...i, substituteForItemId: targetItem ? targetItem.id : null } : i
+      ),
+      activityLog: [
+        {
+          id: uniqueId(),
+          time: timeStamp(),
+          message: targetItem
+            ? `"${item.name}" now counts toward "${targetItem.name}"'s requirement`
+            : `"${item.name}" no longer counts toward another item's requirement`,
+        },
+        ...prevJob.activityLog,
+      ].slice(0, 50),
+    }));
+    setLinkingSubstituteItem(null);
   };
 
   const requestDeleteItem = (item) => {
@@ -10396,6 +10473,9 @@ function JobInventory({
                             onMergeItem={handleMergeAction}
                             onViewVendor={handleViewVendor}
                             onViewReceipt={handleViewReceipt}
+                            combinedInfo={combinedTotals[item.id]}
+                            substituteTargetName={item.substituteForItemId ? (items.find((i) => i.id === item.substituteForItemId) || {}).name : null}
+                            onLinkSubstitute={setLinkingSubstituteItem}
                             catalog={catalog}
                           />
                         ))}
@@ -10425,6 +10505,9 @@ function JobInventory({
                 onMergeItem={handleMergeAction}
                 onViewVendor={handleViewVendor}
                 onViewReceipt={handleViewReceipt}
+                combinedInfo={combinedTotals[item.id]}
+                substituteTargetName={item.substituteForItemId ? (items.find((i) => i.id === item.substituteForItemId) || {}).name : null}
+                onLinkSubstitute={setLinkingSubstituteItem}
                 catalog={catalog}
               />
             ))}
@@ -10818,6 +10901,60 @@ function JobInventory({
 
       {viewingReceiptFor && (
         <SourceReceiptModal sourceReceipt={viewingReceiptFor} onClose={() => setViewingReceiptFor(null)} />
+      )}
+
+      {linkingSubstituteItem && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8"
+          onClick={() => setLinkingSubstituteItem(null)}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold text-sm truncate">
+                "{linkingSubstituteItem.name}" counts toward...
+              </h3>
+              <button onClick={() => setLinkingSubstituteItem(null)} className="text-slate-400 hover:text-slate-200 shrink-0">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-500 px-5 pt-3">
+              Pick another item on this job — its Have total will include this item's quantity too,
+              so the requirement shows as satisfied even though the actual units are tracked
+              separately (own containers, own serials, own transfers).
+            </p>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {linkingSubstituteItem.substituteForItemId && (
+                <button
+                  onClick={() => linkSubstitute(linkingSubstituteItem, null)}
+                  className="w-full text-left text-sm rounded-md px-3 py-2 border border-red-800/40 text-red-400 hover:bg-red-500/10 mb-2"
+                >
+                  Stop counting toward another item
+                </button>
+              )}
+              {items
+                .filter((i) => i.id !== linkingSubstituteItem.id && i.substituteForItemId !== linkingSubstituteItem.id)
+                .map((i) => (
+                  <button
+                    key={i.id}
+                    onClick={() => linkSubstitute(linkingSubstituteItem, i)}
+                    className={`w-full text-left text-sm rounded-md px-3 py-2 border mb-1.5 ${
+                      linkingSubstituteItem.substituteForItemId === i.id
+                        ? "border-sky-500/50 bg-sky-500/10 text-sky-300"
+                        : "border-slate-800 hover:border-slate-700 text-slate-100"
+                    }`}
+                  >
+                    {i.name}
+                    <span className="text-xs text-slate-500 ml-1.5">
+                      ({i.qtyHave} of {i.qtyNeeded})
+                    </span>
+                  </button>
+                ))}
+            </div>
+          </div>
+        </div>
       )}
 
       {suggestEditTarget && (
