@@ -14568,6 +14568,7 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
   // Anything scanned after the first page — kept as supporting reference
   // photos on the saved list, same as manually-attached ones.
   const [extraScanImageUrls, setExtraScanImageUrls] = useState([]);
+  const [viewingPhoto, setViewingPhoto] = useState(null);
   const fileInputRef = useRef(null);
   const anotherPageInputRef = useRef(null);
 
@@ -14823,6 +14824,29 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
               <p className="text-xs text-slate-500 mb-3">
                 Check every line before saving — nothing's committed yet.
               </p>
+              {scanImageUrl && (
+                <div className="mb-4">
+                  <button
+                    onClick={() => setViewingPhoto(scanImageUrl)}
+                    className="w-full rounded-lg overflow-hidden border border-slate-800"
+                  >
+                    <img src={scanImageUrl} alt="Scanned Love List" className="w-full max-h-48 object-cover" />
+                  </button>
+                  {extraScanImageUrls.length > 0 && (
+                    <div className="grid grid-cols-4 gap-1.5 mt-1.5">
+                      {extraScanImageUrls.map((url, i) => (
+                        <button
+                          key={i}
+                          onClick={() => setViewingPhoto(url)}
+                          className="rounded-md overflow-hidden border border-slate-800"
+                        >
+                          <img src={url} alt={`Page ${i + 2}`} className="w-full h-14 object-cover" />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="space-y-2">
                 {reviewItems.map((item) => (
                   <div key={item.id} className="border border-slate-800 rounded-lg p-2.5 bg-slate-900/60">
@@ -14986,6 +15010,21 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
                 ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {viewingPhoto && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
+          onClick={() => setViewingPhoto(null)}
+        >
+          <button
+            onClick={() => setViewingPhoto(null)}
+            className="absolute top-4 right-4 text-slate-300 hover:text-white"
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <ZoomableImage key={viewingPhoto} src={viewingPhoto} alt="Scanned Love List" />
         </div>
       )}
     </div>
