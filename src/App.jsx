@@ -19851,7 +19851,7 @@ function convertQtyForUnit(qty, fromUnit, toUnit) {
   const to = norm(toUnit);
   if (from === to) return qty;
   const isDozen = (u) => ["doz", "dozen", "dz"].includes(u);
-  const isEach = (u) => ["each", "ea", "ea.", "pc", "pcs"].includes(u);
+  const isEach = (u) => ["each", "ea", "ea.", "pc", "pcs", "pr", "pr.", "pair", "pairs"].includes(u);
   if (isEach(from) && isDozen(to)) return qty / 12;
   if (isDozen(from) && isEach(to)) return qty * 12;
   return qty;
