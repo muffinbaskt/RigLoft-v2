@@ -20634,6 +20634,12 @@ function mergeJobItems(items, sourceId, targetId) {
         status: computeJobItemStatus(newTargetHave, target.qtyNeeded),
         ordered: true,
         received: computeJobItemReceived(newTargetHave, target.qtyNeeded),
+        // Carried over from whatever's being absorbed in, even though the
+        // target itself was never "Imported" — the receipt reference
+        // would otherwise vanish the moment the source item (which is
+        // often deleted outright once fully merged) disappears, even
+        // though some of its actual quantity is now sitting right here.
+        sourceReceipt: source.sourceReceipt || target.sourceReceipt,
       };
     if (idx === sourceIdx)
       return {
@@ -20669,7 +20675,15 @@ function mergeLoveListItems(items, sourceId, targetId) {
 
   const newSourceHave = sourceHave - absorb;
   let nextItems = items.map((i, idx) => {
-    if (idx === targetIdx) return { ...target, qtyHave: targetHave + absorbInTargetUnits };
+    if (idx === targetIdx)
+      return {
+        ...target,
+        qtyHave: targetHave + absorbInTargetUnits,
+        // Same carry-over as the Job version — otherwise this reference
+        // vanishes the moment the source item gets deleted outright,
+        // even though some of its quantity now lives here.
+        sourceReceipt: source.sourceReceipt || target.sourceReceipt,
+      };
     if (idx === sourceIdx)
       return {
         ...source,
