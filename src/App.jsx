@@ -726,6 +726,13 @@ function ItemForm({
   // first.
   suggestMode = false,
   onSuggest,
+  // Both optional, and only meaningful for an existing item on a regular
+  // (non-quick-transfer, non-suggest) edit — these open pickers that live
+  // one level up, at the job screen itself, since that's where the full
+  // items list and worker roster actually are.
+  onLinkSubstitute,
+  onAssignWorker,
+  workerTasks = [],
 }) {
   const [item, setItem] = useState(
     migrateItemContainers({
@@ -1152,6 +1159,48 @@ function ItemForm({
                 )}
               </div>
           </div>
+
+          {!suggestMode && initial.id && (onLinkSubstitute || onAssignWorker) && (
+            <div className="border border-slate-800 rounded-md p-3 space-y-2">
+              {onLinkSubstitute && (
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs text-slate-500 truncate">
+                    {item.substituteForItemId
+                      ? `🔀 Counts toward "${
+                          (existingItems.find((i) => i.id === item.substituteForItemId) || {}).name || "another item"
+                        }"`
+                      : "Not counting toward another item"}
+                  </p>
+                  <button
+                    onClick={() => onLinkSubstitute(item)}
+                    className="text-xs text-amber-400 hover:text-amber-300 underline underline-offset-2 shrink-0"
+                  >
+                    {item.substituteForItemId ? "Change" : "Link one"}
+                  </button>
+                </div>
+              )}
+              {onAssignWorker && (
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs text-slate-500 truncate">
+                    {(() => {
+                      const assigned = (item.assignedTaskIds || [])
+                        .map((tid) => workerTasks.find((t) => t.id === tid))
+                        .filter(Boolean);
+                      return assigned.length > 0
+                        ? `👤 ${assigned.map((t) => t.workerName).join(", ")}`
+                        : "Not assigned to a worker";
+                    })()}
+                  </p>
+                  <button
+                    onClick={() => onAssignWorker(item)}
+                    className="text-xs text-amber-400 hover:text-amber-300 underline underline-offset-2 shrink-0"
+                  >
+                    {(item.assignedTaskIds || []).length > 0 ? "Change" : "Assign"}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -7332,22 +7381,15 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
             🧾 Receipt
           </button>
         )}
-        {isEditor && onLinkSubstitute && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onLinkSubstitute(item);
-            }}
-            className="text-xs rounded-full px-2.5 py-1 border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-600 flex items-center gap-1"
-          >
-            🔀 {item.substituteForItemId ? "Change" : "Counts toward..."}
-          </button>
-        )}
         {(() => {
           const assignedTaskIds = item.assignedTaskIds || [];
           const assignedTasks = assignedTaskIds
             .map((tid) => workerTasks.find((t) => t.id === tid))
             .filter(Boolean);
+          // The "+ Assign" / "+ Add worker" action itself moved into the
+          // edit form to keep the card less cluttered — already-assigned
+          // workers still show here since that's status worth seeing at
+          // a glance, not an action.
           return (
             <>
               {assignedTasks.map((task) => {
@@ -7366,17 +7408,6 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
                   </button>
                 );
               })}
-              {isEditor && !selectMode && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onAssignItem(item);
-                  }}
-                  className="text-xs rounded-full px-2.5 py-1 border border-slate-700 text-slate-500 hover:text-slate-300"
-                >
-                  {assignedTasks.length > 0 ? "+ Add worker" : "+ Assign"}
-                </button>
-              )}
             </>
           );
         })()}
@@ -9001,6 +9032,7 @@ function JobInventory({
     setVendorHistoryOverrides((prev) => ({ ...prev, [catalogId]: changes }));
   const [viewingReceiptFor, setViewingReceiptFor] = useState(null);
   const [linkingSubstituteItem, setLinkingSubstituteItem] = useState(null);
+  const [substituteSearch, setSubstituteSearch] = useState("");
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [containersOpen, setContainersOpen] = useState(false);
@@ -10475,7 +10507,6 @@ function JobInventory({
                             onViewReceipt={handleViewReceipt}
                             combinedInfo={combinedTotals[item.id]}
                             substituteTargetName={item.substituteForItemId ? (items.find((i) => i.id === item.substituteForItemId) || {}).name : null}
-                            onLinkSubstitute={setLinkingSubstituteItem}
                             catalog={catalog}
                           />
                         ))}
@@ -10507,7 +10538,6 @@ function JobInventory({
                 onViewReceipt={handleViewReceipt}
                 combinedInfo={combinedTotals[item.id]}
                 substituteTargetName={item.substituteForItemId ? (items.find((i) => i.id === item.substituteForItemId) || {}).name : null}
-                onLinkSubstitute={setLinkingSubstituteItem}
                 catalog={catalog}
               />
             ))}
@@ -10556,6 +10586,9 @@ function JobInventory({
           catalog={catalog}
           onSaveCatalogItem={onSaveCatalogItem}
           isQuickTransfer={!!job.isQuickTransfer}
+          onLinkSubstitute={setLinkingSubstituteItem}
+          onAssignWorker={setAssigningItem}
+          workerTasks={workerTasks}
         />
       )}
 
@@ -10905,8 +10938,11 @@ function JobInventory({
 
       {linkingSubstituteItem && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8"
-          onClick={() => setLinkingSubstituteItem(null)}
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4 py-8"
+          onClick={() => {
+            setLinkingSubstituteItem(null);
+            setSubstituteSearch("");
+          }}
         >
           <div
             className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col"
@@ -10916,7 +10952,13 @@ function JobInventory({
               <h3 className="text-slate-100 font-semibold text-sm truncate">
                 "{linkingSubstituteItem.name}" counts toward...
               </h3>
-              <button onClick={() => setLinkingSubstituteItem(null)} className="text-slate-400 hover:text-slate-200 shrink-0">
+              <button
+                onClick={() => {
+                  setLinkingSubstituteItem(null);
+                  setSubstituteSearch("");
+                }}
+                className="text-slate-400 hover:text-slate-200 shrink-0"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -10925,6 +10967,15 @@ function JobInventory({
               so the requirement shows as satisfied even though the actual units are tracked
               separately (own containers, own serials, own transfers).
             </p>
+            <div className="px-5 pt-3 shrink-0">
+              <input
+                autoFocus
+                value={substituteSearch}
+                onChange={(e) => setSubstituteSearch(e.target.value)}
+                placeholder="Search items on this job..."
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
             <div className="flex-1 overflow-y-auto px-5 py-4">
               {linkingSubstituteItem.substituteForItemId && (
                 <button
@@ -10936,6 +10987,7 @@ function JobInventory({
               )}
               {items
                 .filter((i) => i.id !== linkingSubstituteItem.id && i.substituteForItemId !== linkingSubstituteItem.id)
+                .filter((i) => i.name.toLowerCase().includes(substituteSearch.trim().toLowerCase()))
                 .map((i) => (
                   <button
                     key={i.id}
