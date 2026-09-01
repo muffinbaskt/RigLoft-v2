@@ -1162,43 +1162,58 @@ function ItemForm({
 
           {!suggestMode && initial.id && (onLinkSubstitute || onAssignWorker) && (
             <div className="border border-slate-800 rounded-md p-3 space-y-2">
-              {onLinkSubstitute && (
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs text-slate-500 truncate">
-                    {item.substituteForItemId
-                      ? `🔀 Counts toward "${
-                          (existingItems.find((i) => i.id === item.substituteForItemId) || {}).name || "another item"
-                        }"`
-                      : "Not counting toward another item"}
-                  </p>
-                  <button
-                    onClick={() => onLinkSubstitute(item)}
-                    className="text-xs text-amber-400 hover:text-amber-300 underline underline-offset-2 shrink-0"
-                  >
-                    {item.substituteForItemId ? "Change" : "Link one"}
-                  </button>
-                </div>
-              )}
-              {onAssignWorker && (
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs text-slate-500 truncate">
-                    {(() => {
-                      const assigned = (item.assignedTaskIds || [])
-                        .map((tid) => workerTasks.find((t) => t.id === tid))
-                        .filter(Boolean);
-                      return assigned.length > 0
-                        ? `👤 ${assigned.map((t) => t.workerName).join(", ")}`
-                        : "Not assigned to a worker";
-                    })()}
-                  </p>
-                  <button
-                    onClick={() => onAssignWorker(item)}
-                    className="text-xs text-amber-400 hover:text-amber-300 underline underline-offset-2 shrink-0"
-                  >
-                    {(item.assignedTaskIds || []).length > 0 ? "Change" : "Assign"}
-                  </button>
-                </div>
-              )}
+              {/* Read from existingItems, not the form's own local item
+                  state — linking or assigning happens immediately, from a
+                  picker one level up, while this form stays open. The
+                  form's own state was captured once when it opened and
+                  never finds out about that external change on its own,
+                  so checking here instead of item.* is what makes the
+                  result actually show up right away instead of looking
+                  like the link silently failed. */}
+              {onLinkSubstitute &&
+                (() => {
+                  const liveItem = existingItems.find((i) => i.id === initial.id) || item;
+                  return (
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs text-slate-500 truncate">
+                        {liveItem.substituteForItemId
+                          ? `🔀 Counts toward "${
+                              (existingItems.find((i) => i.id === liveItem.substituteForItemId) || {}).name ||
+                              "another item"
+                            }"`
+                          : "Not counting toward another item"}
+                      </p>
+                      <button
+                        onClick={() => onLinkSubstitute(liveItem)}
+                        className="text-xs text-amber-400 hover:text-amber-300 underline underline-offset-2 shrink-0"
+                      >
+                        {liveItem.substituteForItemId ? "Change" : "Link one"}
+                      </button>
+                    </div>
+                  );
+                })()}
+              {onAssignWorker &&
+                (() => {
+                  const liveItem = existingItems.find((i) => i.id === initial.id) || item;
+                  const assigned = (liveItem.assignedTaskIds || [])
+                    .map((tid) => workerTasks.find((t) => t.id === tid))
+                    .filter(Boolean);
+                  return (
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs text-slate-500 truncate">
+                        {assigned.length > 0
+                          ? `👤 ${assigned.map((t) => t.workerName).join(", ")}`
+                          : "Not assigned to a worker"}
+                      </p>
+                      <button
+                        onClick={() => onAssignWorker(liveItem)}
+                        className="text-xs text-amber-400 hover:text-amber-300 underline underline-offset-2 shrink-0"
+                      >
+                        {assigned.length > 0 ? "Change" : "Assign"}
+                      </button>
+                    </div>
+                  );
+                })()}
             </div>
           )}
 
@@ -7219,14 +7234,17 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
     }
   };
 
-  // Display-only — the underlying item.qtyHave and item.status are never
-  // touched by this, so containers, serials, and transfer tracking all
-  // stay exactly as accurate as they always were. This only changes what
-  // the card shows when another item has been linked as counting toward
-  // this one's requirement (a substitute tool model, say).
+  // Display-only — the underlying item.qtyHave, item.qtyNeeded, and
+  // item.status are never touched by this, so containers, serials, and
+  // transfer tracking all stay exactly as accurate as they always were.
+  // Both sides of a substitute relationship show the SAME consolidated
+  // Have/Needed — a substitute item's own qtyNeeded is usually 0 or
+  // meaningless on its own, so its card uses the shared target's real
+  // requirement instead of showing something like "5 of 0".
+  const displayNeeded = combinedInfo ? combinedInfo.qtyNeeded : item.qtyNeeded;
   const displayHave = combinedInfo ? combinedInfo.qtyHave : item.qtyHave;
   const displayStatus =
-    displayHave >= item.qtyNeeded ? "green" : displayHave > 0 ? "yellow" : "red";
+    displayHave >= displayNeeded ? "green" : displayHave > 0 ? "yellow" : "red";
 
   return (
     <div
@@ -7262,10 +7280,10 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
           <div className="min-w-0 flex-1">
             <p className="font-semibold text-slate-100 truncate">{item.name}</p>
             <p className="text-sm text-slate-500">
-              Have {displayHave} of {item.qtyNeeded}
+              Have {displayHave} of {displayNeeded}
               {item.qtyUnit ? ` ${item.qtyUnit}` : ""} needed
             </p>
-            {combinedInfo && (
+            {combinedInfo && combinedInfo.isTarget && combinedInfo.contributors.length > 0 && (
               <p className="text-xs text-sky-400 mt-0.5">
                 🔀 Combined with {combinedInfo.contributors.map((c) => `${c.name} (${c.qtyHave})`).join(", ")}
               </p>
@@ -7281,7 +7299,7 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
             <div className="mt-1.5 h-1.5 w-full max-w-[160px] rounded-full bg-slate-800 overflow-hidden">
               <div
                 className={`h-full rounded-full ${
-                  displayHave >= item.qtyNeeded
+                  displayHave >= displayNeeded
                     ? "bg-emerald-500"
                     : displayHave > 0
                     ? "bg-amber-400"
@@ -7289,8 +7307,8 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
                 }`}
                 style={{
                   width: `${
-                    item.qtyNeeded > 0
-                      ? Math.min(100, (displayHave / item.qtyNeeded) * 100)
+                    displayNeeded > 0
+                      ? Math.min(100, (displayHave / displayNeeded) * 100)
                       : 100
                   }%`,
                 }}
@@ -9550,16 +9568,43 @@ function JobInventory({
   // survive — this is only about the dashboard correctly showing the
   // requirement as satisfied when it's being filled by a mix of two
   // interchangeable things (an old and new tool model, say).
-  const combinedTotals = {}; // targetItemId -> { qtyHave, contributors: [{id, name, qtyHave}] }
+  //
+  // Both sides of the relationship get the SAME consolidated numbers —
+  // the target's own real qtyNeeded, and the combined qtyHave — not just
+  // the target. A substitute item's own qtyNeeded is usually 0 or
+  // meaningless on its own (it doesn't have an independent requirement),
+  // so showing its bare "X of 0" looks broken; showing the shared total
+  // on both cards makes it clear they're satisfying one requirement
+  // together.
+  const combinedTotals = {}; // itemId -> { qtyHave, qtyNeeded, contributors, isTarget }
   items.forEach((i) => {
     if (!i.substituteForItemId) return;
     const target = items.find((t) => t.id === i.substituteForItemId);
     if (!target) return;
     if (!combinedTotals[target.id]) {
-      combinedTotals[target.id] = { qtyHave: target.qtyHave, contributors: [] };
+      combinedTotals[target.id] = {
+        qtyHave: target.qtyHave,
+        qtyNeeded: target.qtyNeeded,
+        contributors: [],
+        isTarget: true,
+      };
     }
     combinedTotals[target.id].qtyHave += i.qtyHave;
     combinedTotals[target.id].contributors.push({ id: i.id, name: i.name, qtyHave: i.qtyHave });
+  });
+  // Mirrored onto each contributor after the totals above are fully
+  // settled, so a contributor's own card shows the identical combined
+  // number the target shows — same qtyHave, same qtyNeeded — just
+  // without re-listing itself as one of the "combined with" names.
+  Object.values(combinedTotals).forEach((info) => {
+    info.contributors.forEach((c) => {
+      combinedTotals[c.id] = {
+        qtyHave: info.qtyHave,
+        qtyNeeded: info.qtyNeeded,
+        contributors: info.contributors.filter((x) => x.id !== c.id),
+        isTarget: false,
+      };
+    });
   });
 
   const linkSubstitute = (item, targetItem) => {
