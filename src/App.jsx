@@ -21463,12 +21463,23 @@ function ReceiptArchive({ onGoHome }) {
     // whatever's current — re-linking by hand always "fixed" it.
     const items = (data.items || []).map((it) => {
       const rawName = it.name || "";
-      const match = rawName.trim() ? findCatalogMatch(rawName, matchCatalog) : null;
+      // Matched against the corrected name when one exists, not the raw
+      // OCR text — a name-memory correction can turn something like
+      // "HOUG 12230 Cutter Annular 15/16 Hss Slugger" into "Mag Drill
+      // Bit, 15/16"", and the corrected version is what actually
+      // resembles the catalog entry. Matching against the untouched raw
+      // text meant a part that had never been manually linked before
+      // (and so had no learned alias to fall back on) would show "No
+      // catalog match" even though its corrected name would clearly
+      // match — exactly why editing the name and triggering a re-check
+      // always "fixed" it.
       const remembered = nameMemory[normalizeText(rawName)];
+      const effectiveName = remembered || rawName;
+      const match = effectiveName.trim() ? findCatalogMatch(effectiveName, matchCatalog) : null;
       return {
         id: uniqueId(),
         rawName,
-        name: remembered || rawName,
+        name: effectiveName,
         catalogId: match ? match.id : null,
         // Set once the vendor-spend record for this line actually gets
         // created below — this is what lets a later correction find and
@@ -22209,15 +22220,24 @@ function ReceivingApp({ onGoHome }) {
 
     const lines = (data.items || []).map((it) => {
       const rawName = it.name || "";
-      const match = findCatalogMatch(rawName, catalog);
+      // Matched against the corrected name when one exists, not the raw
+      // OCR text — same fix as the Archive version of this same
+      // function. A name-memory correction can turn something like
+      // "HOUG 12230 Cutter Annular 15/16 Hss Slugger" into "Mag Drill
+      // Bit, 15/16"", and the corrected version is what actually
+      // resembles the catalog entry — matching against the untouched
+      // raw text meant a part with no learned alias yet would show "No
+      // catalog match" even though its corrected name would clearly
+      // match.
       const remembered = nameMemory[normalizeText(rawName)];
+      const suggestedName = remembered || rawName;
+      const match = findCatalogMatch(suggestedName, catalog);
       // The catalog match drives storage/gang/category defaults, but
       // never the display name itself — plenty of catalog entries are
       // shared across multiple real variants (different sizes sharing
       // the same gang/storage) with no reliable flag distinguishing
       // that, so the only safe default is the raw OCR text, unless
       // this exact SKU string has already been confirmed once before.
-      const suggestedName = remembered || rawName;
       return {
         id: uniqueId(),
         rawName,
