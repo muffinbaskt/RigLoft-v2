@@ -6452,8 +6452,15 @@ function buildPickListHtml(jobName, groups, sortedGroupKeys, groupOption) {
 function PickListModal({ jobName, items, catalog = [], onClose }) {
   const [groupOption, setGroupOption] = useState("gang");
   const [outstandingOnly, setOutstandingOnly] = useState(false);
+  const [orderedFilter, setOrderedFilter] = useState("all"); // "all" | "exclude" | "only"
 
-  const filteredItems = outstandingOnly ? items.filter((i) => i.status !== "green") : items;
+  const filteredItems = items
+    .filter((i) => (outstandingOnly ? i.status !== "green" : true))
+    .filter((i) => {
+      if (orderedFilter === "exclude") return !i.ordered;
+      if (orderedFilter === "only") return !!i.ordered;
+      return true;
+    });
 
   const vendorFor = (item) => {
     const match = getEffectiveCatalogMatch(item, catalog);
@@ -6574,6 +6581,8 @@ function PickListModal({ jobName, items, catalog = [], onClose }) {
             <p className="text-xs text-slate-500">
               {jobName} · {filteredItems.length} item{filteredItems.length === 1 ? "" : "s"}
               {outstandingOnly ? " (partial or none only)" : ""}
+              {orderedFilter === "exclude" ? " (excluding ordered)" : ""}
+              {orderedFilter === "only" ? " (ordered only)" : ""}
             </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
@@ -6596,6 +6605,18 @@ function PickListModal({ jobName, items, catalog = [], onClose }) {
               <option value="none">Don't group</option>
             </select>
           </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Ordered items</label>
+            <select
+              value={orderedFilter}
+              onChange={(e) => setOrderedFilter(e.target.value)}
+              className="w-full appearance-none bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            >
+              <option value="all">Include ordered items</option>
+              <option value="exclude">Exclude items already ordered</option>
+              <option value="only">Ordered items only</option>
+            </select>
+          </div>
           <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -6610,7 +6631,11 @@ function PickListModal({ jobName, items, catalog = [], onClose }) {
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {filteredItems.length === 0 ? (
             <p className="text-sm text-slate-500 text-center py-10">
-              {outstandingOnly
+              {orderedFilter === "only"
+                ? "Nothing has been marked ordered yet."
+                : orderedFilter === "exclude" && items.length > 0
+                ? "Everything left is already marked ordered."
+                : outstandingOnly
                 ? "Nothing partial or outstanding — everything in this job is complete."
                 : "This job doesn't have any items yet."}
             </p>
