@@ -21384,6 +21384,140 @@ function BackorderDashboard({ onGoHome }) {
 // A simple, searchable photo log for receipts you just want on record —
 // no line items, no target, no approval step. Scan it, and it's saved;
 // the only thing you can do afterward is search and look back at it.
+// A clean, printer-friendly rendering of a single archived receipt —
+// vendor info, the original photo (if one was captured), and the
+// recognized line items in a real table — for handing to a bookkeeper
+// or filing on paper. Same "print just this one element" technique as
+// PrintableLoveListModal: everything else on the page is hidden for
+// print, only the print area shows.
+function PrintableReceiptModal({ entry, onClose }) {
+  const items = entry.items || [];
+  const total = items.reduce(
+    (sum, it) => sum + (Number(it.unitPrice) || 0) * (Number(it.shippedQty) || 0),
+    0
+  );
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/70 flex items-center justify-center px-4 py-8 print:static print:block print:bg-white print:p-0">
+      <style>{`
+        @media print {
+          body * {
+            visibility: hidden;
+            height: 0 !important;
+            overflow: hidden !important;
+          }
+          #receipt-print-area, #receipt-print-area * {
+            visibility: visible;
+            height: auto !important;
+            overflow: visible !important;
+          }
+          #receipt-print-area {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 0.5in;
+          }
+        }
+      `}</style>
+      <div className="bg-white text-slate-900 w-full max-w-2xl rounded-lg max-h-full flex flex-col print:static print:block print:max-w-none print:rounded-none print:max-h-none">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 shrink-0 print:hidden">
+          <h3 className="font-semibold text-base">Print preview</h3>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => window.print()}
+              className="text-sm rounded-md px-3 py-1.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 flex items-center gap-1.5"
+            >
+              <Printer className="w-4 h-4" />
+              Print
+            </button>
+            <button onClick={onClose} className="text-slate-500 hover:text-slate-800">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+        <div id="receipt-print-area" className="p-6 overflow-y-auto print:overflow-visible">
+          <h2 className="text-xl font-bold mb-1">{entry.vendor || "Unknown vendor"}</h2>
+          {entry.vendorAddress && (
+            <p className="text-sm text-slate-600 mb-1">{entry.vendorAddress}</p>
+          )}
+          <p className="text-sm text-slate-600 mb-5">
+            {[
+              entry.receiptDate && `Date: ${entry.receiptDate}`,
+              entry.poNumber && `PO: ${entry.poNumber}`,
+            ]
+              .filter(Boolean)
+              .join(" · ") || "\u00A0"}
+          </p>
+
+          {entry.photoUrl && (
+            <img
+              src={entry.photoUrl}
+              alt="Receipt"
+              className="w-full max-h-[400px] object-contain border border-slate-300 rounded mb-5 print:max-h-[3.5in]"
+            />
+          )}
+
+          {items.length === 0 ? (
+            <p className="text-sm text-slate-500">No line items recognized on this receipt.</p>
+          ) : (
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b-2 border-slate-900">
+                  <th className="text-left py-2 pr-2">Item</th>
+                  <th className="text-right py-2 pr-2 whitespace-nowrap">Qty</th>
+                  <th className="text-right py-2 pr-2 whitespace-nowrap">Unit price</th>
+                  <th className="text-right py-2 whitespace-nowrap">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((it) => {
+                  const lineTotal = (Number(it.unitPrice) || 0) * (Number(it.shippedQty) || 0);
+                  return (
+                    <tr key={it.id} className="border-b border-slate-300">
+                      <td className="py-2 pr-2 align-top">
+                        {it.name}
+                        {it.backorderQty > 0 && (
+                          <span className="text-slate-500"> ({it.backorderQty} backorder)</span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-2 align-top text-right whitespace-nowrap">
+                        {it.shippedQty || 0}
+                        {it.unit && it.unit.toLowerCase() !== "each" ? ` ${it.unit}` : ""}
+                      </td>
+                      <td className="py-2 pr-2 align-top text-right whitespace-nowrap">
+                        {it.unitPrice > 0 ? `$${Number(it.unitPrice).toFixed(2)}` : "—"}
+                      </td>
+                      <td className="py-2 align-top text-right whitespace-nowrap">
+                        {lineTotal > 0 ? `$${lineTotal.toFixed(2)}` : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              {total > 0 && (
+                <tfoot>
+                  <tr>
+                    <td colSpan={3} className="pt-3 text-right font-semibold">
+                      Total
+                    </td>
+                    <td className="pt-3 text-right font-semibold whitespace-nowrap">
+                      ${total.toFixed(2)}
+                    </td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          )}
+
+          <p className="text-xs text-slate-400 mt-6">
+            Archived {formatTaskTimestamp(entry.archivedAt)}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ReceiptArchive({ onGoHome }) {
   const [entries, setEntries] = useState([]);
   const [catalog, setCatalog] = useState([]);
@@ -21401,6 +21535,7 @@ function ReceiptArchive({ onGoHome }) {
   const [sendingToReceiving, setSendingToReceiving] = useState(false);
   const [relinkingLine, setRelinkingLine] = useState(null);
   const [catalogSearch, setCatalogSearch] = useState("");
+  const [printingEntry, setPrintingEntry] = useState(null);
   const entriesRef = useRef([]);
   const catalogRef = useRef([]);
   const fileInputRef = useRef(null);
@@ -21973,9 +22108,18 @@ function ReceiptArchive({ onGoHome }) {
               <ChevronLeft className="w-5 h-5" />
               <span className="text-sm">Back</span>
             </button>
-            <button onClick={() => setDeleteTarget(viewingEntry)} className="text-slate-500 hover:text-red-400">
-              <Trash2 className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => setPrintingEntry(viewingEntry)}
+                className="text-slate-400 hover:text-slate-200"
+                title="Print this receipt"
+              >
+                <Printer className="w-4 h-4" />
+              </button>
+              <button onClick={() => setDeleteTarget(viewingEntry)} className="text-slate-500 hover:text-red-400">
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
           </header>
           {(() => {
             // Steps through whatever's currently filtered (respects an
@@ -22279,6 +22423,10 @@ function ReceiptArchive({ onGoHome }) {
             <p className="text-sm text-slate-300">Sending to Receiving...</p>
           </div>
         </div>
+      )}
+
+      {printingEntry && (
+        <PrintableReceiptModal entry={printingEntry} onClose={() => setPrintingEntry(null)} />
       )}
     </div>
   );
