@@ -15357,6 +15357,89 @@ function MergeLoveListItemModal({ item, items, onConfirm, onClose }) {
   );
 }
 
+// A clean, printer-friendly version of a Love List's items — the actual
+// point of this whole feature: someone hands over a handwritten, hard-
+// to-read list, it gets scanned and turned into real tracked items, and
+// this is what turns that back into something legible to carry around
+// and physically check off. Uses the standard "print just this one
+// element" technique — everything else on the page is hidden for print,
+// only this area shows.
+function PrintableLoveListModal({ list, onClose }) {
+  const items = [...(list.items || [])].sort((a, b) => a.name.localeCompare(b.name));
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center px-4 py-8 print:bg-white print:p-0">
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #love-list-print-area, #love-list-print-area * { visibility: visible; }
+          #love-list-print-area {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 0.5in;
+          }
+        }
+      `}</style>
+      <div className="bg-white text-slate-900 w-full max-w-2xl rounded-lg max-h-full flex flex-col print:max-w-none print:rounded-none print:max-h-none">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 shrink-0 print:hidden">
+          <h3 className="font-semibold text-base">Print preview</h3>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => window.print()}
+              className="text-sm rounded-md px-3 py-1.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 flex items-center gap-1.5"
+            >
+              <Printer className="w-4 h-4" />
+              Print
+            </button>
+            <button onClick={onClose} className="text-slate-500 hover:text-slate-800">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+        <div id="love-list-print-area" className="p-6 overflow-y-auto">
+          <h2 className="text-xl font-bold mb-1">{listDisplayLabel(list)}</h2>
+          <p className="text-sm text-slate-600 mb-5">
+            {[list.dateReceived, list.submittedBy].filter(Boolean).join(" · ") || "\u00A0"}
+          </p>
+          {items.length === 0 ? (
+            <p className="text-sm text-slate-500">No items on this list yet.</p>
+          ) : (
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b-2 border-slate-900">
+                  <th className="text-left py-2 pr-2">Item</th>
+                  <th className="text-left py-2 pr-2">Qty</th>
+                  <th className="text-left py-2 pr-2">Storage</th>
+                  <th className="text-left py-2 w-10">✓</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={item.id} className="border-b border-slate-300">
+                    <td className="py-2 pr-2 align-top">{item.name}</td>
+                    <td className="py-2 pr-2 align-top whitespace-nowrap">
+                      {item.qtyNeeded}
+                      {item.qtyUnit ? ` ${item.qtyUnit}` : ""}
+                    </td>
+                    <td className="py-2 pr-2 align-top">
+                      {item.storage || ""}
+                      {item.storageDetail ? ` (${item.storageDetail})` : ""}
+                    </td>
+                    <td className="py-2 align-top">
+                      <span className="inline-block w-4 h-4 border border-slate-500" />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onBack, onGoHome }) {
   const [addingItem, setAddingItem] = useState(false);
   const [showPullFromReceiving, setShowPullFromReceiving] = useState(false);
@@ -15373,6 +15456,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
   const [showPhotosModal, setShowPhotosModal] = useState(false);
+  const [showPrintModal, setShowPrintModal] = useState(false);
   const [editingNickname, setEditingNickname] = useState(false);
   const [nicknameDraft, setNicknameDraft] = useState("");
   const [selectMode, setSelectMode] = useState(false);
@@ -15934,6 +16018,13 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
               <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-rose-400" />
             )}
           </button>
+          <button
+            onClick={() => setShowPrintModal(true)}
+            title="Print a clean list to work from"
+            className="text-slate-400 hover:text-slate-200 p-2 shrink-0"
+          >
+            <Printer className="w-4 h-4" />
+          </button>
           {isEditor && (
             <button
               onClick={() => onUpdateList({ ...list, archived: !list.archived })}
@@ -15980,6 +16071,8 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           onClose={() => setShowPhotosModal(false)}
         />
       )}
+
+      {showPrintModal && <PrintableLoveListModal list={list} onClose={() => setShowPrintModal(false)} />}
 
       <main className="max-w-2xl mx-auto px-4 py-5">
         {isEditor &&
