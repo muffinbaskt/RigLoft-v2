@@ -15370,8 +15370,25 @@ function PrintableLoveListModal({ list, onClose }) {
     <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center px-4 py-8 print:static print:block print:bg-white print:p-0">
       <style>{`
         @media print {
-          body * { visibility: hidden; }
-          #love-list-print-area, #love-list-print-area * { visibility: visible; }
+          /* visibility:hidden alone doesn't collapse layout height, so
+             the rest of the app — potentially a long page behind this
+             modal — was still silently contributing its full height to
+             the document, and the browser paginated for that entire
+             height even though nothing on those extra pages was
+             visible. Collapsing height on every hidden element (and
+             explicitly restoring it just for the print area) is what
+             actually stops it from thinking there's more content than
+             there is. */
+          body * {
+            visibility: hidden;
+            height: 0 !important;
+            overflow: hidden !important;
+          }
+          #love-list-print-area, #love-list-print-area * {
+            visibility: visible;
+            height: auto !important;
+            overflow: visible !important;
+          }
           #love-list-print-area {
             position: absolute;
             top: 0;
