@@ -6449,13 +6449,29 @@ function buildPickListHtml(jobName, groups, sortedGroupKeys, groupOption) {
 </html>`;
 }
 
-function PickListModal({ jobName, items, catalog = [], onClose }) {
+function PickListModal({ jobName, items, combinedTotals = {}, catalog = [], onClose }) {
   const [groupOption, setGroupOption] = useState("gang");
   const [outstandingOnly, setOutstandingOnly] = useState(false);
   const [orderedFilter, setOrderedFilter] = useState("all"); // "all" | "exclude" | "only"
 
-  const filteredItems = items
-    .filter((i) => (outstandingOnly ? i.status !== "green" : true))
+  // A substitute-linked item's qtyHave/qtyNeeded on the pick list should
+  // match what the job screen actually shows for it — otherwise a target
+  // item fully covered by its contributors (e.g. 0 of 6 CP 610s, but 6
+  // other CP guns linked to it) would still print as outstanding here.
+  const effectiveItems = items.map((i) => {
+    const combined = combinedTotals[i.id];
+    if (!combined) return i;
+    return { ...i, qtyHave: combined.qtyHave, qtyNeeded: combined.qtyNeeded };
+  });
+
+  const effectiveStatus = (item) => {
+    const combined = combinedTotals[item.id];
+    if (!combined) return item.status;
+    return combined.qtyHave >= combined.qtyNeeded ? "green" : combined.qtyHave > 0 ? "yellow" : "red";
+  };
+
+  const filteredItems = effectiveItems
+    .filter((i) => (outstandingOnly ? effectiveStatus(i) !== "green" : true))
     .filter((i) => {
       if (orderedFilter === "exclude") return !i.ordered;
       if (orderedFilter === "only") return !!i.ordered;
@@ -9311,6 +9327,70 @@ function JobInventory({
     );
   };
 
+  // Items that point at another item via substituteForItemId get their
+  // qty folded into that item's displayed Have/Needed — purely a display
+  // combination. Containers, serials, and transfer tracking all stay
+  // fully separate per item underneath, since the actual transfer record
+  // already lists each item on its own and that distinction has to
+  // survive — this is only about the dashboard correctly showing the
+  // requirement as satisfied when it's being filled by a mix of two
+  // interchangeable things (an old and new tool model, say).
+  //
+  // Both sides of the relationship get the SAME consolidated numbers —
+  // the target's own real qtyNeeded, and the combined qtyHave — not just
+  // the target. A substitute item's own qtyNeeded is usually 0 or
+  // meaningless on its own (it doesn't have an independent requirement),
+  // so showing its bare "X of 0" looks broken; showing the shared total
+  // on both cards makes it clear they're satisfying one requirement
+  // together.
+  //
+  // Computed early (before filtering/sorting/counting below) so that
+  // status-based filters, sorts, and the header counts all agree with
+  // what the card itself displays — a target item whose own qtyHave is
+  // 0 but whose contributors cover the requirement should show (and
+  // filter/count) as Complete everywhere, not just visually on its card.
+  const combinedTotals = {}; // itemId -> { qtyHave, qtyNeeded, contributors, isTarget }
+  items.forEach((i) => {
+    if (!i.substituteForItemId) return;
+    const target = items.find((t) => t.id === i.substituteForItemId);
+    if (!target) return;
+    if (!combinedTotals[target.id]) {
+      combinedTotals[target.id] = {
+        qtyHave: target.qtyHave,
+        qtyNeeded: target.qtyNeeded,
+        contributors: [],
+        isTarget: true,
+      };
+    }
+    combinedTotals[target.id].qtyHave += i.qtyHave;
+    combinedTotals[target.id].contributors.push({ id: i.id, name: i.name, qtyHave: i.qtyHave });
+  });
+  // Mirrored onto each contributor after the totals above are fully
+  // settled, so a contributor's own card shows the identical combined
+  // number the target shows — same qtyHave, same qtyNeeded — just
+  // without re-listing itself as one of the "combined with" names.
+  Object.values(combinedTotals).forEach((info) => {
+    info.contributors.forEach((c) => {
+      combinedTotals[c.id] = {
+        qtyHave: info.qtyHave,
+        qtyNeeded: info.qtyNeeded,
+        contributors: info.contributors.filter((x) => x.id !== c.id),
+        isTarget: false,
+      };
+    });
+  });
+
+  // The same red/yellow/green rule the card uses, but taking a substitute
+  // relationship's combined totals into account when one applies — this
+  // is the single source of truth for status everywhere in this screen
+  // (filtering, sorting, header counts), so it never drifts from what
+  // the card visibly shows.
+  const effectiveStatus = (item) => {
+    const combined = combinedTotals[item.id];
+    if (!combined) return item.status;
+    return combined.qtyHave >= combined.qtyNeeded ? "green" : combined.qtyHave > 0 ? "yellow" : "red";
+  };
+
   const STATUS_RANK = { red: 0, yellow: 1, green: 2 };
 
   const sortItems = (list) => {
@@ -9325,7 +9405,7 @@ function JobInventory({
       case "qty-asc":
         return sorted.sort((a, b) => a.qtyNeeded - b.qtyNeeded);
       case "status":
-        return sorted.sort((a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status]);
+        return sorted.sort((a, b) => STATUS_RANK[effectiveStatus(a)] - STATUS_RANK[effectiveStatus(b)]);
       default:
         return sorted;
     }
@@ -9339,7 +9419,7 @@ function JobInventory({
         (containerFilter === "All" ||
           (i.containers || []).some((c) => c.name === containerFilter)) &&
         (categoryFilter === "All" || i.category === categoryFilter) &&
-        (statusFilter === "All" || i.status === statusFilter) &&
+        (statusFilter === "All" || effectiveStatus(i) === statusFilter) &&
         (!importedOnlyFilter || i.importedViaReceiving) &&
         matchesProcFilter(i) &&
         matchesSearch(i)
@@ -9603,53 +9683,6 @@ function JobInventory({
     setViewingReceiptFor(item.sourceReceipt);
   };
 
-  // Items that point at another item via substituteForItemId get their
-  // qty folded into that item's displayed Have/Needed — purely a display
-  // combination. Containers, serials, and transfer tracking all stay
-  // fully separate per item underneath, since the actual transfer record
-  // already lists each item on its own and that distinction has to
-  // survive — this is only about the dashboard correctly showing the
-  // requirement as satisfied when it's being filled by a mix of two
-  // interchangeable things (an old and new tool model, say).
-  //
-  // Both sides of the relationship get the SAME consolidated numbers —
-  // the target's own real qtyNeeded, and the combined qtyHave — not just
-  // the target. A substitute item's own qtyNeeded is usually 0 or
-  // meaningless on its own (it doesn't have an independent requirement),
-  // so showing its bare "X of 0" looks broken; showing the shared total
-  // on both cards makes it clear they're satisfying one requirement
-  // together.
-  const combinedTotals = {}; // itemId -> { qtyHave, qtyNeeded, contributors, isTarget }
-  items.forEach((i) => {
-    if (!i.substituteForItemId) return;
-    const target = items.find((t) => t.id === i.substituteForItemId);
-    if (!target) return;
-    if (!combinedTotals[target.id]) {
-      combinedTotals[target.id] = {
-        qtyHave: target.qtyHave,
-        qtyNeeded: target.qtyNeeded,
-        contributors: [],
-        isTarget: true,
-      };
-    }
-    combinedTotals[target.id].qtyHave += i.qtyHave;
-    combinedTotals[target.id].contributors.push({ id: i.id, name: i.name, qtyHave: i.qtyHave });
-  });
-  // Mirrored onto each contributor after the totals above are fully
-  // settled, so a contributor's own card shows the identical combined
-  // number the target shows — same qtyHave, same qtyNeeded — just
-  // without re-listing itself as one of the "combined with" names.
-  Object.values(combinedTotals).forEach((info) => {
-    info.contributors.forEach((c) => {
-      combinedTotals[c.id] = {
-        qtyHave: info.qtyHave,
-        qtyNeeded: info.qtyNeeded,
-        contributors: info.contributors.filter((x) => x.id !== c.id),
-        isTarget: false,
-      };
-    });
-  });
-
   const linkSubstitute = (item, targetItem) => {
     onUpdateJob((prevJob) => ({
       ...prevJob,
@@ -9867,16 +9900,16 @@ function JobInventory({
     receivedUnits: items
       .filter((i) => normalizeReceived(i.received) === "yes")
       .reduce((sum, i) => sum + (Number(i.qtyNeeded) || 0), 0),
-    complete: items.filter((i) => i.status === "green").length,
+    complete: items.filter((i) => effectiveStatus(i) === "green").length,
     completeUnits: items
-      .filter((i) => i.status === "green")
+      .filter((i) => effectiveStatus(i) === "green")
       .reduce((sum, i) => sum + (Number(i.qtyNeeded) || 0), 0),
-    outstanding: items.filter((i) => i.status !== "green").length,
+    outstanding: items.filter((i) => effectiveStatus(i) !== "green").length,
     // Outstanding shows the actual remaining gap (still needed minus what's
     // on hand), not just the total scope of those items — that's the more
     // useful number for "what's actually left to get."
     outstandingUnits: items
-      .filter((i) => i.status !== "green")
+      .filter((i) => effectiveStatus(i) !== "green")
       .reduce((sum, i) => sum + Math.max(0, (Number(i.qtyNeeded) || 0) - (Number(i.qtyHave) || 0)), 0),
   };
 
@@ -10952,6 +10985,7 @@ function JobInventory({
         <PickListModal
           jobName={job.name}
           items={items}
+          combinedTotals={combinedTotals}
           catalog={catalog}
           onClose={() => setPickListOpen(false)}
         />
