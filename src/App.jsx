@@ -15367,7 +15367,7 @@ function MergeLoveListItemModal({ item, items, onConfirm, onClose }) {
 function PrintableLoveListModal({ list, onClose }) {
   const items = [...(list.items || [])].sort((a, b) => a.name.localeCompare(b.name));
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center px-4 py-8 print:bg-white print:p-0">
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center px-4 py-8 print:static print:block print:bg-white print:p-0">
       <style>{`
         @media print {
           body * { visibility: hidden; }
@@ -15381,7 +15381,7 @@ function PrintableLoveListModal({ list, onClose }) {
           }
         }
       `}</style>
-      <div className="bg-white text-slate-900 w-full max-w-2xl rounded-lg max-h-full flex flex-col print:max-w-none print:rounded-none print:max-h-none">
+      <div className="bg-white text-slate-900 w-full max-w-2xl rounded-lg max-h-full flex flex-col print:static print:block print:max-w-none print:rounded-none print:max-h-none">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 shrink-0 print:hidden">
           <h3 className="font-semibold text-base">Print preview</h3>
           <div className="flex items-center gap-3">
@@ -15397,7 +15397,7 @@ function PrintableLoveListModal({ list, onClose }) {
             </button>
           </div>
         </div>
-        <div id="love-list-print-area" className="p-6 overflow-y-auto">
+        <div id="love-list-print-area" className="p-6 overflow-y-auto print:overflow-visible">
           <h2 className="text-xl font-bold mb-1">{listDisplayLabel(list)}</h2>
           <p className="text-sm text-slate-600 mb-5">
             {[list.dateReceived, list.submittedBy].filter(Boolean).join(" · ") || "\u00A0"}
