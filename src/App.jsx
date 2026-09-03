@@ -21385,11 +21385,13 @@ function BackorderDashboard({ onGoHome }) {
 // no line items, no target, no approval step. Scan it, and it's saved;
 // the only thing you can do afterward is search and look back at it.
 // A clean, printer-friendly rendering of a single archived receipt —
-// vendor info, the original photo (if one was captured), and the
-// recognized line items in a real table — for handing to a bookkeeper
-// or filing on paper. Same "print just this one element" technique as
-// PrintableLoveListModal: everything else on the page is hidden for
-// print, only the print area shows.
+// vendor info and the original photo (if one was captured) on page 1
+// by themselves, so printing just the first page (or stopping there)
+// gets exactly the receipt and nothing else, with the recognized line
+// items broken out onto the page(s) after — for handing to a
+// bookkeeper or filing on paper. Same "print just this one element"
+// technique as PrintableLoveListModal: everything else on the page is
+// hidden for print, only the print area shows.
 function PrintableReceiptModal({ entry, onClose }) {
   const items = entry.items || [];
   const total = items.reduce(
@@ -21436,82 +21438,93 @@ function PrintableReceiptModal({ entry, onClose }) {
           </div>
         </div>
         <div id="receipt-print-area" className="p-6 overflow-y-auto print:overflow-visible">
-          <h2 className="text-xl font-bold mb-1">{entry.vendor || "Unknown vendor"}</h2>
-          {entry.vendorAddress && (
-            <p className="text-sm text-slate-600 mb-1">{entry.vendorAddress}</p>
-          )}
-          <p className="text-sm text-slate-600 mb-5">
-            {[
-              entry.receiptDate && `Date: ${entry.receiptDate}`,
-              entry.poNumber && `PO: ${entry.poNumber}`,
-            ]
-              .filter(Boolean)
-              .join(" · ") || "\u00A0"}
-          </p>
+          <div
+            style={
+              items.length > 0
+                ? { pageBreakAfter: "always", breakAfter: "page" }
+                : undefined
+            }
+          >
+            <h2 className="text-xl font-bold mb-1">{entry.vendor || "Unknown vendor"}</h2>
+            {entry.vendorAddress && (
+              <p className="text-sm text-slate-600 mb-1">{entry.vendorAddress}</p>
+            )}
+            <p className="text-sm text-slate-600 mb-5">
+              {[
+                entry.receiptDate && `Date: ${entry.receiptDate}`,
+                entry.poNumber && `PO: ${entry.poNumber}`,
+              ]
+                .filter(Boolean)
+                .join(" · ") || "\u00A0"}
+            </p>
 
-          {entry.photoUrl && (
-            <img
-              src={entry.photoUrl}
-              alt="Receipt"
-              className="w-full max-h-[400px] object-contain border border-slate-300 rounded mb-5 print:max-h-[3.5in]"
-            />
-          )}
+            {entry.photoUrl ? (
+              <img
+                src={entry.photoUrl}
+                alt="Receipt"
+                className="w-full max-h-[500px] object-contain border border-slate-300 rounded print:max-h-[8.5in] print:border-0"
+              />
+            ) : (
+              <p className="text-sm text-slate-500">No photo was captured for this receipt.</p>
+            )}
+          </div>
 
-          {items.length === 0 ? (
-            <p className="text-sm text-slate-500">No line items recognized on this receipt.</p>
-          ) : (
-            <table className="w-full text-sm border-collapse">
-              <thead>
-                <tr className="border-b-2 border-slate-900">
-                  <th className="text-left py-2 pr-2">Item</th>
-                  <th className="text-right py-2 pr-2 whitespace-nowrap">Qty</th>
-                  <th className="text-right py-2 pr-2 whitespace-nowrap">Unit price</th>
-                  <th className="text-right py-2 whitespace-nowrap">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((it) => {
-                  const lineTotal = (Number(it.unitPrice) || 0) * (Number(it.shippedQty) || 0);
-                  return (
-                    <tr key={it.id} className="border-b border-slate-300">
-                      <td className="py-2 pr-2 align-top">
-                        {it.name}
-                        {it.backorderQty > 0 && (
-                          <span className="text-slate-500"> ({it.backorderQty} backorder)</span>
-                        )}
+          {items.length > 0 && (
+            <div>
+              <h3 className="text-base font-bold mb-3">Item breakdown</h3>
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="border-b-2 border-slate-900">
+                    <th className="text-left py-2 pr-2">Item</th>
+                    <th className="text-right py-2 pr-2 whitespace-nowrap">Qty</th>
+                    <th className="text-right py-2 pr-2 whitespace-nowrap">Unit price</th>
+                    <th className="text-right py-2 whitespace-nowrap">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((it) => {
+                    const lineTotal = (Number(it.unitPrice) || 0) * (Number(it.shippedQty) || 0);
+                    return (
+                      <tr key={it.id} className="border-b border-slate-300">
+                        <td className="py-2 pr-2 align-top">
+                          {it.name}
+                          {it.backorderQty > 0 && (
+                            <span className="text-slate-500"> ({it.backorderQty} backorder)</span>
+                          )}
+                        </td>
+                        <td className="py-2 pr-2 align-top text-right whitespace-nowrap">
+                          {it.shippedQty || 0}
+                          {it.unit && it.unit.toLowerCase() !== "each" ? ` ${it.unit}` : ""}
+                        </td>
+                        <td className="py-2 pr-2 align-top text-right whitespace-nowrap">
+                          {it.unitPrice > 0 ? `$${Number(it.unitPrice).toFixed(2)}` : "—"}
+                        </td>
+                        <td className="py-2 align-top text-right whitespace-nowrap">
+                          {lineTotal > 0 ? `$${lineTotal.toFixed(2)}` : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                {total > 0 && (
+                  <tfoot>
+                    <tr>
+                      <td colSpan={3} className="pt-3 text-right font-semibold">
+                        Total
                       </td>
-                      <td className="py-2 pr-2 align-top text-right whitespace-nowrap">
-                        {it.shippedQty || 0}
-                        {it.unit && it.unit.toLowerCase() !== "each" ? ` ${it.unit}` : ""}
-                      </td>
-                      <td className="py-2 pr-2 align-top text-right whitespace-nowrap">
-                        {it.unitPrice > 0 ? `$${Number(it.unitPrice).toFixed(2)}` : "—"}
-                      </td>
-                      <td className="py-2 align-top text-right whitespace-nowrap">
-                        {lineTotal > 0 ? `$${lineTotal.toFixed(2)}` : "—"}
+                      <td className="pt-3 text-right font-semibold whitespace-nowrap">
+                        ${total.toFixed(2)}
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
-              {total > 0 && (
-                <tfoot>
-                  <tr>
-                    <td colSpan={3} className="pt-3 text-right font-semibold">
-                      Total
-                    </td>
-                    <td className="pt-3 text-right font-semibold whitespace-nowrap">
-                      ${total.toFixed(2)}
-                    </td>
-                  </tr>
-                </tfoot>
-              )}
-            </table>
-          )}
+                  </tfoot>
+                )}
+              </table>
 
-          <p className="text-xs text-slate-400 mt-6">
-            Archived {formatTaskTimestamp(entry.archivedAt)}
-          </p>
+              <p className="text-xs text-slate-400 mt-6">
+                Archived {formatTaskTimestamp(entry.archivedAt)}
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>
