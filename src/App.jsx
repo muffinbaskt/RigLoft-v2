@@ -15419,7 +15419,7 @@ function PrintableLoveListModal({ list, onClose }) {
                   <tr key={item.id} className="border-b border-slate-300">
                     <td className="py-2 pr-2 align-top">{item.name}</td>
                     <td className="py-2 pr-2 align-top whitespace-nowrap">
-                      {item.qtyNeeded}
+                      {item.qty}
                       {item.qtyUnit ? ` ${item.qtyUnit}` : ""}
                     </td>
                     <td className="py-2 pr-2 align-top">
