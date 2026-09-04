@@ -4916,6 +4916,70 @@ function ZoomableImage({ src, alt = "" }) {
   );
 }
 
+// Full-screen zoomable photo viewer with left/right arrow-key (and
+// on-screen chevron) navigation between the photos in `photos`, since
+// closing and reopening each one individually gets tedious once there's
+// more than a couple — a job's reference documents, a multi-page
+// receipt, a Love List's photo gallery, etc. `photos` is an array of
+// { url, alt? }; `index` is which one is currently shown. Escape (or
+// tapping the backdrop/X) closes; arrow keys do nothing past either end
+// rather than wrapping around.
+function PhotoLightbox({ photos, index, onIndexChange, onClose }) {
+  const count = photos.length;
+  const current = photos[index];
+
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowLeft" && index > 0) onIndexChange(index - 1);
+      else if (e.key === "ArrowRight" && index < count - 1) onIndexChange(index + 1);
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [index, count, onClose, onIndexChange]);
+
+  if (!current) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
+      onClick={onClose}
+    >
+      <button onClick={onClose} className="absolute top-4 right-4 text-slate-300 hover:text-white">
+        <X className="w-6 h-6" />
+      </button>
+      {count > 1 && (
+        <p className="absolute top-4 left-4 text-xs text-slate-400">
+          {index + 1} of {count}
+        </p>
+      )}
+      {count > 1 && index > 0 && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onIndexChange(index - 1);
+          }}
+          className="absolute left-2 sm:left-4 text-slate-300 hover:text-white p-2"
+        >
+          <ChevronLeft className="w-7 h-7" />
+        </button>
+      )}
+      {count > 1 && index < count - 1 && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onIndexChange(index + 1);
+          }}
+          className="absolute right-2 sm:right-4 text-slate-300 hover:text-white p-2"
+        >
+          <ChevronRight className="w-7 h-7" />
+        </button>
+      )}
+      <ZoomableImage key={current.url} src={current.url} alt={current.alt || ""} />
+    </div>
+  );
+}
+
 function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
   const docs = job.referenceDocuments || [];
   const photoDocs = docs.filter((d) => (d.type || "").startsWith("image/"));
@@ -4923,7 +4987,7 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
-  const [viewingUrl, setViewingUrl] = useState(null);
+  const [viewingIndex, setViewingIndex] = useState(null);
   const [pdfQueue, setPdfQueue] = useState([]); // PDFs still waiting on a convert-vs-keep decision
   const pdfPrompt = pdfQueue[0] || null;
   const photoInputRef = useRef(null);
@@ -5026,20 +5090,14 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
     }));
   };
 
-  if (viewingUrl) {
+  if (viewingIndex !== null) {
     return (
-      <div
-        className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
-        onClick={() => setViewingUrl(null)}
-      >
-        <button
-          onClick={() => setViewingUrl(null)}
-          className="absolute top-4 right-4 text-slate-300 hover:text-white"
-        >
-          <X className="w-6 h-6" />
-        </button>
-        <ZoomableImage key={viewingUrl} src={viewingUrl} alt="Reference photo" />
-      </div>
+      <PhotoLightbox
+        photos={photoDocs.map((d) => ({ url: d.url, alt: "Reference photo" }))}
+        index={viewingIndex}
+        onIndexChange={setViewingIndex}
+        onClose={() => setViewingIndex(null)}
+      />
     );
   }
 
@@ -5100,7 +5158,7 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
                     {photoDocs.map((doc) => (
                       <div key={doc.id} className="relative group">
                         <button
-                          onClick={() => setViewingUrl(doc.url)}
+                          onClick={() => setViewingIndex(photoDocs.findIndex((d) => d.id === doc.id))}
                           className="block w-full aspect-square rounded-lg overflow-hidden border border-slate-800"
                         >
                           <img src={doc.url} alt="" className="w-full h-full object-cover" />
@@ -8817,7 +8875,8 @@ function MergeItemModal({ item, items, onConfirm, onClose }) {
 // so it still works even if the original Receiving history entry (or
 // archived receipt) it came from was since deleted or cleared.
 function SourceReceiptModal({ sourceReceipt, onClose }) {
-  const [viewingPhoto, setViewingPhoto] = useState(null);
+  const [viewingIndex, setViewingIndex] = useState(null);
+  const allPhotos = [sourceReceipt.photoUrl, ...(sourceReceipt.extraPhotoUrls || [])].filter(Boolean);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
       <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5 max-h-[80vh] overflow-y-auto">
@@ -8841,7 +8900,7 @@ function SourceReceiptModal({ sourceReceipt, onClose }) {
         {sourceReceipt.photoUrl ? (
           <>
             <button
-              onClick={() => setViewingPhoto(sourceReceipt.photoUrl)}
+              onClick={() => setViewingIndex(0)}
               className="w-full rounded-lg overflow-hidden border border-slate-800"
             >
               <img src={sourceReceipt.photoUrl} alt="Receipt" className="w-full max-h-64 object-cover" />
@@ -8851,7 +8910,7 @@ function SourceReceiptModal({ sourceReceipt, onClose }) {
                 {sourceReceipt.extraPhotoUrls.map((url, i) => (
                   <button
                     key={i}
-                    onClick={() => setViewingPhoto(url)}
+                    onClick={() => setViewingIndex(i + 1)}
                     className="rounded-md overflow-hidden border border-slate-800"
                   >
                     <img src={url} alt={`Page ${i + 2}`} className="w-full h-14 object-cover" />
@@ -8864,19 +8923,13 @@ function SourceReceiptModal({ sourceReceipt, onClose }) {
           <p className="text-sm text-slate-500 text-center py-6">No photo saved with this receipt.</p>
         )}
       </div>
-      {viewingPhoto && (
-        <div
-          className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
-          onClick={() => setViewingPhoto(null)}
-        >
-          <button
-            onClick={() => setViewingPhoto(null)}
-            className="absolute top-4 right-4 text-slate-300 hover:text-white"
-          >
-            <X className="w-6 h-6" />
-          </button>
-          <ZoomableImage key={viewingPhoto} src={viewingPhoto} alt="Receipt" />
-        </div>
+      {viewingIndex !== null && (
+        <PhotoLightbox
+          photos={allPhotos.map((url) => ({ url, alt: "Receipt" }))}
+          index={viewingIndex}
+          onIndexChange={setViewingIndex}
+          onClose={() => setViewingIndex(null)}
+        />
       )}
     </div>
   );
@@ -14623,7 +14676,7 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
   // Anything scanned after the first page — kept as supporting reference
   // photos on the saved list, same as manually-attached ones.
   const [extraScanImageUrls, setExtraScanImageUrls] = useState([]);
-  const [viewingPhoto, setViewingPhoto] = useState(null);
+  const [viewingIndex, setViewingIndex] = useState(null);
   const fileInputRef = useRef(null);
   const anotherPageInputRef = useRef(null);
 
@@ -14882,7 +14935,7 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
               {scanImageUrl && (
                 <div className="mb-4">
                   <button
-                    onClick={() => setViewingPhoto(scanImageUrl)}
+                    onClick={() => setViewingIndex(0)}
                     className="w-full rounded-lg overflow-hidden border border-slate-800"
                   >
                     <img src={scanImageUrl} alt="Scanned Love List" className="w-full max-h-48 object-cover" />
@@ -14892,7 +14945,7 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
                       {extraScanImageUrls.map((url, i) => (
                         <button
                           key={i}
-                          onClick={() => setViewingPhoto(url)}
+                          onClick={() => setViewingIndex(i + 1)}
                           className="rounded-md overflow-hidden border border-slate-800"
                         >
                           <img src={url} alt={`Page ${i + 2}`} className="w-full h-14 object-cover" />
@@ -15068,19 +15121,16 @@ function LoveListScanModal({ catalog, onLearnAlias, onSave, onCancel }) {
         </div>
       )}
 
-      {viewingPhoto && (
-        <div
-          className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
-          onClick={() => setViewingPhoto(null)}
-        >
-          <button
-            onClick={() => setViewingPhoto(null)}
-            className="absolute top-4 right-4 text-slate-300 hover:text-white"
-          >
-            <X className="w-6 h-6" />
-          </button>
-          <ZoomableImage key={viewingPhoto} src={viewingPhoto} alt="Scanned Love List" />
-        </div>
+      {viewingIndex !== null && (
+        <PhotoLightbox
+          photos={[scanImageUrl, ...extraScanImageUrls].filter(Boolean).map((url) => ({
+            url,
+            alt: "Scanned Love List",
+          }))}
+          index={viewingIndex}
+          onIndexChange={setViewingIndex}
+          onClose={() => setViewingIndex(null)}
+        />
       )}
     </div>
   );
@@ -20820,27 +20870,44 @@ function mergeJobItems(items, sourceId, targetId) {
 
   let toRemove = absorb;
   const sourceContainers = (source.containers || []).map((c) => ({ ...c }));
+  // Track exactly which container(s) the absorbed amount is coming out of
+  // in the source — not just the total — so that amount can land back in
+  // the SAME container name on the target side. Only qty that was truly
+  // sitting in "Unassigned" on the source should land in "Unassigned" on
+  // the target; qty that was already sitting in a real container (a
+  // gangbox, a conexe) should stay attributed to that same container
+  // after the merge, not get bumped back to Unassigned.
+  const removedByContainer = []; // [{ name, qty }] in source's units
   const unassignedIdx = sourceContainers.findIndex((c) => c.name === "Unassigned");
-  if (unassignedIdx !== -1) {
+  if (unassignedIdx !== -1 && toRemove > 0) {
     const take = Math.min(sourceContainers[unassignedIdx].qty, toRemove);
-    sourceContainers[unassignedIdx].qty -= take;
-    toRemove -= take;
+    if (take > 0) {
+      sourceContainers[unassignedIdx].qty -= take;
+      toRemove -= take;
+      removedByContainer.push({ name: "Unassigned", qty: take });
+    }
   }
   for (let i = 0; i < sourceContainers.length && toRemove > 0; i++) {
     if (i === unassignedIdx) continue;
     const take = Math.min(sourceContainers[i].qty, toRemove);
-    sourceContainers[i].qty -= take;
-    toRemove -= take;
+    if (take > 0) {
+      sourceContainers[i].qty -= take;
+      toRemove -= take;
+      removedByContainer.push({ name: sourceContainers[i].name, qty: take });
+    }
   }
   const cleanedSourceContainers = sourceContainers.filter((c) => c.qty > 0);
 
   const targetContainers = (target.containers || []).map((c) => ({ ...c }));
-  const targetUnassignedIdx = targetContainers.findIndex((c) => c.name === "Unassigned");
-  if (targetUnassignedIdx !== -1) {
-    targetContainers[targetUnassignedIdx].qty += absorbInTargetUnits;
-  } else {
-    targetContainers.push({ name: "Unassigned", qty: absorbInTargetUnits });
-  }
+  removedByContainer.forEach(({ name, qty }) => {
+    const qtyInTargetUnits = convertQtyForUnit(qty, source.qtyUnit, target.qtyUnit);
+    const existingIdx = targetContainers.findIndex((c) => c.name === name);
+    if (existingIdx !== -1) {
+      targetContainers[existingIdx].qty += qtyInTargetUnits;
+    } else {
+      targetContainers.push({ name, qty: qtyInTargetUnits });
+    }
+  });
 
   const newSourceHave = totalHave(cleanedSourceContainers);
   const newTargetHave = totalHave(targetContainers);
@@ -20993,7 +21060,14 @@ function ReceiptHistoryDetail({ batch, jobs, lists, onBack, onViewPhoto }) {
         {batch.photoUrl && (
           <div className="mb-4">
             <button
-              onClick={() => onViewPhoto(batch.photoUrl)}
+              onClick={() =>
+                onViewPhoto({
+                  photos: [batch.photoUrl, ...(batch.extraPhotoUrls || [])]
+                    .filter(Boolean)
+                    .map((url) => ({ url, alt: "Receipt" })),
+                  index: 0,
+                })
+              }
               className="w-full rounded-lg overflow-hidden border border-slate-800"
             >
               <img src={batch.photoUrl} alt="Receipt" className="w-full max-h-56 object-cover" />
@@ -21003,7 +21077,14 @@ function ReceiptHistoryDetail({ batch, jobs, lists, onBack, onViewPhoto }) {
                 {batch.extraPhotoUrls.map((url, i) => (
                   <button
                     key={i}
-                    onClick={() => onViewPhoto(url)}
+                    onClick={() =>
+                      onViewPhoto({
+                        photos: [batch.photoUrl, ...(batch.extraPhotoUrls || [])]
+                          .filter(Boolean)
+                          .map((u) => ({ url: u, alt: "Receipt" })),
+                        index: i + 1,
+                      })
+                    }
                     className="rounded-md overflow-hidden border border-slate-800"
                   >
                     <img src={url} alt={`Page ${i + 2}`} className="w-full h-14 object-cover" />
@@ -22483,7 +22564,7 @@ function ReceivingApp({ onGoHome }) {
   const nextGroupLetterIndexRef = useRef(0);
   const [viewingGroupPhotos, setViewingGroupPhotos] = useState(null);
   const [historySearch, setHistorySearch] = useState("");
-  const [viewingPhoto, setViewingPhoto] = useState(null);
+  const [viewingPhoto, setViewingPhoto] = useState(null); // { photos: [{url,alt}], index } | null
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [confirmingClearDiscarded, setConfirmingClearDiscarded] = useState(false);
   const [confirmingClearAllHistory, setConfirmingClearAllHistory] = useState(false);
@@ -23080,18 +23161,12 @@ function ReceivingApp({ onGoHome }) {
   // reviewing a receipt set state with nowhere to actually display until
   // you left that screen.
   const photoViewerOverlay = viewingPhoto && (
-    <div
-      className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
-      onClick={() => setViewingPhoto(null)}
-    >
-      <button
-        onClick={() => setViewingPhoto(null)}
-        className="absolute top-4 right-4 text-slate-300 hover:text-white"
-      >
-        <X className="w-6 h-6" />
-      </button>
-      <ZoomableImage key={viewingPhoto} src={viewingPhoto} alt="Receipt" />
-    </div>
+    <PhotoLightbox
+      photos={viewingPhoto.photos}
+      index={viewingPhoto.index}
+      onIndexChange={(i) => setViewingPhoto((v) => (v ? { ...v, index: i } : v))}
+      onClose={() => setViewingPhoto(null)}
+    />
   );
 
   if (viewingHistoryBatch) {
@@ -23595,7 +23670,14 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches
         {batch.photoUrl && (
           <div className="mb-4">
             <button
-              onClick={() => onViewPhoto(batch.photoUrl)}
+              onClick={() =>
+                onViewPhoto({
+                  photos: [batch.photoUrl, ...(batch.extraPhotoUrls || [])]
+                    .filter(Boolean)
+                    .map((url) => ({ url, alt: "Receipt" })),
+                  index: 0,
+                })
+              }
               className="w-full rounded-lg overflow-hidden border border-slate-800"
             >
               <img src={batch.photoUrl} alt="Receipt" className="w-full max-h-48 object-cover" />
@@ -23605,7 +23687,14 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches
                 {batch.extraPhotoUrls.map((url, i) => (
                   <button
                     key={i}
-                    onClick={() => onViewPhoto(url)}
+                    onClick={() =>
+                      onViewPhoto({
+                        photos: [batch.photoUrl, ...(batch.extraPhotoUrls || [])]
+                          .filter(Boolean)
+                          .map((u) => ({ url: u, alt: "Receipt" })),
+                        index: i + 1,
+                      })
+                    }
                     className="rounded-md overflow-hidden border border-slate-800"
                   >
                     <img src={url} alt={`Page ${i + 2}`} className="w-full h-14 object-cover" />
