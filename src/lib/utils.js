@@ -575,3 +575,37 @@ export function parseCatalogBulkText(text) {
     })
     .filter((row) => row.name);
 }
+
+// Same "plain factory object" role as emptyItem/newJob above, for a
+// Love List item. Used both when someone adds one by hand and when
+// Receiving creates one automatically for a line it couldn't match to
+// anything existing.
+export function newLoveListItem(name, qty, extra = {}) {
+  const today = new Date().toISOString().slice(0, 10);
+  return {
+    id: uniqueId(),
+    name,
+    qty,
+    qtyHave: extra.qtyHave || 0,
+    qtyUnit: extra.qtyUnit || "",
+    status: "requested",
+    statusDates: { requested: today, ordered: null, received: null, staged: null, sent: null },
+    notes: "",
+    catalogId: extra.catalogId || null,
+    storage: extra.storage || "",
+    storageDetail: extra.storageDetail || "",
+    serials: extra.serials || [],
+    needsTransfer: !!extra.needsTransfer,
+    // Defaults to true (assume it needs ordering) unless explicitly
+    // marked as already in inventory.
+    needsOrdering: extra.needsOrdering !== false,
+    archived: false,
+    duplicateOf: extra.duplicateOf || null,
+    assignedTaskIds: [],
+    sentBatches: [],
+    receivedBatches: [],
+    stagedBatches: [],
+    backorderQty: extra.backorderQty || 0, // still outstanding from a supplier, set/updated via Receiving
+    backorderReceiptDate: extra.backorderReceiptDate || null,
+  };
+}
