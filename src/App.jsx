@@ -48,577 +48,43 @@ import {
   DollarSign,
   Shuffle,
 } from "lucide-react";
+import {
+  STORAGE_OPTIONS,
+  DEFAULT_CONTAINER_OPTIONS,
+  GANG_OPTIONS,
+  STATUS_OPTIONS,
+  STATUS_DOT,
+  GANG_COLOR,
+  JOB_COLORS,
+  JOB_COLOR_BORDER,
+  uniqueId,
+  selectOnFocus,
+  timeStamp,
+  seedJob,
+  newReturn,
+  newJob,
+  diffItems,
+  parseSerials,
+  lockedLoveSerials,
+  emptyItem,
+  getAudioCtx,
+  playSaveChime,
+  playSoftTap,
+  totalHave,
+  isContainerTransferred,
+  migrateItemContainers,
+  singularize,
+  normalizeReceived,
+  normalizeText,
+  tokenSet,
+  findCatalogMatch,
+  getEffectiveCatalogMatch,
+  getCachedCatalogMatch,
+  parseImportText,
+  findOptionMatch,
+  parseCatalogBulkText,
+} from "./lib/utils";
 
-const STORAGE_OPTIONS = [
-  "Red conex",
-  "Inside",
-  "Outside",
-  "Covered",
-  "Conex row",
-  "Other",
-  "Unassigned",
-];
-const DEFAULT_CONTAINER_OPTIONS = ["Gangbox 12345", "Printshack 67891", "Pallet", "Conex 20-01"];
-const GANG_OPTIONS = ["Raising", "Bolt Up", "Plumb up", "Welding", "Safety", "Misc", "Unassigned"];
-const STATUS_OPTIONS = [
-  { value: "green", label: "Complete" },
-  { value: "yellow", label: "Partial" },
-  { value: "red", label: "None" },
-];
-
-const STATUS_DOT = {
-  green: "bg-emerald-500",
-  yellow: "bg-amber-400",
-  red: "bg-red-500",
-};
-
-const GANG_COLOR = {
-  Raising: "bg-orange-500/15 text-orange-300 border-orange-500/30",
-  "Bolt Up": "bg-sky-500/15 text-sky-300 border-sky-500/30",
-  "Plumb up": "bg-violet-500/15 text-violet-300 border-violet-500/30",
-  Welding: "bg-red-500/15 text-red-300 border-red-500/30",
-  Safety: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-  Misc: "bg-slate-500/15 text-slate-300 border-slate-500/30",
-  Unassigned: "bg-amber-500/10 text-amber-400 border-amber-600/40 border-dashed",
-};
-
-const JOB_COLORS = [
-  { value: null, label: "None", dot: "bg-slate-600" },
-  { value: "red", label: "Red", dot: "bg-red-500" },
-  { value: "orange", label: "Orange", dot: "bg-orange-500" },
-  { value: "amber", label: "Amber", dot: "bg-amber-500" },
-  { value: "green", label: "Green", dot: "bg-emerald-500" },
-  { value: "teal", label: "Teal", dot: "bg-teal-500" },
-  { value: "blue", label: "Blue", dot: "bg-blue-500" },
-  { value: "purple", label: "Purple", dot: "bg-purple-500" },
-  { value: "pink", label: "Pink", dot: "bg-pink-500" },
-];
-
-const JOB_COLOR_BORDER = {
-  red: "border-l-red-500",
-  orange: "border-l-orange-500",
-  amber: "border-l-amber-500",
-  green: "border-l-emerald-500",
-  teal: "border-l-teal-500",
-  blue: "border-l-blue-500",
-  purple: "border-l-purple-500",
-  pink: "border-l-pink-500",
-};
-
-// Date.now() alone only has millisecond resolution — two items created in
-// the same millisecond (a fast double-tap, or several rows created in a
-// tight loop) would get the exact same id, and since ids are used as Set
-// keys for things like transfer selection, that makes two genuinely
-// different items behave as if they were the same one. This guarantees
-// every id is strictly unique and still roughly time-ordered.
-let __lastGeneratedId = 0;
-function uniqueId() {
-  const id = Math.max(Date.now(), __lastGeneratedId + 1);
-  __lastGeneratedId = id;
-  return id;
-}
-
-// Tapping into a number field (Qty, capacity, etc.) selects the existing
-// value instead of just placing a cursor — so typing a new number
-// immediately overwrites whatever was there (often a "0"), rather than
-// needing to manually clear or position the cursor first. Both handlers
-// are needed: onFocus covers the first tap into an unfocused field,
-// onClick covers re-tapping a field that's already focused (which
-// doesn't re-fire onFocus in most browsers).
-function selectOnFocus(e) {
-  e.target.select();
-}
-
-function timeStamp() {
-  return new Date().toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function seedJob() {
-  return {
-    id: 1,
-    name: "Sample Job",
-    createdAt: timeStamp(),
-    parentId: null,
-    color: null,
-    items: [
-      {
-        id: 1,
-        name: "3/4in A325 Bolts",
-        qtyNeeded: 400,
-        qtyHave: 400,
-        ordered: true,
-        received: true,
-        storage: "Red conex",
-        containers: [{ name: "Conex 20-01", qty: 400 }],
-        status: "green",
-        gang: "Bolt Up",
-        serials: [],
-        needsTransfer: false,
-        notes: "",
-      },
-      {
-        id: 2,
-        name: "Column Base Plates",
-        qtyNeeded: 12,
-        qtyHave: 5,
-        ordered: true,
-        received: "no",
-        storage: "Outside",
-        containers: [{ name: "Gangbox 12345", qty: 5 }],
-        status: "yellow",
-        gang: "Raising",
-        serials: [],
-        needsTransfer: false,
-        notes: "Check with foreman before pulling remaining 7.",
-      },
-      {
-        id: 3,
-        name: "7018 Welding Rod",
-        qtyNeeded: 40,
-        qtyHave: 0,
-        ordered: false,
-        received: "no",
-        storage: "Covered",
-        containers: [],
-        status: "red",
-        gang: "Welding",
-        serials: [],
-        needsTransfer: false,
-        notes: "",
-      },
-    ],
-    containerOptions: DEFAULT_CONTAINER_OPTIONS,
-    activityLog: [{ id: 1, time: timeStamp(), message: "Job created with 3 sample items." }],
-  };
-}
-
-function newReturn(jobId, jobName, date) {
-  return {
-    id: uniqueId(),
-    jobId,
-    jobName,
-    date,
-    items: [],
-    createdAt: timeStamp(),
-  };
-}
-
-function newJob(name, parentId = null, color = null, isQuickTransfer = false) {
-  return {
-    id: uniqueId(),
-    name,
-    createdAt: timeStamp(),
-    parentId,
-    color,
-    isQuickTransfer,
-    sealed: false,
-    items: [],
-    containerOptions: [],
-    categoryOptions: [],
-    todos: [],
-    activityLog: [{ id: uniqueId(), time: timeStamp(), message: `Job "${name}" created.` }],
-  };
-}
-
-function diffItems(before, after) {
-  const changes = [];
-  if (before.name !== after.name) changes.push(`name → "${after.name}"`);
-  if (Number(before.qtyNeeded) !== Number(after.qtyNeeded))
-    changes.push(`qty needed → ${after.qtyNeeded}`);
-  if ((before.qtyUnit || "") !== (after.qtyUnit || ""))
-    changes.push(`unit → ${after.qtyUnit || "each"}`);
-  if (Number(before.qtyHave) !== Number(after.qtyHave))
-    changes.push(`qty have → ${after.qtyHave}`);
-  if (before.ordered !== after.ordered) changes.push(`ordered → ${after.ordered ? "yes" : "no"}`);
-  if (normalizeReceived(before.received) !== normalizeReceived(after.received))
-    changes.push(`received → ${normalizeReceived(after.received)}`);
-  if (before.storage !== after.storage) changes.push(`storage → ${after.storage}`);
-  if ((before.storageDetail || "") !== (after.storageDetail || ""))
-    changes.push(`storage detail → ${after.storageDetail || "(cleared)"}`);
-  const beforeContainers = JSON.stringify(before.containers || []);
-  const afterContainers = JSON.stringify(after.containers || []);
-  if (beforeContainers !== afterContainers) {
-    const summary = (after.containers || []).map((c) => `${c.name}: ${c.qty}`).join(", ");
-    changes.push(`containers → ${summary || "(none)"}`);
-  }
-  if (before.status !== after.status) {
-    const label = STATUS_OPTIONS.find((s) => s.value === after.status)?.label;
-    changes.push(`status → ${label}`);
-  }
-  if (before.gang !== after.gang) changes.push(`gang → ${after.gang}`);
-  if ((before.category || "") !== (after.category || ""))
-    changes.push(`category → ${after.category || "(none)"}`);
-  if (before.needsTransfer !== after.needsTransfer)
-    changes.push(`needs transfer → ${after.needsTransfer ? "yes" : "no"}`);
-  const beforeSerials = (before.serials || []).join(", ");
-  const afterSerials = (after.serials || []).join(", ");
-  if (beforeSerials !== afterSerials)
-    changes.push(`SME # → ${afterSerials || "(none)"}`);
-  if ((before.notes || "") !== (after.notes || ""))
-    changes.push(`notes → ${after.notes ? `"${after.notes}"` : "(cleared)"}`);
-  return changes;
-}
-
-function parseSerials(text) {
-  return text
-    .split(/[,\s]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-// SME#s that already belong to a locked Received/Staged/Sent batch on a
-// Love List item — permanent historical record, never editable again.
-// Used to keep the SME# entry box showing only what's new/unrecorded,
-// rather than mixing fresh entries in with numbers that already shipped.
-function lockedLoveSerials(item) {
-  return [
-    ...new Set([
-      ...((item.receivedBatches || []).flatMap((b) => b.serials || [])),
-      ...((item.stagedBatches || []).flatMap((b) => b.serials || [])),
-      ...((item.sentBatches || []).flatMap((b) => b.serials || [])),
-    ]),
-  ];
-}
-
-function emptyItem(defaultStorage) {
-  return {
-    id: null,
-    _formKey: `new-${uniqueId()}-${Math.random()}`,
-    name: "",
-    qtyNeeded: "",
-    qtyUnit: "",
-    qtyHave: 0,
-    ordered: false,
-    received: "no",
-    storage: defaultStorage,
-    storageDetail: "",
-    containers: [], // [{ name, qty }] — qtyHave is always the sum of these
-    status: "red",
-    gang: GANG_OPTIONS[0],
-    category: "",
-    catalogId: null, // manual catalog link override — takes priority over name-matching
-    serials: [],
-    needsTransfer: false,
-    notes: "",
-    backorderQty: 0, // still outstanding from a supplier, set/updated via Receiving
-    backorderReceiptDate: null, // date of whichever receipt most recently set backorderQty — protects against an older, already-superseded receipt overwriting it if processed out of order
-    // Points at another item's id, within the same job — "this item's
-    // qty counts toward that item's requirement." Used purely for the
-    // combined Have/Needed display; both items stay fully independent
-    // otherwise (own containers, own serials, own transfer tracking),
-    // since the actual transfer record already lists items separately
-    // and that distinction needs to survive.
-    substituteForItemId: null,
-  };
-}
-
-// A small, cheerful two-note chime played on save — synthesized directly
-// rather than loading a sound file, so there's nothing extra to bundle.
-// Every sound effect reuses this one shared context instead of creating a
-// brand new one per call — repeatedly creating audio contexts (e.g. once
-// per checkbox tap during bulk select) is genuinely expensive and was
-// causing real slowdowns, since browsers don't clean those up for free.
-let sharedAudioCtx = null;
-function getAudioCtx() {
-  if (!sharedAudioCtx) {
-    sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  if (sharedAudioCtx.state === "suspended") {
-    sharedAudioCtx.resume().catch(() => {});
-  }
-  return sharedAudioCtx;
-}
-
-function playSaveChime() {
-  try {
-    const ctx = getAudioCtx();
-    const now = ctx.currentTime;
-
-    const playNote = (freq, startTime, duration) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0, startTime);
-      gain.gain.linearRampToValueAtTime(0.16, startTime + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(startTime);
-      osc.stop(startTime + duration);
-    };
-
-    playNote(880, now, 0.12); // A5
-    playNote(1318.51, now + 0.09, 0.22); // E6 — a bright little upward "ding-ding"
-  } catch {
-    // Audio not available/blocked in this browser — fine to just skip it
-  }
-}
-
-// A very short, quiet "tick" — meant for things you do over and over in a
-// row (checking off items, toggling a box), where a full chime would get
-// annoying fast.
-function playSoftTap() {
-  try {
-    const ctx = getAudioCtx();
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "sine";
-    osc.frequency.value = 1200;
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(0.08, now + 0.005);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.05);
-  } catch {
-    // Audio not available/blocked — fine to just skip it
-  }
-}
-
-function totalHave(containers) {
-  return (containers || []).reduce((sum, c) => sum + (Number(c.qty) || 0), 0);
-}
-
-// A container counts as "fully transferred" — physically gone from the yard —
-// once every item portion that was ever placed in it has been locked as
-// transferred, and at least one item actually referenced it. Containers with
-// no history at all (e.g. freshly created, never used) are NOT transferred,
-// so they stay available for new items.
-function isContainerTransferred(containerName, items) {
-  const inContainer = (items || []).filter((i) =>
-    (i.containers || []).some((c) => c.name === containerName)
-  );
-  if (inContainer.length === 0) return false;
-  return inContainer.every((i) =>
-    (i.transferredContainers || []).includes(containerName)
-  );
-}
-
-// Converts an old single-container item into the new breakdown-list shape.
-// Safe to call on already-migrated items (returns them unchanged).
-function migrateItemContainers(item) {
-  if (Array.isArray(item.containers)) return item;
-  const containers =
-    item.container && Number(item.qtyHave) > 0
-      ? [{ name: item.container, qty: Number(item.qtyHave) }]
-      : [];
-  return { ...item, containers, qtyHave: totalHave(containers) };
-}
-
-function singularize(word) {
-  if (word.length <= 3) return word;
-  // wrenches -> wrench, boxes -> box, classes -> class
-  if (/(ch|sh|x|z|ss)es$/.test(word)) return word.slice(0, -2);
-  // shackles -> shackle, chokers -> choker, tips -> tip
-  if (word.endsWith("s") && !word.endsWith("ss")) return word.slice(0, -1);
-  return word;
-}
-
-// "received" used to be a plain true/false — this normalizes old data so
-// existing items keep working correctly now that there's a third,
-// "partial" state in between.
-function normalizeReceived(r) {
-  if (r === true || r === "yes") return "yes";
-  if (r === "partial") return "partial";
-  return "no";
-}
-
-function normalizeText(str) {
-  const cleaned = str
-    .trim()
-    .toLowerCase()
-    .replace(/(\d)\s*"/g, "$1in") // 3/4" -> 3/4in
-    .replace(/(\d)\s*'/g, "$1ft") // 16' -> 16ft
-    .replace(/(\d)\s*(inches|inch)\b/g, "$1in") // 3/4 inches -> 3/4in
-    .replace(/(\d)\s*(feet|foot)\b/g, "$1ft") // 16 feet -> 16ft
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return cleaned.split(" ").map(singularize).join(" ");
-}
-
-function tokenSet(str) {
-  return new Set(normalizeText(str).split(" ").filter(Boolean));
-}
-
-function findCatalogMatch(name, catalog) {
-  const normName = normalizeText(name);
-  if (!normName) return null;
-  // Learned aliases take priority over any name-based guessing — if this
-  // exact phrase has been manually linked before, trust that over a fuzzy
-  // guess every time.
-  let match = catalog.find((c) =>
-    (c.aliases || []).some((a) => normalizeText(a) === normName)
-  );
-  if (match) return match;
-  // Exact normalized match first
-  match = catalog.find((c) => normalizeText(c.name) === normName);
-  if (match) return match;
-  // Space-insensitive match: catches "Tagline" vs "Tag line" style differences
-  const squashName = normName.replace(/\s+/g, "");
-  match = catalog.find((c) => normalizeText(c.name).replace(/\s+/g, "") === squashName);
-  if (match) return match;
-  // Loose fallback: one name contains the other
-  const candidates = catalog.filter((c) => {
-    const cn = normalizeText(c.name);
-    return cn.length > 2 && (normName.includes(cn) || cn.includes(normName));
-  });
-  if (candidates.length > 0) {
-    // Prefer the closest length match (most specific)
-    candidates.sort(
-      (a, b) => Math.abs(a.name.length - name.length) - Math.abs(b.name.length - name.length)
-    );
-    return candidates[0];
-  }
-  // Squashed substring: catches a name typed as separate words matching
-  // a catalog entry written as one compound word, or vice versa (e.g.
-  // "Jet Pack" vs "Lanyards (JetPack)") — neither the word-respecting
-  // substring check above nor the whole-word token-overlap check below
-  // can bridge a word that's split in one string but joined in the
-  // other, since squashing "jet pack" only ever produces "jetpack" as a
-  // single token, never matching "jet" or "pack" as separate tokens.
-  const squashCandidates = catalog.filter((c) => {
-    const cSquash = normalizeText(c.name).replace(/\s+/g, "");
-    return cSquash.length > 2 && (squashName.includes(cSquash) || cSquash.includes(squashName));
-  });
-  if (squashCandidates.length > 0) {
-    squashCandidates.sort(
-      (a, b) => Math.abs(a.name.length - name.length) - Math.abs(b.name.length - name.length)
-    );
-    return squashCandidates[0];
-  }
-  // Token-overlap fallback: catches reordered words and extra descriptive
-  // words on either side (e.g. "EZ 60 TC gun" vs "TC-60 (EZ 60)")
-  const nameTokens = tokenSet(name);
-  const tokenCandidates = catalog
-    .map((c) => {
-      const catTokens = tokenSet(c.name);
-      let intersection = 0;
-      for (const t of nameTokens) {
-        if (catTokens.has(t)) intersection++;
-      }
-      const ratio = intersection / Math.min(nameTokens.size, catTokens.size || 1);
-      return { c, intersection, ratio };
-    })
-    .filter((r) => r.intersection >= 2 && r.ratio >= 0.6)
-    .sort((a, b) => b.ratio - a.ratio || b.intersection - a.intersection);
-  return tokenCandidates.length > 0 ? tokenCandidates[0].c : null;
-}
-
-// Same priority the item edit form itself uses: a manual catalog link
-// always wins over automatic name-matching.
-function getEffectiveCatalogMatch(item, catalog) {
-  if (item.catalogId) {
-    return catalog.find((c) => c.id === item.catalogId) || null;
-  }
-  return findCatalogMatch(item.name, catalog);
-}
-
-// Caches each item's catalog match keyed by the item object itself, not by
-// id — since untouched items keep the exact same object reference across
-// re-renders (React's normal immutable-update pattern), this means editing
-// or saving anywhere in the app no longer forces every single item across
-// every job to redo catalog matching, only the ones that actually changed.
-// Resets automatically whenever the catalog itself changes, since a cached
-// match could otherwise point at stale catalog data.
-let catalogMatchCache = new WeakMap();
-let catalogMatchCacheCatalogRef = null;
-
-function getCachedCatalogMatch(item, catalog) {
-  if (catalog !== catalogMatchCacheCatalogRef) {
-    catalogMatchCache = new WeakMap();
-    catalogMatchCacheCatalogRef = catalog;
-  }
-  if (catalogMatchCache.has(item)) return catalogMatchCache.get(item);
-  const match = getEffectiveCatalogMatch(item, catalog);
-  catalogMatchCache.set(item, match);
-  return match;
-}
-
-function parseImportText(text, catalog) {
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line, idx) => {
-      const parts = line.split("|").map((p) => p.trim());
-      const namePart = parts[0] || "";
-      const qtyPart = parts[1] || "";
-      const orderedRaw = (parts[2] || "").toLowerCase();
-      const ordered = ["yes", "y", "true"].includes(orderedRaw);
-      const containerPart = parts[3] || "";
-      const serialsPart = parts[4] || "";
-      const serials = parseSerials(serialsPart);
-
-      const qtyMatch = qtyPart.match(/(\d+)\s*(.*)/);
-      const qtyParsed = qtyMatch ? parseInt(qtyMatch[1], 10) : NaN;
-      const qtyNeeded = Number.isFinite(qtyParsed) && qtyParsed > 0 ? qtyParsed : 1;
-      const qtyUnit = qtyMatch ? qtyMatch[2].trim() : "";
-      const qtyDefaulted = !qtyPart || !Number.isFinite(qtyParsed);
-      const match = findCatalogMatch(namePart, catalog);
-      return {
-        lineId: idx,
-        rawLine: line,
-        name: namePart,
-        qtyNeeded,
-        qtyUnit,
-        qtyDefaulted,
-        matched: !!match,
-        matchedCatalogName: match ? match.name : null,
-        gang: match ? match.gang : "Unassigned",
-        storage: match ? match.storage : "Unassigned",
-        storageDetail: match && match.storage === "Other" ? match.storageDetail || "" : "",
-        category: match ? match.category || "" : "",
-        container: containerPart,
-        serials,
-        needsTransfer: match ? !!match.needsTransfer : false,
-        ordered,
-      };
-    });
-}
-
-function findOptionMatch(value, options) {
-  if (!value) return null;
-  const norm = normalizeText(value);
-  return options.find((opt) => normalizeText(opt) === norm) || null;
-}
-
-function parseCatalogBulkText(text) {
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line, idx) => {
-      const parts = line.split("|").map((p) => p.trim());
-      const name = parts[0] || "";
-      const gangRaw = parts[1] || "";
-      const storageRaw = parts[2] || "";
-      const transferRaw = (parts[3] || "").toLowerCase();
-      const needsTransfer = ["yes", "y", "true"].includes(transferRaw);
-
-      const gangMatch = findOptionMatch(gangRaw, GANG_OPTIONS);
-      const storageMatch = findOptionMatch(storageRaw, STORAGE_OPTIONS);
-
-      return {
-        lineId: idx,
-        name,
-        gang: gangMatch || GANG_OPTIONS[0],
-        gangMatched: !!gangMatch || !gangRaw,
-        storage: storageMatch || STORAGE_OPTIONS[0],
-        storageMatched: !!storageMatch || !storageRaw,
-        needsTransfer,
-      };
-    })
-    .filter((row) => row.name);
-}
 
 function Select({ value, onChange, options, labels }) {
   return (
@@ -7042,173 +6508,6 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
   );
 }
 
-function SuggestEditModal({ job, item, managerName, onSubmit, onClose }) {
-  const currentContainer = (item.containers || [])[0];
-  const [qtyHave, setQtyHave] = useState(item.qtyHave);
-  const [containerName, setContainerName] = useState(currentContainer?.name || "");
-  const [containerQty, setContainerQty] = useState(currentContainer?.qty || item.qtyHave);
-  const [ordered, setOrdered] = useState(item.ordered);
-  const [received, setReceived] = useState(normalizeReceived(item.received));
-  const [note, setNote] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [done, setDone] = useState(false);
-
-  const handleSubmit = async () => {
-    setSubmitting(true);
-    playSaveChime();
-    const result = await submitSuggestion({
-      jobId: job.id,
-      itemId: item.id,
-      type: "edit_item",
-      payload: {
-        itemName: item.name,
-        qtyHave: Number(qtyHave) || 0,
-        container: containerName.trim()
-          ? { name: containerName.trim(), qty: Number(containerQty) || 0 }
-          : { clear: true },
-        ordered,
-        received,
-      },
-      note,
-      submittedBy: managerName,
-    });
-    setSubmitting(false);
-    if (result.ok) setDone(true);
-  };
-
-  if (done) {
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" onClick={onClose}>
-        <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5 text-center" onClick={(e) => e.stopPropagation()}>
-          <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto mb-3" />
-          <h3 className="text-slate-100 font-semibold mb-1.5">Suggestion sent</h3>
-          <p className="text-sm text-slate-500 mb-4">
-            The job owner will review it before anything changes.
-          </p>
-          <button
-            onClick={onClose}
-            className="w-full text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
-          >
-            Done
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
-      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
-          <div>
-            <h2 className="text-slate-100 font-semibold text-base">Suggest a change</h2>
-            <p className="text-xs text-slate-500">{item.name}</p>
-          </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-          <p className="text-xs text-slate-500">
-            You're viewing this job without edit access. Propose a change below — the job
-            owner will see it and can approve or ignore it.
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">Qty have</label>
-              <input
-                type="number"
-                onFocus={selectOnFocus}
-                onClick={selectOnFocus}
-                min="0"
-                value={qtyHave}
-                onChange={(e) => setQtyHave(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-              />
-            </div>
-            <div className="flex items-end gap-2">
-              <label className="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer select-none pb-2">
-                <input
-                  type="checkbox"
-                  checked={ordered}
-                  onChange={(e) => setOrdered(e.target.checked)}
-                  className="w-3.5 h-3.5 rounded accent-amber-500"
-                />
-                Ordered
-              </label>
-              <div className="pb-2">
-                <label className="block text-xs text-slate-400 mb-1">Received</label>
-                <Select
-                  value={received}
-                  onChange={setReceived}
-                  options={["no", "partial", "yes"]}
-                  labels={{ no: "No", partial: "Partial", yes: "Yes" }}
-                />
-              </div>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                Container
-              </label>
-              <input
-                value={containerName}
-                onChange={(e) => setContainerName(e.target.value)}
-                placeholder="e.g. Gangbox 12345"
-                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                Qty in that container
-              </label>
-              <input
-                type="number"
-                onFocus={selectOnFocus}
-                onClick={selectOnFocus}
-                min="0"
-                value={containerQty}
-                onChange={(e) => setContainerQty(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">
-              Note (optional)
-            </label>
-            <textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              rows={2}
-              placeholder="Anything else the owner should know..."
-              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 resize-none"
-            />
-          </div>
-        </div>
-
-        <div className="flex gap-3 px-5 py-4 border-t border-slate-800 shrink-0">
-          <button
-            onClick={onClose}
-            className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={submitting}
-            className="flex-1 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-50"
-          >
-            {submitting ? "Sending..." : "Send suggestion"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function SuggestNewItemModal({ job, managerName, onClose }) {
   const [name, setName] = useState("");
   const [qtyNeeded, setQtyNeeded] = useState("");
@@ -7927,6 +7226,51 @@ function JobNameModal({
   );
 }
 
+// Folds in a substitute-linked item's contributions the same way
+// JobInventory's own combinedTotals does, for any summary view (job
+// tiles, job pickers) that needs a status/outstanding count to agree
+// with what the item's own card actually shows — rather than reading
+// the item's raw `status` field, which is only ever set from that
+// item's own qtyHave/qtyNeeded and never learns about other items
+// linked to it via substituteForItemId. Builds one id -> { have, needed,
+// status } map per item list in a single pass — both the substitute
+// target and every one of its contributors land on the identical
+// combined entry, matching the "counts toward" convention used
+// everywhere else this relationship shows up.
+function buildEffectiveTotalsMap(items) {
+  const contributorsByTarget = {};
+  items.forEach((i) => {
+    if (i.substituteForItemId) {
+      if (!contributorsByTarget[i.substituteForItemId]) contributorsByTarget[i.substituteForItemId] = [];
+      contributorsByTarget[i.substituteForItemId].push(i);
+    }
+  });
+  const map = {};
+  items.forEach((item) => {
+    if (item.substituteForItemId) return; // filled in below, from its target's entry
+    const contributors = contributorsByTarget[item.id] || [];
+    const have =
+      (Number(item.qtyHave) || 0) +
+      contributors.reduce((sum, c) => sum + (Number(c.qtyHave) || 0), 0);
+    const needed = Number(item.qtyNeeded) || 0;
+    const status = have >= needed ? "green" : have > 0 ? "yellow" : "red";
+    map[item.id] = { have, needed, status };
+    contributors.forEach((c) => {
+      map[c.id] = { have, needed, status };
+    });
+  });
+  // A substituteForItemId pointing at an item that's since been deleted —
+  // falls back to its own raw values rather than being left out of the map.
+  items.forEach((item) => {
+    if (!map[item.id]) {
+      const have = Number(item.qtyHave) || 0;
+      const needed = Number(item.qtyNeeded) || 0;
+      map[item.id] = { have, needed, status: have >= needed ? "green" : have > 0 ? "yellow" : "red" };
+    }
+  });
+  return map;
+}
+
 function JobCard({
   job,
   indent,
@@ -7947,7 +7291,8 @@ function JobCard({
     ? JOB_COLOR_BORDER[job.color]
     : "border-l-slate-800";
   const items = job.items || [];
-  const completeCount = items.filter((i) => i.status === "green").length;
+  const totalsMap = buildEffectiveTotalsMap(items);
+  const completeCount = items.filter((i) => totalsMap[i.id].status === "green").length;
   const completePct = items.length > 0 ? Math.round((completeCount / items.length) * 100) : 0;
   return (
     <button
@@ -8013,12 +7358,11 @@ function JobCard({
                 {items.reduce((sum, i) => sum + (Number(i.qtyNeeded) || 0), 0)} units)
                 {outstanding > 0
                   ? ` · ${outstanding} outstanding (${items
-                      .filter((i) => i.status !== "green")
-                      .reduce(
-                        (sum, i) =>
-                          sum + Math.max(0, (Number(i.qtyNeeded) || 0) - (Number(i.qtyHave) || 0)),
-                        0
-                      )} units)`
+                      .filter((i) => totalsMap[i.id].status !== "green")
+                      .reduce((sum, i) => {
+                        const { have, needed } = totalsMap[i.id];
+                        return sum + Math.max(0, needed - have);
+                      }, 0)} units)`
                   : " · all complete"}
               </>
             )}
@@ -8409,7 +7753,10 @@ function JobPicker({
                     </p>
                     <div className="space-y-2.5">
                       {matchingJobs.map((job) => {
-                        const outstanding = (job.items || []).filter((i) => i.status !== "green").length;
+                        const jobTotalsMap = buildEffectiveTotalsMap(job.items || []);
+                        const outstanding = (job.items || []).filter(
+                          (i) => jobTotalsMap[i.id].status !== "green"
+                        ).length;
                         return (
                           <JobCard
                             key={job.id}
@@ -8544,7 +7891,10 @@ function JobPicker({
               </button>
             )}
             {topLevel.map((job) => {
-              const outstanding = (job.items || []).filter((i) => i.status !== "green").length;
+              const jobTotalsMap = buildEffectiveTotalsMap(job.items || []);
+              const outstanding = (job.items || []).filter(
+                (i) => jobTotalsMap[i.id].status !== "green"
+              ).length;
               const children = childrenOf(job.id);
               const isCollapsed = collapsed[job.id];
               return (
@@ -8584,8 +7934,9 @@ function JobPicker({
                   {!isCollapsed && children.length > 0 && (
                     <div className="space-y-2 mt-2">
                       {children.map((child) => {
+                        const childTotalsMap = buildEffectiveTotalsMap(child.items || []);
                         const childOutstanding = (child.items || []).filter(
-                          (i) => i.status !== "green"
+                          (i) => childTotalsMap[i.id].status !== "green"
                         ).length;
                         return (
                           <JobCard
@@ -8700,8 +8051,9 @@ function JobPicker({
                     {!isCollapsed && children.length > 0 && (
                       <div className="mt-2.5 space-y-2.5">
                         {children.map((child) => {
+                          const childTotalsMap = buildEffectiveTotalsMap(child.items || []);
                           const childOutstanding = (child.items || []).filter(
-                            (i) => i.status !== "green"
+                            (i) => childTotalsMap[i.id].status !== "green"
                           ).length;
                           return (
                             <JobCard
@@ -9098,6 +8450,37 @@ function VendorBreakdownModal({ catalogItem, onClose, onChange }) {
   );
 }
 
+// Shared shell for a bulk picker that's just "tap one option from a flat
+// list, then close" — Set gang and Set storage were byte-for-byte
+// identical apart from the title, the options, and the click handler
+// before this got factored out.
+function SimpleListPickerModal({ title, options, onPick, onClose }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" onClick={onClose}>
+      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-slate-100 font-semibold mb-3">{title}</h3>
+        <div className="space-y-1.5 mb-4">
+          {options.map((o) => (
+            <button
+              key={o}
+              onClick={() => onPick(o)}
+              className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-700 text-slate-200 hover:bg-slate-800"
+            >
+              {o}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={onClose}
+          className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function JobInventory({
   job,
   isEditor: rawIsEditor,
@@ -9153,8 +8536,15 @@ function JobInventory({
   // bar button, since splitting a batch across two containers at once is
   // a rare-but-recurring need for specific jobs, not everyday use.
   const [splitContainerMode, setSplitContainerMode] = useState(false);
-  const [splitContainerA, setSplitContainerA] = useState("");
-  const [splitContainerB, setSplitContainerB] = useState("");
+  // Order matters: whichever container was picked first absorbs the
+  // remainder if the quantity doesn't divide evenly, same convention as
+  // the old fixed two-container version.
+  const [splitContainers, setSplitContainers] = useState([]);
+  const toggleSplitContainer = (name) => {
+    setSplitContainers((prev) =>
+      prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]
+    );
+  };
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [bulkAssignPicker, setBulkAssignPicker] = useState(false);
   const [assigningItem, setAssigningItem] = useState(null);
@@ -9803,30 +9193,30 @@ function JobInventory({
 
   // Same "what's on hand, or the full need if nothing's placed yet"
   // convention as the single-container move above, but divides that
-  // amount in half across two containers at once — the recurring
-  // real-world case being a big batch of items that needs splitting
-  // across two gangboxes/conexes in one pass, rather than clicking
-  // through each item individually. An odd quantity's extra unit lands
-  // in the first container.
-  const bulkSplitContainers = (containerA, containerB) => {
+  // amount evenly across however many containers were picked at once —
+  // the recurring real-world case being a big batch of items that needs
+  // splitting across several gangboxes/conexes in one pass, rather than
+  // clicking through each item individually. If the quantity doesn't
+  // divide evenly, the leftover units all land in the first container
+  // picked, same convention as the old fixed two-container version.
+  const bulkSplitContainers = (containerNames) => {
     bulkUpdate(
       (i) => {
         const qty = i.qtyHave === 0 ? i.qtyNeeded : i.qtyHave;
-        const secondShare = Math.floor(qty / 2);
-        const firstShare = qty - secondShare;
-        const containers = [
-          ...(firstShare > 0 ? [{ name: containerA, qty: firstShare }] : []),
-          ...(secondShare > 0 ? [{ name: containerB, qty: secondShare }] : []),
-        ];
+        const n = containerNames.length;
+        const base = Math.floor(qty / n);
+        const remainder = qty - base * n;
+        const containers = containerNames
+          .map((name, idx) => ({ name, qty: base + (idx === 0 ? remainder : 0) }))
+          .filter((c) => c.qty > 0);
         const status = qty >= i.qtyNeeded ? "green" : qty > 0 ? "yellow" : "red";
         return { ...i, containers, qtyHave: qty, status };
       },
-      `Split between "${containerA}" and "${containerB}"`
+      `Split between ${containerNames.length} containers`
     );
     setBulkContainerPicker(false);
     setSplitContainerMode(false);
-    setSplitContainerA("");
-    setSplitContainerB("");
+    setSplitContainers([]);
   };
 
   const [bulkCatalogPicker, setBulkCatalogPicker] = useState(false);
@@ -10876,58 +10266,21 @@ function JobInventory({
       )}
 
       {bulkGangPicker && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" onClick={() => setBulkGangPicker(false)}>
-          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-slate-100 font-semibold mb-3">
-              Set gang for {selectedItemIds.length} item{selectedItemIds.length === 1 ? "" : "s"}
-            </h3>
-            <div className="space-y-1.5 mb-4">
-              {GANG_OPTIONS.map((g) => (
-                <button
-                  key={g}
-                  onClick={() => bulkSetGang(g)}
-                  className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-700 text-slate-200 hover:bg-slate-800"
-                >
-                  {g}
-                </button>
-              ))}
-            </div>
-            <button
-              onClick={() => setBulkGangPicker(false)}
-              className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+        <SimpleListPickerModal
+          title={`Set gang for ${selectedItemIds.length} item${selectedItemIds.length === 1 ? "" : "s"}`}
+          options={GANG_OPTIONS}
+          onPick={bulkSetGang}
+          onClose={() => setBulkGangPicker(false)}
+        />
       )}
 
       {bulkStoragePicker && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" onClick={() => setBulkStoragePicker(false)}>
-          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-slate-100 font-semibold mb-3">
-              Set storage for {selectedItemIds.length} item
-              {selectedItemIds.length === 1 ? "" : "s"}
-            </h3>
-            <div className="space-y-1.5 mb-4">
-              {STORAGE_OPTIONS.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => bulkSetStorage(s)}
-                  className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-700 text-slate-200 hover:bg-slate-800"
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-            <button
-              onClick={() => setBulkStoragePicker(false)}
-              className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+        <SimpleListPickerModal
+          title={`Set storage for ${selectedItemIds.length} item${selectedItemIds.length === 1 ? "" : "s"}`}
+          options={STORAGE_OPTIONS}
+          onPick={bulkSetStorage}
+          onClose={() => setBulkStoragePicker(false)}
+        />
       )}
 
       {bulkContainerPicker && (
@@ -10936,8 +10289,7 @@ function JobInventory({
           onClick={() => {
             setBulkContainerPicker(false);
             setSplitContainerMode(false);
-            setSplitContainerA("");
-            setSplitContainerB("");
+            setSplitContainers([]);
           }}
         >
           <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
@@ -10977,7 +10329,7 @@ function JobInventory({
                     onClick={() => setSplitContainerMode(true)}
                     className="w-full text-left text-xs text-amber-400 hover:text-amber-300 mb-3"
                   >
-                    Split between two containers instead →
+                    Split between multiple containers instead →
                   </button>
                 )}
                 <button
@@ -10990,7 +10342,10 @@ function JobInventory({
             ) : (
               <>
                 <button
-                  onClick={() => setSplitContainerMode(false)}
+                  onClick={() => {
+                    setSplitContainerMode(false);
+                    setSplitContainers([]);
+                  }}
                   className="text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1 mb-2"
                 >
                   <ChevronLeft className="w-3.5 h-3.5" />
@@ -10998,62 +10353,56 @@ function JobInventory({
                 </button>
                 <h3 className="text-slate-100 font-semibold mb-1.5">
                   Split {selectedItemIds.length} item{selectedItemIds.length === 1 ? "" : "s"} between
-                  two containers
+                  containers
                 </h3>
                 <p className="text-xs text-slate-500 mb-3">
-                  Splits whatever quantity each item actually has on hand roughly in half between
-                  the two containers below (items still at 0 use the full needed quantity), replacing
-                  any existing breakdown. An odd amount's extra unit goes to the first container.
+                  Splits whatever quantity each item actually has on hand as evenly as possible
+                  across the containers picked below, in the order picked (items still at 0 use
+                  the full needed quantity), replacing any existing breakdown. If it doesn't divide
+                  evenly, the leftover units all go to the first one picked.
                 </p>
-                <div className="space-y-3 mb-4">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                      First container
-                    </label>
-                    <select
-                      value={splitContainerA}
-                      onChange={(e) => setSplitContainerA(e.target.value)}
-                      className="w-full appearance-none bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-                    >
-                      <option value="">Choose a container…</option>
-                      {[...assignableContainerOptions].sort((a, b) => a.localeCompare(b)).map((c) => (
-                        <option key={c} value={c} disabled={c === splitContainerB}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
+                {assignableContainerOptions.length === 0 ? (
+                  <p className="text-sm text-slate-500 mb-4">
+                    No containers yet — add one from the Containers screen first.
+                  </p>
+                ) : (
+                  <div className="space-y-1.5 mb-4 max-h-64 overflow-y-auto">
+                    {[...assignableContainerOptions].sort((a, b) => a.localeCompare(b)).map((c) => {
+                      const pickIndex = splitContainers.indexOf(c);
+                      const isPicked = pickIndex !== -1;
+                      return (
+                        <button
+                          key={c}
+                          onClick={() => toggleSplitContainer(c)}
+                          className={`w-full flex items-center justify-between gap-2 text-left text-sm rounded-md px-3 py-2 border ${
+                            isPicked
+                              ? "border-amber-500/60 bg-amber-500/10 text-amber-200"
+                              : "border-slate-700 text-slate-200 hover:bg-slate-800"
+                          }`}
+                        >
+                          <span>{c}</span>
+                          {isPicked && (
+                            <span className="text-xs font-semibold text-amber-400 shrink-0">
+                              #{pickIndex + 1}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                      Second container
-                    </label>
-                    <select
-                      value={splitContainerB}
-                      onChange={(e) => setSplitContainerB(e.target.value)}
-                      className="w-full appearance-none bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-                    >
-                      <option value="">Choose a container…</option>
-                      {[...assignableContainerOptions].sort((a, b) => a.localeCompare(b)).map((c) => (
-                        <option key={c} value={c} disabled={c === splitContainerA}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
+                )}
                 <button
-                  onClick={() => bulkSplitContainers(splitContainerA, splitContainerB)}
-                  disabled={!splitContainerA || !splitContainerB || splitContainerA === splitContainerB}
+                  onClick={() => bulkSplitContainers(splitContainers)}
+                  disabled={splitContainers.length < 2}
                   className="w-full text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40 disabled:hover:bg-amber-500 mb-2"
                 >
-                  Split items
+                  Split items{splitContainers.length >= 2 ? ` between ${splitContainers.length}` : ""}
                 </button>
                 <button
                   onClick={() => {
                     setBulkContainerPicker(false);
                     setSplitContainerMode(false);
-                    setSplitContainerA("");
-                    setSplitContainerB("");
+                    setSplitContainers([]);
                   }}
                   className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
                 >
