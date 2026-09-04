@@ -9149,6 +9149,12 @@ function JobInventory({
   const [bulkGangPicker, setBulkGangPicker] = useState(false);
   const [bulkStoragePicker, setBulkStoragePicker] = useState(false);
   const [bulkContainerPicker, setBulkContainerPicker] = useState(false);
+  // Tucked inside the same "Move to container" picker rather than its own
+  // bar button, since splitting a batch across two containers at once is
+  // a rare-but-recurring need for specific jobs, not everyday use.
+  const [splitContainerMode, setSplitContainerMode] = useState(false);
+  const [splitContainerA, setSplitContainerA] = useState("");
+  const [splitContainerB, setSplitContainerB] = useState("");
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [bulkAssignPicker, setBulkAssignPicker] = useState(false);
   const [assigningItem, setAssigningItem] = useState(null);
@@ -9793,6 +9799,34 @@ function JobInventory({
       `Moved to container "${container}"`
     );
     setBulkContainerPicker(false);
+  };
+
+  // Same "what's on hand, or the full need if nothing's placed yet"
+  // convention as the single-container move above, but divides that
+  // amount in half across two containers at once — the recurring
+  // real-world case being a big batch of items that needs splitting
+  // across two gangboxes/conexes in one pass, rather than clicking
+  // through each item individually. An odd quantity's extra unit lands
+  // in the first container.
+  const bulkSplitContainers = (containerA, containerB) => {
+    bulkUpdate(
+      (i) => {
+        const qty = i.qtyHave === 0 ? i.qtyNeeded : i.qtyHave;
+        const secondShare = Math.floor(qty / 2);
+        const firstShare = qty - secondShare;
+        const containers = [
+          ...(firstShare > 0 ? [{ name: containerA, qty: firstShare }] : []),
+          ...(secondShare > 0 ? [{ name: containerB, qty: secondShare }] : []),
+        ];
+        const status = qty >= i.qtyNeeded ? "green" : qty > 0 ? "yellow" : "red";
+        return { ...i, containers, qtyHave: qty, status };
+      },
+      `Split between "${containerA}" and "${containerB}"`
+    );
+    setBulkContainerPicker(false);
+    setSplitContainerMode(false);
+    setSplitContainerA("");
+    setSplitContainerB("");
   };
 
   const [bulkCatalogPicker, setBulkCatalogPicker] = useState(false);
@@ -10897,46 +10931,140 @@ function JobInventory({
       )}
 
       {bulkContainerPicker && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" onClick={() => setBulkContainerPicker(false)}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+          onClick={() => {
+            setBulkContainerPicker(false);
+            setSplitContainerMode(false);
+            setSplitContainerA("");
+            setSplitContainerB("");
+          }}
+        >
           <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-slate-100 font-semibold mb-1.5">
-              Move {selectedItemIds.length} item{selectedItemIds.length === 1 ? "" : "s"} to
-              container
-            </h3>
-            <p className="text-xs text-slate-500 mb-3">
-              Moves whatever quantity each item actually has on hand into this one container
-              (items still at 0 get the full needed quantity, since nothing's been placed yet),
-              replacing any existing breakdown. For a partial amount split across containers,
-              use "Pull items into this container" from the Containers screen instead.
-            </p>
-            {assignableContainerOptions.length === 0 ? (
-              <p className="text-sm text-slate-500 mb-4">
-                {containerOptions.length === 0
-                  ? "No containers yet — add one from the Containers screen first."
-                  : "Every container is marked transferred — add a new one from the Containers screen first."}
-              </p>
-            ) : (
-              <div className="space-y-1.5 mb-4 max-h-64 overflow-y-auto">
-                {[...assignableContainerOptions].sort((a, b) => a.localeCompare(b)).map((c) => (
+            {!splitContainerMode ? (
+              <>
+                <h3 className="text-slate-100 font-semibold mb-1.5">
+                  Move {selectedItemIds.length} item{selectedItemIds.length === 1 ? "" : "s"} to
+                  container
+                </h3>
+                <p className="text-xs text-slate-500 mb-3">
+                  Moves whatever quantity each item actually has on hand into this one container
+                  (items still at 0 get the full needed quantity, since nothing's been placed yet),
+                  replacing any existing breakdown. For a partial amount split across containers,
+                  use "Pull items into this container" from the Containers screen instead.
+                </p>
+                {assignableContainerOptions.length === 0 ? (
+                  <p className="text-sm text-slate-500 mb-4">
+                    {containerOptions.length === 0
+                      ? "No containers yet — add one from the Containers screen first."
+                      : "Every container is marked transferred — add a new one from the Containers screen first."}
+                  </p>
+                ) : (
+                  <div className="space-y-1.5 mb-4 max-h-64 overflow-y-auto">
+                    {[...assignableContainerOptions].sort((a, b) => a.localeCompare(b)).map((c) => (
+                      <button
+                        key={c}
+                        onClick={() => bulkSetContainer(c)}
+                        className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-700 text-slate-200 hover:bg-slate-800"
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {assignableContainerOptions.length >= 2 && (
                   <button
-                    key={c}
-                    onClick={() => bulkSetContainer(c)}
-                    className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-700 text-slate-200 hover:bg-slate-800"
+                    onClick={() => setSplitContainerMode(true)}
+                    className="w-full text-left text-xs text-amber-400 hover:text-amber-300 mb-3"
                   >
-                    {c}
+                    Split between two containers instead →
                   </button>
-                ))}
-              </div>
+                )}
+                <button
+                  onClick={() => setBulkContainerPicker(false)}
+                  className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => setSplitContainerMode(false)}
+                  className="text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1 mb-2"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  Back
+                </button>
+                <h3 className="text-slate-100 font-semibold mb-1.5">
+                  Split {selectedItemIds.length} item{selectedItemIds.length === 1 ? "" : "s"} between
+                  two containers
+                </h3>
+                <p className="text-xs text-slate-500 mb-3">
+                  Splits whatever quantity each item actually has on hand roughly in half between
+                  the two containers below (items still at 0 use the full needed quantity), replacing
+                  any existing breakdown. An odd amount's extra unit goes to the first container.
+                </p>
+                <div className="space-y-3 mb-4">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                      First container
+                    </label>
+                    <select
+                      value={splitContainerA}
+                      onChange={(e) => setSplitContainerA(e.target.value)}
+                      className="w-full appearance-none bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                    >
+                      <option value="">Choose a container…</option>
+                      {[...assignableContainerOptions].sort((a, b) => a.localeCompare(b)).map((c) => (
+                        <option key={c} value={c} disabled={c === splitContainerB}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                      Second container
+                    </label>
+                    <select
+                      value={splitContainerB}
+                      onChange={(e) => setSplitContainerB(e.target.value)}
+                      className="w-full appearance-none bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                    >
+                      <option value="">Choose a container…</option>
+                      {[...assignableContainerOptions].sort((a, b) => a.localeCompare(b)).map((c) => (
+                        <option key={c} value={c} disabled={c === splitContainerA}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <button
+                  onClick={() => bulkSplitContainers(splitContainerA, splitContainerB)}
+                  disabled={!splitContainerA || !splitContainerB || splitContainerA === splitContainerB}
+                  className="w-full text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40 disabled:hover:bg-amber-500 mb-2"
+                >
+                  Split items
+                </button>
+                <button
+                  onClick={() => {
+                    setBulkContainerPicker(false);
+                    setSplitContainerMode(false);
+                    setSplitContainerA("");
+                    setSplitContainerB("");
+                  }}
+                  className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+              </>
             )}
-            <button
-              onClick={() => setBulkContainerPicker(false)}
-              className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
-            >
-              Cancel
-            </button>
           </div>
         </div>
       )}
+
 
       {bulkAssignPicker && (
         <AssignToWorkerModal
