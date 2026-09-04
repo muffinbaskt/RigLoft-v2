@@ -8817,7 +8817,7 @@ function MergeItemModal({ item, items, onConfirm, onClose }) {
 // so it still works even if the original Receiving history entry (or
 // archived receipt) it came from was since deleted or cleared.
 function SourceReceiptModal({ sourceReceipt, onClose }) {
-  const [viewingPhoto, setViewingPhoto] = useState(false);
+  const [viewingPhoto, setViewingPhoto] = useState(null);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
       <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5 max-h-[80vh] overflow-y-auto">
@@ -8841,7 +8841,7 @@ function SourceReceiptModal({ sourceReceipt, onClose }) {
         {sourceReceipt.photoUrl ? (
           <>
             <button
-              onClick={() => setViewingPhoto(true)}
+              onClick={() => setViewingPhoto(sourceReceipt.photoUrl)}
               className="w-full rounded-lg overflow-hidden border border-slate-800"
             >
               <img src={sourceReceipt.photoUrl} alt="Receipt" className="w-full max-h-64 object-cover" />
@@ -8849,7 +8849,11 @@ function SourceReceiptModal({ sourceReceipt, onClose }) {
             {(sourceReceipt.extraPhotoUrls || []).length > 0 && (
               <div className="grid grid-cols-4 gap-1.5 mt-1.5">
                 {sourceReceipt.extraPhotoUrls.map((url, i) => (
-                  <button key={i} className="rounded-md overflow-hidden border border-slate-800">
+                  <button
+                    key={i}
+                    onClick={() => setViewingPhoto(url)}
+                    className="rounded-md overflow-hidden border border-slate-800"
+                  >
                     <img src={url} alt={`Page ${i + 2}`} className="w-full h-14 object-cover" />
                   </button>
                 ))}
@@ -8863,15 +8867,15 @@ function SourceReceiptModal({ sourceReceipt, onClose }) {
       {viewingPhoto && (
         <div
           className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
-          onClick={() => setViewingPhoto(false)}
+          onClick={() => setViewingPhoto(null)}
         >
           <button
-            onClick={() => setViewingPhoto(false)}
+            onClick={() => setViewingPhoto(null)}
             className="absolute top-4 right-4 text-slate-300 hover:text-white"
           >
             <X className="w-6 h-6" />
           </button>
-          <ZoomableImage key={sourceReceipt.photoUrl} src={sourceReceipt.photoUrl} alt="Receipt" />
+          <ZoomableImage key={viewingPhoto} src={viewingPhoto} alt="Receipt" />
         </div>
       )}
     </div>
