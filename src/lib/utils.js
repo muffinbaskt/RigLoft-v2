@@ -609,3 +609,64 @@ export function newLoveListItem(name, qty, extra = {}) {
     backorderReceiptDate: extra.backorderReceiptDate || null,
   };
 }
+
+// Escapes a value for a CSV cell — wraps in quotes (doubling any embedded
+// quotes) only when the value actually needs it (contains a comma, quote,
+// or newline).
+export function csvEscape(value) {
+  const str = String(value ?? "");
+  if (/[",\n]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+// Tries the modern Clipboard API first, then falls back to the older
+// execCommand technique, since the Clipboard API can silently fail in
+// sandboxed iframe contexts (like this artifact) without any error.
+export async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // fall through to legacy method
+  }
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+// Same "plain factory object" role as emptyItem/newLoveListItem above,
+// for a Catalog entry.
+export function emptyCatalogItem() {
+  return {
+    id: null,
+    name: "",
+    gang: GANG_OPTIONS[0],
+    storage: STORAGE_OPTIONS[0],
+    storageDetail: "",
+    category: "",
+    vendor: "",
+    needsTransfer: false,
+    pinned: false,
+    aliases: [],
+    // Marks catalog entries that intentionally cover several real
+    // variants (e.g. a generic "Reamer" entry spanning multiple sizes) —
+    // duplicate detection skips catalog-ID matching for these, since a
+    // shared link doesn't actually mean the same physical item.
+    multiSize: false,
+  };
+}
