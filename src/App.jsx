@@ -9649,7 +9649,13 @@ function JobInventory({
             <Select
               value={containerFilter}
               onChange={setContainerFilter}
-              options={["All", ...[...containerOptions].sort((a, b) => a.localeCompare(b))]}
+              options={[
+                "All",
+                "Unassigned",
+                ...[...containerOptions]
+                  .filter((c) => c !== "Unassigned")
+                  .sort((a, b) => a.localeCompare(b)),
+              ]}
               labels={{ All: "All containers" }}
             />
           </div>
