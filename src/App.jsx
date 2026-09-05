@@ -84,6 +84,9 @@ import {
   findOptionMatch,
   parseCatalogBulkText,
   newLoveListItem,
+  csvEscape,
+  copyToClipboard,
+  emptyCatalogItem,
 } from "./lib/utils";
 import {
   ZoomableImage,
@@ -131,6 +134,7 @@ import {
   daysInCurrentStatus,
   isStale,
   findPossibleDuplicates,
+  LOVE_LISTS_KEY,
 } from "./lib/lovelists";
 import {
   WORKER_TASK_STATUSES,
@@ -142,6 +146,11 @@ import {
   formatTaskTimestamp,
   isTaskOverdue,
   formatDueDate,
+  WORKER_TASKS_KEY,
+  WORKERS_KEY,
+  WORKER_ACTIVITY_KEY,
+  WORKER_ACTIVITY_LAST_SEEN_KEY,
+  logWorkerActivity,
 } from "./lib/workertasks";
 import {
   OFFLINE_QUEUE_KEY,
@@ -1934,42 +1943,6 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
   );
 }
 
-function csvEscape(value) {
-  const str = String(value ?? "");
-  if (/[",\n]/.test(str)) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
-}
-
-// Tries the modern Clipboard API first, then falls back to the older
-// execCommand technique, since the Clipboard API can silently fail in
-// sandboxed iframe contexts (like this artifact) without any error.
-async function copyToClipboard(text) {
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    // fall through to legacy method
-  }
-  try {
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.style.position = "fixed";
-    textarea.style.left = "-9999px";
-    document.body.appendChild(textarea);
-    textarea.focus();
-    textarea.select();
-    const ok = document.execCommand("copy");
-    document.body.removeChild(textarea);
-    return ok;
-  } catch {
-    return false;
-  }
-}
-
 function ExportModal({ jobName, items, onClose }) {
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
@@ -2116,26 +2089,6 @@ function ExportModal({ jobName, items, onClose }) {
       </div>
     </div>
   );
-}
-
-function emptyCatalogItem() {
-  return {
-    id: null,
-    name: "",
-    gang: GANG_OPTIONS[0],
-    storage: STORAGE_OPTIONS[0],
-    storageDetail: "",
-    category: "",
-    vendor: "",
-    needsTransfer: false,
-    pinned: false,
-    aliases: [],
-    // Marks catalog entries that intentionally cover several real
-    // variants (e.g. a generic "Reamer" entry spanning multiple sizes) —
-    // duplicate detection skips catalog-ID matching for these, since a
-    // shared link doesn't actually mean the same physical item.
-    multiSize: false,
-  };
 }
 
 function CatalogItemForm({ initial, existingCategories = [], existingVendors = [], onSave, onCancel }) {
@@ -8367,6 +8320,7 @@ function JobInventory({
   onUnassignWorkerTask,
   onRequestLogin,
   onUpdateJob,
+  onUndoLastAction,
   onBackToJobs,
   catalog,
   onSaveCatalogItem,
@@ -8388,6 +8342,7 @@ function JobInventory({
   );
   const categoryOptions = job.categoryOptions || [];
   const activityLog = job.activityLog || [];
+  const undoStack = job.undoStack || [];
   const [formState, setFormState] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [serialsView, setSerialsView] = useState(null);
@@ -10014,6 +9969,24 @@ function JobInventory({
           </div>
         )}
 
+        {/* Undo last action */}
+        {isEditor && undoStack.length > 0 && (
+          <button
+            onClick={onUndoLastAction}
+            className="mt-6 w-full flex items-center justify-between gap-3 px-4 py-3 border border-slate-800 rounded-lg bg-slate-900 hover:bg-slate-800/60 text-left"
+          >
+            <span className="flex items-center gap-2 text-sm font-medium text-slate-300 min-w-0">
+              <RotateCcw className="w-4 h-4 text-slate-500 shrink-0" />
+              <span className="truncate">
+                Undo: <span className="text-slate-400 font-normal">{undoStack[0].label}</span>
+              </span>
+            </span>
+            <span className="text-xs text-slate-600 shrink-0">
+              {undoStack.length} step{undoStack.length === 1 ? "" : "s"} available
+            </span>
+          </button>
+        )}
+
         {/* Activity log */}
         <div className="mt-6 border border-slate-800 rounded-lg overflow-hidden">
           <button
@@ -11326,12 +11299,63 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
 
   const activeJob = jobs.find((j) => j.id === activeJobId);
 
+  // The mechanism behind "Undo last action": every persisted change to a
+  // job also records a full "before" snapshot of that job on itself,
+  // capped at the last MAX_UNDO_ENTRIES actions. Piggybacks on whatever
+  // activity-log message the action itself already writes (virtually
+  // everything that mutates a job logs one) instead of requiring every
+  // one of the many call sites that update a job to separately describe
+  // itself just for this. Deliberately simple: no redo, and undoing
+  // itself doesn't push a new entry — once the last few slots are used,
+  // they're gone until new actions repopulate them.
+  const MAX_UNDO_ENTRIES = 3;
+  const applyJobUpdate = (job, updater) => {
+    const nextJob = updater(job);
+    if (nextJob === job) return nextJob;
+    const priorLatest = (job.activityLog || [])[0];
+    const nextLatest = (nextJob.activityLog || [])[0];
+    const label =
+      nextLatest && (!priorLatest || nextLatest.id !== priorLatest.id)
+        ? nextLatest.message
+        : "Unlabeled change";
+    const { undoStack: _priorUndoStack, ...snapshot } = job;
+    const entry = { id: uniqueId(), time: timeStamp(), label, snapshot };
+    return {
+      ...nextJob,
+      undoStack: [entry, ...(job.undoStack || [])].slice(0, MAX_UNDO_ENTRIES),
+    };
+  };
+
   const updateActiveJob = (updater) => {
-    setJobs((prev) => prev.map((j) => (j.id === activeJobId ? updater(j) : j)));
+    setJobs((prev) => prev.map((j) => (j.id === activeJobId ? applyJobUpdate(j, updater) : j)));
   };
 
   const updateJobById = (jobId, updater) => {
-    setJobs((prev) => prev.map((j) => (String(j.id) === String(jobId) ? updater(j) : j)));
+    setJobs((prev) =>
+      prev.map((j) => (String(j.id) === String(jobId) ? applyJobUpdate(j, updater) : j))
+    );
+  };
+
+  // Bypasses applyJobUpdate above on purpose — restoring a snapshot isn't
+  // itself a new action to record, it's un-recording the most recent one.
+  const undoLastJobAction = (jobId) => {
+    setJobs((prev) =>
+      prev.map((j) => {
+        if (String(j.id) !== String(jobId)) return j;
+        const stack = j.undoStack || [];
+        if (stack.length === 0) return j;
+        const [mostRecent, ...rest] = stack;
+        return {
+          ...mostRecent.snapshot,
+          undoStack: rest,
+          activityLog: [
+            { id: uniqueId(), time: timeStamp(), message: `Undid: ${mostRecent.label}` },
+            ...(mostRecent.snapshot.activityLog || []),
+          ].slice(0, 50),
+        };
+      })
+    );
+    playSaveChime();
   };
 
   const [pendingSuggestionCount, setPendingSuggestionCount] = useState(0);
@@ -12381,6 +12405,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           onUnassignWorkerTask={unassignWorkerTask}
           onRequestLogin={onRequestLogin}
           onUpdateJob={updateActiveJob}
+          onUndoLastAction={() => undoLastJobAction(activeJob.id)}
           onBackToJobs={() => setShowPicker(true)}
           catalog={catalog}
           onSaveCatalogItem={saveCatalogItem}
@@ -17095,23 +17120,6 @@ function WorkerTasksDashboard({ workers, tasks, hasUnreadActivity, onOpenWorker,
   );
 }
 
-const WORKER_TASKS_KEY = "warehub-worker-tasks";
-const WORKERS_KEY = "warehub-workers";
-const WORKER_ACTIVITY_KEY = "warehub-worker-activity";
-const WORKER_ACTIVITY_LAST_SEEN_KEY = "warehub-worker-activity-last-seen";
-
-// Notification pipeline for the kiosk: every claim/join/start/complete/fail
-// action happening on the tablet gets logged here, so the owner has one
-// place to see everything going on without walking around checking in.
-function logWorkerActivity(entries) {
-  const list = Array.isArray(entries) ? entries : [entries];
-  return getWithRetry(WORKER_ACTIVITY_KEY).then((result) => {
-    const prior = result.ok && result.value ? JSON.parse(result.value) : [];
-    const next = [...list, ...prior].slice(0, 200);
-    return saveWithRetry(WORKER_ACTIVITY_KEY, JSON.stringify(next));
-  });
-}
-
 function WorkerActivityFeedModal({ onClose }) {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -17413,8 +17421,6 @@ function WorkerTasksSection({ onClose }) {
     </>
   );
 }
-
-const LOVE_LISTS_KEY = "warehub-love-lists";
 
 function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   const [lists, setLists] = useState([]);
