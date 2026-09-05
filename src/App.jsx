@@ -883,7 +883,7 @@ function ItemForm({
                   <button
                     key={opt.label}
                     onClick={() => set("ordered")(opt.v)}
-                    className={`flex-1 text-sm rounded-md py-2 border transition-colors ${
+                    className={`flex-1 text-sm rounded-md py-3 border transition-colors ${
                       item.ordered === opt.v
                         ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
                         : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
@@ -905,7 +905,7 @@ function ItemForm({
                   <button
                     key={opt.label}
                     onClick={() => set("received")(opt.v)}
-                    className={`flex-1 text-sm rounded-md py-2 border transition-colors ${
+                    className={`flex-1 text-sm rounded-md py-3 border transition-colors ${
                       normalizeReceived(item.received) === opt.v
                         ? opt.active
                         : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
@@ -6547,7 +6547,7 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
               checked={!!selected}
               onChange={() => onToggleSelect(item.id)}
               onClick={(e) => e.stopPropagation()}
-              className="mt-1.5 w-4 h-4 rounded accent-amber-500 shrink-0"
+              className="mt-1 w-6 h-6 rounded accent-amber-500 shrink-0"
             />
           )}
           <div className="mt-1">
@@ -6593,24 +6593,24 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
           </div>
         </div>
         {!selectMode && isEditor && (
-          <div className="flex gap-1.5 shrink-0">
+          <div className="flex gap-1 shrink-0">
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 onEdit(item);
               }}
-              className="text-slate-500 hover:text-slate-200 p-1.5 rounded-md hover:bg-slate-800"
+              className="text-slate-500 hover:text-slate-200 p-2.5 rounded-md hover:bg-slate-800"
             >
-              <Pencil className="w-3.5 h-3.5" />
+              <Pencil className="w-4 h-4" />
             </button>
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete(item);
               }}
-              className="text-slate-500 hover:text-red-400 p-1.5 rounded-md hover:bg-slate-800"
+              className="text-slate-500 hover:text-red-400 p-2.5 rounded-md hover:bg-slate-800"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Trash2 className="w-4 h-4" />
             </button>
           </div>
         )}
@@ -6707,14 +6707,6 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
         })()}
         <span className={`text-xs rounded-full px-2.5 py-1 border ${GANG_COLOR[item.gang]}`}>
           {item.gang}
-        </span>
-        {item.category && (
-          <span className="text-xs rounded-full px-2.5 py-1 border border-teal-500/30 bg-teal-500/10 text-teal-300">
-            {item.category}
-          </span>
-        )}
-        <span className="text-xs rounded-full px-2.5 py-1 border border-slate-700 text-slate-400">
-          {item.storage === "Other" && item.storageDetail ? item.storageDetail : item.storage}
         </span>
         {(item.containers || []).map((c, idx) => (
           <button
@@ -8356,6 +8348,7 @@ function JobInventory({
   const [importedOnlyFilter, setImportedOnlyFilter] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState("default");
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [groupByGang, setGroupByGang] = useState(true);
   const [collapsedGangs, setCollapsedGangs] = useState({});
   const [selectMode, setSelectMode] = useState(false);
@@ -8605,6 +8598,8 @@ function JobInventory({
     return (
       item.name.toLowerCase().includes(q) ||
       (item.category || "").toLowerCase().includes(q) ||
+      (item.storage || "").toLowerCase().includes(q) ||
+      (item.storageDetail || "").toLowerCase().includes(q) ||
       (item.containers || []).some((c) => c.name.toLowerCase().includes(q)) ||
       (item.notes || "").toLowerCase().includes(q) ||
       (item.serials || []).some((sn) => sn.toLowerCase().includes(q)) ||
@@ -9634,6 +9629,57 @@ function JobInventory({
           ))}
         </div>
 
+        {/* Status dots — always visible, not part of the collapsible filters below */}
+        <div className="flex items-center gap-2 mb-3 overflow-x-auto pb-1">
+          <button
+            onClick={() => setStatusFilter("All")}
+            title="All statuses"
+            className={`w-8 h-8 rounded-full shrink-0 transition-transform ${
+              statusFilter === "All" ? "ring-2 ring-offset-2 ring-offset-slate-950 ring-slate-100 scale-105" : "opacity-70 hover:opacity-100"
+            }`}
+            style={{
+              background: "conic-gradient(#10b981 0deg 120deg, #fbbf24 120deg 240deg, #ef4444 240deg 360deg)",
+            }}
+          />
+          {STATUS_OPTIONS.map((s) => (
+            <button
+              key={s.value}
+              onClick={() => setStatusFilter(s.value)}
+              title={s.label}
+              className={`w-8 h-8 rounded-full shrink-0 transition-transform ${STATUS_DOT[s.value]} ${
+                statusFilter === s.value
+                  ? "ring-2 ring-offset-2 ring-offset-slate-950 ring-slate-100 scale-105"
+                  : "opacity-70 hover:opacity-100"
+              }`}
+            />
+          ))}
+        </div>
+
+        {(() => {
+          const activeFilterCount =
+            [storageFilter, containerFilter, statusFilter, procFilter].filter((f) => f !== "All").length +
+            (importedOnlyFilter ? 1 : 0);
+          return (
+            <button
+              onClick={() => setFiltersOpen((v) => !v)}
+              className="w-full flex items-center justify-between gap-2 text-sm text-slate-400 hover:text-slate-200 mb-3 py-1"
+            >
+              <span className="flex items-center gap-1.5">
+                <Filter className="w-3.5 h-3.5" />
+                Filters
+                {activeFilterCount > 0 && (
+                  <span className="text-xs rounded-full px-1.5 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                    {activeFilterCount}
+                  </span>
+                )}
+              </span>
+              <ChevronDown className={`w-4 h-4 transition-transform ${filtersOpen ? "rotate-180" : ""}`} />
+            </button>
+          );
+        })()}
+
+        {filtersOpen && (
+          <>
         {/* Storage, container + status filters */}
         <div className="flex items-center gap-2 mb-2">
           <Filter className="w-3.5 h-3.5 text-slate-600 shrink-0" />
@@ -9662,30 +9708,6 @@ function JobInventory({
         </div>
         <div className="flex items-center gap-2 mb-4">
           <div className="w-3.5 shrink-0" />
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={() => setStatusFilter("All")}
-              title="All statuses"
-              className={`w-8 h-8 rounded-full shrink-0 transition-transform ${
-                statusFilter === "All" ? "ring-2 ring-offset-2 ring-offset-slate-950 ring-slate-100 scale-105" : "opacity-70 hover:opacity-100"
-              }`}
-              style={{
-                background: "conic-gradient(#10b981 0deg 120deg, #fbbf24 120deg 240deg, #ef4444 240deg 360deg)",
-              }}
-            />
-            {STATUS_OPTIONS.map((s) => (
-              <button
-                key={s.value}
-                onClick={() => setStatusFilter(s.value)}
-                title={s.label}
-                className={`w-8 h-8 rounded-full shrink-0 transition-transform ${STATUS_DOT[s.value]} ${
-                  statusFilter === s.value
-                    ? "ring-2 ring-offset-2 ring-offset-slate-950 ring-slate-100 scale-105"
-                    : "opacity-70 hover:opacity-100"
-                }`}
-              />
-            ))}
-          </div>
           <div className="flex-1 min-w-0">
             <select
               value={procFilter}
@@ -9766,6 +9788,9 @@ function JobInventory({
               </button>
             )}
         </div>
+
+        </>
+        )}
 
         {/* Bulk select bar */}
         {selectMode && (
@@ -19982,7 +20007,7 @@ function ReceiptArchive({ onGoHome }) {
                       ev.stopPropagation();
                       setDeleteTarget(e);
                     }}
-                    className="text-slate-600 hover:text-red-400 shrink-0 p-1"
+                    className="text-slate-600 hover:text-red-400 shrink-0 p-2.5 -mr-2 ml-1 border-l border-slate-800"
                   >
                     <X className="w-4 h-4" />
                   </span>
@@ -21309,7 +21334,7 @@ function ReceivingApp({ onGoHome }) {
                       e.stopPropagation();
                       setDeleteTarget(b);
                     }}
-                    className="text-slate-600 hover:text-red-400 shrink-0 p-1"
+                    className="text-slate-600 hover:text-red-400 shrink-0 p-2.5 -mr-2 ml-1 border-l border-slate-800"
                   >
                     <X className="w-4 h-4" />
                   </span>
