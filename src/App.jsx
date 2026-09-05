@@ -9659,12 +9659,21 @@ function JobInventory({
           const activeFilterCount =
             [storageFilter, containerFilter, statusFilter, procFilter].filter((f) => f !== "All").length +
             (importedOnlyFilter ? 1 : 0);
+          const anyFilterActive =
+            gangFilter !== "All" ||
+            storageFilter !== "All" ||
+            containerFilter !== "All" ||
+            categoryFilter !== "All" ||
+            statusFilter !== "All" ||
+            procFilter !== "All" ||
+            importedOnlyFilter ||
+            searchQuery;
           return (
-            <button
-              onClick={() => setFiltersOpen((v) => !v)}
-              className="w-full flex items-center justify-between gap-2 text-sm text-slate-400 hover:text-slate-200 mb-3 py-1"
-            >
-              <span className="flex items-center gap-1.5">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <button
+                onClick={() => setFiltersOpen((v) => !v)}
+                className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-slate-200 py-1"
+              >
                 <Filter className="w-3.5 h-3.5" />
                 Filters
                 {activeFilterCount > 0 && (
@@ -9672,9 +9681,26 @@ function JobInventory({
                     {activeFilterCount}
                   </span>
                 )}
-              </span>
-              <ChevronDown className={`w-4 h-4 transition-transform ${filtersOpen ? "rotate-180" : ""}`} />
-            </button>
+                <ChevronDown className={`w-4 h-4 transition-transform ${filtersOpen ? "rotate-180" : ""}`} />
+              </button>
+              {anyFilterActive && (
+                <button
+                  onClick={() => {
+                    setGangFilter("All");
+                    setStorageFilter("All");
+                    setContainerFilter("All");
+                    setCategoryFilter("All");
+                    setStatusFilter("All");
+                    setProcFilter("All");
+                    setImportedOnlyFilter(false);
+                    setSearchQuery("");
+                  }}
+                  className="text-xs text-slate-500 hover:text-slate-300 whitespace-nowrap px-1"
+                >
+                  Clear all filters
+                </button>
+              )}
+            </div>
           );
         })()}
 
@@ -9763,30 +9789,6 @@ function JobInventory({
               <Layers className="w-3 h-3" />
               {groupByGang ? "Show all" : "Grouped by gang"}
             </button>
-            {(gangFilter !== "All" ||
-              storageFilter !== "All" ||
-              containerFilter !== "All" ||
-              categoryFilter !== "All" ||
-              statusFilter !== "All" ||
-              procFilter !== "All" ||
-              importedOnlyFilter ||
-              searchQuery) && (
-              <button
-                onClick={() => {
-                  setGangFilter("All");
-                  setStorageFilter("All");
-                  setContainerFilter("All");
-                  setCategoryFilter("All");
-                  setStatusFilter("All");
-                  setProcFilter("All");
-                  setImportedOnlyFilter(false);
-                  setSearchQuery("");
-                }}
-                className="text-xs text-slate-500 hover:text-slate-300 whitespace-nowrap px-1"
-              >
-                Clear all filters
-              </button>
-            )}
         </div>
 
         </>
