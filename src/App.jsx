@@ -8380,6 +8380,7 @@ function JobInventory({
   const [bulkAssignPicker, setBulkAssignPicker] = useState(false);
   const [assigningItem, setAssigningItem] = useState(null);
   const [logOpen, setLogOpen] = useState(false);
+  const [undoOpen, setUndoOpen] = useState(false);
   const [referenceDocsOpen, setReferenceDocsOpen] = useState(false);
   const [pullFromReceivingOpen, setPullFromReceivingOpen] = useState(false);
   const [mergingItem, setMergingItem] = useState(null);
@@ -9971,20 +9972,51 @@ function JobInventory({
 
         {/* Undo last action */}
         {isEditor && undoStack.length > 0 && (
-          <button
-            onClick={onUndoLastAction}
-            className="mt-6 w-full flex items-center justify-between gap-3 px-4 py-3 border border-slate-800 rounded-lg bg-slate-900 hover:bg-slate-800/60 text-left"
-          >
-            <span className="flex items-center gap-2 text-sm font-medium text-slate-300 min-w-0">
-              <RotateCcw className="w-4 h-4 text-slate-500 shrink-0" />
-              <span className="truncate">
-                Undo: <span className="text-slate-400 font-normal">{undoStack[0].label}</span>
+          <div className="mt-6 border border-slate-800 rounded-lg overflow-hidden">
+            <button
+              onClick={() => setUndoOpen((v) => !v)}
+              className="w-full flex items-center justify-between gap-3 px-4 py-3 bg-slate-900 hover:bg-slate-800/60 text-left"
+            >
+              <span className="flex items-center gap-2 text-sm font-medium text-slate-300 min-w-0">
+                <RotateCcw className="w-4 h-4 text-slate-500 shrink-0" />
+                <span className="truncate">
+                  Undo: <span className="text-slate-400 font-normal">{undoStack[0].label}</span>
+                </span>
               </span>
-            </span>
-            <span className="text-xs text-slate-600 shrink-0">
-              {undoStack.length} step{undoStack.length === 1 ? "" : "s"} available
-            </span>
-          </button>
+              <span className="flex items-center gap-2 shrink-0">
+                <span className="text-xs text-slate-600">
+                  {undoStack.length} step{undoStack.length === 1 ? "" : "s"} available
+                </span>
+                <ChevronDown
+                  className={`w-4 h-4 text-slate-500 transition-transform ${undoOpen ? "rotate-180" : ""}`}
+                />
+              </span>
+            </button>
+            {undoOpen && (
+              <div className="divide-y divide-slate-800/80">
+                {undoStack.map((entry, i) => (
+                  <div key={entry.id} className="px-4 py-2.5 flex items-center gap-3">
+                    <span className="text-xs text-slate-600 shrink-0 w-28">{entry.time}</span>
+                    <span className="text-sm text-slate-300 flex-1 min-w-0 truncate">
+                      {entry.label}
+                    </span>
+                    {i === 0 ? (
+                      <button
+                        onClick={onUndoLastAction}
+                        className="text-xs font-semibold text-amber-400 hover:text-amber-300 shrink-0 px-2 py-1"
+                      >
+                        Undo
+                      </button>
+                    ) : (
+                      <span className="text-xs text-slate-600 shrink-0 px-2 py-1">
+                        after {i} more undo{i === 1 ? "" : "s"}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
 
         {/* Activity log */}
