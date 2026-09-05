@@ -19145,12 +19145,112 @@ function BackorderDashboard({ onGoHome }) {
 // bookkeeper or filing on paper. Same "print just this one element"
 // technique as PrintableLoveListModal: everything else on the page is
 // hidden for print, only the print area shows.
-function PrintableReceiptModal({ entry, onClose }) {
+// The printable guts of a single archived receipt — vendor info + photo
+// on their own page, item breakdown on the page(s) after. Shared by both
+// the single-receipt print modal and the bulk "print several at once"
+// one below, so the two stay visually identical. `isLast` suppresses the
+// trailing page break after this receipt's content, since only receipts
+// followed by another one in the same print job need one.
+function PrintableReceiptContent({ entry, isLast }) {
   const items = entry.items || [];
   const total = items.reduce(
     (sum, it) => sum + (Number(it.unitPrice) || 0) * (Number(it.shippedQty) || 0),
     0
   );
+  return (
+    <div style={!isLast ? { pageBreakAfter: "always", breakAfter: "page" } : undefined}>
+      <div
+        style={
+          items.length > 0
+            ? { pageBreakAfter: "always", breakAfter: "page" }
+            : undefined
+        }
+      >
+        <h2 className="text-xl font-bold mb-1">{entry.vendor || "Unknown vendor"}</h2>
+        {entry.vendorAddress && (
+          <p className="text-sm text-slate-600 mb-1">{entry.vendorAddress}</p>
+        )}
+        <p className="text-sm text-slate-600 mb-5">
+          {[
+            entry.receiptDate && `Date: ${entry.receiptDate}`,
+            entry.poNumber && `PO: ${entry.poNumber}`,
+          ]
+            .filter(Boolean)
+            .join(" · ") || "\u00A0"}
+        </p>
+
+        {entry.photoUrl ? (
+          <img
+            src={entry.photoUrl}
+            alt="Receipt"
+            className="w-full max-h-[500px] object-contain border border-slate-300 rounded print:max-h-[8.5in] print:border-0"
+          />
+        ) : (
+          <p className="text-sm text-slate-500">No photo was captured for this receipt.</p>
+        )}
+      </div>
+
+      {items.length > 0 && (
+        <div>
+          <h3 className="text-base font-bold mb-3">Item breakdown</h3>
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="border-b-2 border-slate-900">
+                <th className="text-left py-2 pr-2">Item</th>
+                <th className="text-right py-2 pr-2 whitespace-nowrap">Qty</th>
+                <th className="text-right py-2 pr-2 whitespace-nowrap">Unit price</th>
+                <th className="text-right py-2 whitespace-nowrap">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it) => {
+                const lineTotal = (Number(it.unitPrice) || 0) * (Number(it.shippedQty) || 0);
+                return (
+                  <tr key={it.id} className="border-b border-slate-300">
+                    <td className="py-2 pr-2 align-top">
+                      {it.name}
+                      {it.backorderQty > 0 && (
+                        <span className="text-slate-500"> ({it.backorderQty} backorder)</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-2 align-top text-right whitespace-nowrap">
+                      {it.shippedQty || 0}
+                      {it.unit && it.unit.toLowerCase() !== "each" ? ` ${it.unit}` : ""}
+                    </td>
+                    <td className="py-2 pr-2 align-top text-right whitespace-nowrap">
+                      {it.unitPrice > 0 ? `$${Number(it.unitPrice).toFixed(2)}` : "—"}
+                    </td>
+                    <td className="py-2 align-top text-right whitespace-nowrap">
+                      {lineTotal > 0 ? `$${lineTotal.toFixed(2)}` : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            {total > 0 && (
+              <tfoot>
+                <tr>
+                  <td colSpan={3} className="pt-3 text-right font-semibold">
+                    Total
+                  </td>
+                  <td className="pt-3 text-right font-semibold whitespace-nowrap">
+                    ${total.toFixed(2)}
+                  </td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+
+          <p className="text-xs text-slate-400 mt-6">
+            Archived {formatTaskTimestamp(entry.archivedAt)}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PrintableReceiptModal({ entry, onClose }) {
   return (
     <div className="fixed inset-0 z-[90] bg-black/70 flex items-center justify-center px-4 py-8 print:static print:block print:bg-white print:p-0">
       <style>{`
@@ -19191,93 +19291,65 @@ function PrintableReceiptModal({ entry, onClose }) {
           </div>
         </div>
         <div id="receipt-print-area" className="p-6 overflow-y-auto print:overflow-visible">
-          <div
-            style={
-              items.length > 0
-                ? { pageBreakAfter: "always", breakAfter: "page" }
-                : undefined
-            }
-          >
-            <h2 className="text-xl font-bold mb-1">{entry.vendor || "Unknown vendor"}</h2>
-            {entry.vendorAddress && (
-              <p className="text-sm text-slate-600 mb-1">{entry.vendorAddress}</p>
-            )}
-            <p className="text-sm text-slate-600 mb-5">
-              {[
-                entry.receiptDate && `Date: ${entry.receiptDate}`,
-                entry.poNumber && `PO: ${entry.poNumber}`,
-              ]
-                .filter(Boolean)
-                .join(" · ") || "\u00A0"}
-            </p>
+          <PrintableReceiptContent entry={entry} isLast />
+        </div>
+      </div>
+    </div>
+  );
+}
 
-            {entry.photoUrl ? (
-              <img
-                src={entry.photoUrl}
-                alt="Receipt"
-                className="w-full max-h-[500px] object-contain border border-slate-300 rounded print:max-h-[8.5in] print:border-0"
-              />
-            ) : (
-              <p className="text-sm text-slate-500">No photo was captured for this receipt.</p>
-            )}
+// Same print mechanics as the single-receipt version, but walks a whole
+// list of archive entries in one pass — for printing a stack of receipts
+// together (end-of-month paperwork, handing several off at once) instead
+// of one at a time. Each receipt still gets its own photo page followed
+// by its own item-breakdown page(s); a page break is inserted between
+// receipts too, so nothing from one bleeds onto the next.
+function PrintableReceiptsModal({ entries, onClose }) {
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/70 flex items-center justify-center px-4 py-8 print:static print:block print:bg-white print:p-0">
+      <style>{`
+        @media print {
+          body * {
+            visibility: hidden;
+            height: 0 !important;
+            overflow: hidden !important;
+          }
+          #receipt-print-area, #receipt-print-area * {
+            visibility: visible;
+            height: auto !important;
+            overflow: visible !important;
+          }
+          #receipt-print-area {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 0.5in;
+          }
+        }
+      `}</style>
+      <div className="bg-white text-slate-900 w-full max-w-2xl rounded-lg max-h-full flex flex-col print:static print:block print:max-w-none print:rounded-none print:max-h-none">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 shrink-0 print:hidden">
+          <h3 className="font-semibold text-base">
+            Print preview — {entries.length} receipt{entries.length === 1 ? "" : "s"}
+          </h3>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => window.print()}
+              className="text-sm rounded-md px-3 py-1.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 flex items-center gap-1.5"
+            >
+              <Printer className="w-4 h-4" />
+              Print
+            </button>
+            <button onClick={onClose} className="text-slate-500 hover:text-slate-800">
+              <X className="w-5 h-5" />
+            </button>
           </div>
-
-          {items.length > 0 && (
-            <div>
-              <h3 className="text-base font-bold mb-3">Item breakdown</h3>
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="border-b-2 border-slate-900">
-                    <th className="text-left py-2 pr-2">Item</th>
-                    <th className="text-right py-2 pr-2 whitespace-nowrap">Qty</th>
-                    <th className="text-right py-2 pr-2 whitespace-nowrap">Unit price</th>
-                    <th className="text-right py-2 whitespace-nowrap">Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((it) => {
-                    const lineTotal = (Number(it.unitPrice) || 0) * (Number(it.shippedQty) || 0);
-                    return (
-                      <tr key={it.id} className="border-b border-slate-300">
-                        <td className="py-2 pr-2 align-top">
-                          {it.name}
-                          {it.backorderQty > 0 && (
-                            <span className="text-slate-500"> ({it.backorderQty} backorder)</span>
-                          )}
-                        </td>
-                        <td className="py-2 pr-2 align-top text-right whitespace-nowrap">
-                          {it.shippedQty || 0}
-                          {it.unit && it.unit.toLowerCase() !== "each" ? ` ${it.unit}` : ""}
-                        </td>
-                        <td className="py-2 pr-2 align-top text-right whitespace-nowrap">
-                          {it.unitPrice > 0 ? `$${Number(it.unitPrice).toFixed(2)}` : "—"}
-                        </td>
-                        <td className="py-2 align-top text-right whitespace-nowrap">
-                          {lineTotal > 0 ? `$${lineTotal.toFixed(2)}` : "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                {total > 0 && (
-                  <tfoot>
-                    <tr>
-                      <td colSpan={3} className="pt-3 text-right font-semibold">
-                        Total
-                      </td>
-                      <td className="pt-3 text-right font-semibold whitespace-nowrap">
-                        ${total.toFixed(2)}
-                      </td>
-                    </tr>
-                  </tfoot>
-                )}
-              </table>
-
-              <p className="text-xs text-slate-400 mt-6">
-                Archived {formatTaskTimestamp(entry.archivedAt)}
-              </p>
-            </div>
-          )}
+        </div>
+        <div id="receipt-print-area" className="p-6 overflow-y-auto print:overflow-visible">
+          {entries.map((entry, i) => (
+            <PrintableReceiptContent key={entry.id} entry={entry} isLast={i === entries.length - 1} />
+          ))}
         </div>
       </div>
     </div>
@@ -19302,6 +19374,9 @@ function ReceiptArchive({ onGoHome }) {
   const [relinkingLine, setRelinkingLine] = useState(null);
   const [catalogSearch, setCatalogSearch] = useState("");
   const [printingEntry, setPrintingEntry] = useState(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState({});
+  const [printingSelection, setPrintingSelection] = useState(false);
   const entriesRef = useRef([]);
   const catalogRef = useRef([]);
   const fileInputRef = useRef(null);
@@ -19816,13 +19891,50 @@ function ReceiptArchive({ onGoHome }) {
           placeholder="Search item names, vendor, or anything printed on a receipt..."
           className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
         />
-        {filtered.length > 0 && (
-          <button
-            onClick={() => setConfirmingDeleteAll(true)}
-            className="text-xs text-slate-500 hover:text-red-400 mb-4 block"
-          >
-            Delete all {filtered.length} shown
-          </button>
+        <div className="flex items-center gap-3 mb-4">
+          {filtered.length > 0 && (
+            <button
+              onClick={() => {
+                setSelectMode((v) => !v);
+                setSelectedIds({});
+              }}
+              className="text-xs text-slate-400 hover:text-slate-200"
+            >
+              {selectMode ? "Cancel" : "Select"}
+            </button>
+          )}
+          {filtered.length > 0 && (
+            <button
+              onClick={() => setConfirmingDeleteAll(true)}
+              className="text-xs text-slate-500 hover:text-red-400"
+            >
+              Delete all {filtered.length} shown
+            </button>
+          )}
+        </div>
+        {selectMode && (
+          <div className="flex items-center justify-between mb-3 text-xs">
+            <button
+              onClick={() =>
+                setSelectedIds(
+                  filtered.every((e) => selectedIds[e.id])
+                    ? {}
+                    : Object.fromEntries(filtered.map((e) => [e.id, true]))
+                )
+              }
+              className="text-slate-400 hover:text-slate-200"
+            >
+              {filtered.every((e) => selectedIds[e.id]) ? "Deselect all" : `Select all (${filtered.length})`}
+            </button>
+            <button
+              onClick={() => setPrintingSelection(true)}
+              disabled={Object.values(selectedIds).filter(Boolean).length === 0}
+              className="flex items-center gap-1.5 rounded-md px-3 py-1.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              Print {Object.values(selectedIds).filter(Boolean).length} selected
+            </button>
+          </div>
         )}
         {filtered.length === 0 ? (
           <p className="text-sm text-slate-500 text-center py-10">
@@ -19835,9 +19947,24 @@ function ReceiptArchive({ onGoHome }) {
             {filtered.map((e) => (
               <button
                 key={e.id}
-                onClick={() => setViewingEntry(e)}
-                className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 flex items-center gap-3 hover:border-slate-700"
+                onClick={() =>
+                  selectMode
+                    ? setSelectedIds((prev) => ({ ...prev, [e.id]: !prev[e.id] }))
+                    : setViewingEntry(e)
+                }
+                className={`w-full text-left bg-slate-900 border rounded-lg p-3 flex items-center gap-3 hover:border-slate-700 ${
+                  selectMode && selectedIds[e.id] ? "border-amber-500/60 bg-amber-500/5" : "border-slate-800"
+                }`}
               >
+                {selectMode && (
+                  <div
+                    className={`w-5 h-5 rounded border shrink-0 flex items-center justify-center ${
+                      selectedIds[e.id] ? "bg-amber-500 border-amber-500" : "border-slate-600"
+                    }`}
+                  >
+                    {selectedIds[e.id] && <CheckCircle2 className="w-3.5 h-3.5 text-slate-950" />}
+                  </div>
+                )}
                 {e.photoUrl && (
                   <img src={e.photoUrl} alt="" className="w-12 h-12 rounded-md object-cover border border-slate-800 shrink-0" />
                 )}
@@ -19849,15 +19976,17 @@ function ReceiptArchive({ onGoHome }) {
                       .join(" · ")}
                   </p>
                 </div>
-                <span
-                  onClick={(ev) => {
-                    ev.stopPropagation();
-                    setDeleteTarget(e);
-                  }}
-                  className="text-slate-600 hover:text-red-400 shrink-0 p-1"
-                >
-                  <X className="w-4 h-4" />
-                </span>
+                {!selectMode && (
+                  <span
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      setDeleteTarget(e);
+                    }}
+                    className="text-slate-600 hover:text-red-400 shrink-0 p-1"
+                  >
+                    <X className="w-4 h-4" />
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -20194,6 +20323,13 @@ function ReceiptArchive({ onGoHome }) {
       {printingEntry && (
         <PrintableReceiptModal entry={printingEntry} onClose={() => setPrintingEntry(null)} />
       )}
+
+      {printingSelection && (
+        <PrintableReceiptsModal
+          entries={filtered.filter((e) => selectedIds[e.id])}
+          onClose={() => setPrintingSelection(false)}
+        />
+      )}
     </div>
   );
 }
@@ -20237,6 +20373,7 @@ function ReceivingApp({ onGoHome }) {
   const [confirmingClearDiscarded, setConfirmingClearDiscarded] = useState(false);
   const [confirmingClearAllHistory, setConfirmingClearAllHistory] = useState(false);
   const [viewingHistoryBatch, setViewingHistoryBatch] = useState(null);
+  const [receivingUndoStack, setReceivingUndoStack] = useState([]); // in-memory only, this session
   const fileInputRef = useRef(null);
 
   const load = async () => {
@@ -20269,6 +20406,47 @@ function ReceivingApp({ onGoHome }) {
     queueRef.current = next;
     setQueue(next);
     saveWithRetry(RECEIVING_QUEUE_KEY, JSON.stringify(next)).catch(() => {});
+  };
+
+  // Undo for the two genuinely consequential Receiving actions — approve
+  // and discard — since those are the ones with no other way back once
+  // they've happened (unlike scanning or editing a line, which you can
+  // just redo by hand). Deliberately session-only (not persisted or
+  // synced across devices, unlike the same undo idea on Job Lists):
+  // approve touches jobs, Love Lists, the catalog (vendor spend history),
+  // AND the queue all at once, so a
+  // durable version would mean snapshotting all three datasets in full
+  // on every single approval — a lot of storage for a mistake that's
+  // realistically always caught within the same sitting, not days later.
+  // Capped at the last 3, oldest dropped, no redo.
+  const MAX_RECEIVING_UNDO_ENTRIES = 3;
+  const pushReceivingUndo = (label) => {
+    const entry = {
+      id: uniqueId(),
+      time: timeStamp(),
+      label,
+      jobsSnapshot: jobs,
+      listsSnapshot: lists,
+      catalogSnapshot: catalog,
+      queueSnapshot: queueRef.current,
+    };
+    setReceivingUndoStack((prev) => [entry, ...prev].slice(0, MAX_RECEIVING_UNDO_ENTRIES));
+  };
+
+  const undoLastReceivingAction = async () => {
+    const [mostRecent, ...rest] = receivingUndoStack;
+    if (!mostRecent) return;
+    setReceivingUndoStack(rest);
+    setJobs(mostRecent.jobsSnapshot);
+    setLists(mostRecent.listsSnapshot);
+    setCatalog(mostRecent.catalogSnapshot);
+    saveQueue(mostRecent.queueSnapshot);
+    await Promise.all([
+      saveWithRetry(JOBS_KEY, JSON.stringify(mostRecent.jobsSnapshot)),
+      saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(mostRecent.listsSnapshot)),
+      saveWithRetry(CATALOG_KEY, JSON.stringify(mostRecent.catalogSnapshot)),
+    ]);
+    playSaveChime();
   };
 
   // Scans exactly one file and returns the finished batch object — doesn't
@@ -20514,8 +20692,12 @@ function ReceivingApp({ onGoHome }) {
   };
 
   const discardBatch = async (batch) => {
-    if (batch.photoPath) deleteReferenceDocument(batch.photoPath).catch(() => {});
-    (batch.extraPhotoPaths || []).forEach((p) => deleteReferenceDocument(p).catch(() => {}));
+    pushReceivingUndo(`Discarded receipt: ${batch.label || batch.vendor || "receipt"}`);
+    // Deliberately doesn't delete the photo file here — a discard needs
+    // to stay fully reversible for at least a few actions (see the undo
+    // stack above), and a deleted storage file can't come back. The
+    // actual file cleanup happens in clearDiscarded below, once someone
+    // explicitly empties the discarded pile for good.
     saveQueue(queueRef.current.map((b) => (b.id === batch.id ? { ...b, status: "discarded" } : b)));
     setActiveBatchId(null);
   };
@@ -20611,6 +20793,15 @@ function ReceivingApp({ onGoHome }) {
     saveQueue(queueRef.current.filter((b) => b.id !== id));
   };
   const clearDiscarded = () => {
+    // This is the actual point of no return for a discarded batch — the
+    // record AND its photo file(s), since discard itself now only flips
+    // status (see the comment there) to stay undo-able.
+    queueRef.current
+      .filter((b) => b.status === "discarded")
+      .forEach((b) => {
+        if (b.photoPath) deleteReferenceDocument(b.photoPath).catch(() => {});
+        (b.extraPhotoPaths || []).forEach((p) => deleteReferenceDocument(p).catch(() => {}));
+      });
     saveQueue(queueRef.current.filter((b) => b.status !== "discarded"));
   };
   // Wipes the whole history list, approved entries included — this only
@@ -20652,6 +20843,8 @@ function ReceivingApp({ onGoHome }) {
       (l) => l.name.trim() && l.targetType && l.targetId && !l.approved
     );
     if (assignedLines.length === 0) return;
+
+    pushReceivingUndo(`Approved receipt: ${batch.label || batch.vendor || "receipt"}`);
 
     recordVendorPurchases(assignedLines);
 
@@ -20917,6 +21110,22 @@ function ReceivingApp({ onGoHome }) {
         </button>
       </header>
       <main className="max-w-2xl mx-auto px-4 py-5">
+        {receivingUndoStack.length > 0 && (
+          <button
+            onClick={undoLastReceivingAction}
+            className="w-full flex items-center justify-between gap-3 px-4 py-3 mb-4 border border-slate-800 rounded-lg bg-slate-900 hover:bg-slate-800/60 text-left"
+          >
+            <span className="flex items-center gap-2 text-sm font-medium text-slate-300 min-w-0">
+              <RotateCcw className="w-4 h-4 text-slate-500 shrink-0" />
+              <span className="truncate">
+                Undo: <span className="text-slate-400 font-normal">{receivingUndoStack[0].label}</span>
+              </span>
+            </span>
+            <span className="text-xs text-slate-600 shrink-0">
+              {receivingUndoStack.length} step{receivingUndoStack.length === 1 ? "" : "s"} available
+            </span>
+          </button>
+        )}
         {scanError && <p className="text-sm text-red-400 mb-4">Couldn't scan that: {scanError}</p>}
 
         {multiPageGroups
