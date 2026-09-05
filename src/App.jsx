@@ -9630,7 +9630,7 @@ function JobInventory({
         </div>
 
         {/* Status dots — always visible, not part of the collapsible filters below */}
-        <div className="flex items-center gap-2 mb-3 overflow-x-auto pb-1">
+        <div className="flex items-center gap-3 mb-4 pt-1 overflow-x-auto pb-1">
           <button
             onClick={() => setStatusFilter("All")}
             title="All statuses"
