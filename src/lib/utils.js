@@ -150,6 +150,7 @@ export function seedJob() {
     ],
     containerOptions: DEFAULT_CONTAINER_OPTIONS,
     activityLog: [{ id: 1, time: timeStamp(), message: "Job created with 3 sample items." }],
+    undoStack: [],
   };
 }
 
@@ -178,6 +179,7 @@ export function newJob(name, parentId = null, color = null, isQuickTransfer = fa
     categoryOptions: [],
     todos: [],
     activityLog: [{ id: uniqueId(), time: timeStamp(), message: `Job "${name}" created.` }],
+    undoStack: [],
   };
 }
 
