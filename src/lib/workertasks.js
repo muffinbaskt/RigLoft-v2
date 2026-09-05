@@ -1,4 +1,5 @@
 import { uniqueId } from "./utils";
+import { getWithRetry, saveWithRetry } from "./api";
 
 // Pure Worker Tasks domain logic — status/urgency metadata, task-factory
 // functions for both the single-assignee (item-card) and shared/pooled
@@ -116,4 +117,21 @@ export function formatDueDate(dueDate) {
   if (!dueDate) return "";
   const d = new Date(dueDate + "T00:00:00");
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+export const WORKER_TASKS_KEY = "warehub-worker-tasks";
+export const WORKERS_KEY = "warehub-workers";
+export const WORKER_ACTIVITY_KEY = "warehub-worker-activity";
+export const WORKER_ACTIVITY_LAST_SEEN_KEY = "warehub-worker-activity-last-seen";
+
+// Notification pipeline for the kiosk: every claim/join/start/complete/fail
+// action happening on the tablet gets logged here, so the owner has one
+// place to see everything going on without walking around checking in.
+export function logWorkerActivity(entries) {
+  const list = Array.isArray(entries) ? entries : [entries];
+  return getWithRetry(WORKER_ACTIVITY_KEY).then((result) => {
+    const prior = result.ok && result.value ? JSON.parse(result.value) : [];
+    const next = [...list, ...prior].slice(0, 200);
+    return saveWithRetry(WORKER_ACTIVITY_KEY, JSON.stringify(next));
+  });
 }
