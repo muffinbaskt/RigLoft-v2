@@ -9701,7 +9701,7 @@ function JobInventory({
             </select>
           </div>
         </div>
-        <div className="flex items-center gap-2 mb-4">
+        <div className="flex items-center gap-2 mb-2">
           <ArrowUpDown className="w-3.5 h-3.5 text-slate-600 shrink-0" />
           <div className="flex-1 min-w-0">
             <select
@@ -9717,7 +9717,8 @@ function JobInventory({
               <option value="status">Status (none first)</option>
             </select>
           </div>
-          <div className="flex-1 min-w-0 flex items-center justify-end gap-2">
+        </div>
+        <div className="flex items-center flex-wrap gap-2 mb-4">
             <button
               onClick={() => setImportedOnlyFilter((v) => !v)}
               className={`flex items-center gap-1 text-xs rounded-full px-2.5 py-1 border whitespace-nowrap ${
@@ -9764,7 +9765,6 @@ function JobInventory({
                 Clear all filters
               </button>
             )}
-          </div>
         </div>
 
         {/* Bulk select bar */}
