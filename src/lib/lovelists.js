@@ -107,3 +107,5 @@ export function findPossibleDuplicates(name, catalogId, catalog = [], allLists =
   });
   return matches;
 }
+
+export const LOVE_LISTS_KEY = "warehub-love-lists";
