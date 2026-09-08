@@ -503,6 +503,7 @@ function ItemForm({
         catalogId: effectiveCatalogMatch ? effectiveCatalogMatch.id : null,
         needsTransfer: !!(effectiveCatalogMatch && effectiveCatalogMatch.needsTransfer),
         substituteForItemId: liveSaved ? liveSaved.substituteForItemId : item.substituteForItemId,
+        substituteMode: liveSaved ? liveSaved.substituteMode : item.substituteMode,
         assignedTaskIds: liveSaved ? liveSaved.assignedTaskIds : item.assignedTaskIds,
       });
     };
@@ -1191,6 +1192,7 @@ function ItemForm({
                 status: finalStatus,
                 catalogId: effectiveCatalogMatch ? effectiveCatalogMatch.id : null,
                 substituteForItemId: liveSaved ? liveSaved.substituteForItemId : item.substituteForItemId,
+                substituteMode: liveSaved ? liveSaved.substituteMode : item.substituteMode,
                 assignedTaskIds: liveSaved ? liveSaved.assignedTaskIds : item.assignedTaskIds,
               };
 
