@@ -4617,6 +4617,17 @@ function ReturnItemEditModal({ item, onSave, onCancel }) {
     });
   };
 
+  // Same convention as the "add item" form: typing SME numbers bumps
+  // Qty up to match, but only up, and only while Qty hasn't already
+  // been set higher — never overrides a manually-entered Qty above the
+  // SME count.
+  const handleSmeTextChange = (text) => {
+    const newCount = parseSerials(text).length;
+    setSmeText(text);
+    const currentQty = qty.trim() === "" ? 0 : Number(qty) || 0;
+    if (newCount > currentQty) setQty(String(newCount));
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" onClick={onCancel}>
       <div
@@ -4652,7 +4663,7 @@ function ReturnItemEditModal({ item, onSave, onCancel }) {
             <label className="block text-xs font-medium text-slate-400 mb-1.5">SME # (optional)</label>
             <input
               value={smeText}
-              onChange={(e) => setSmeText(e.target.value)}
+              onChange={(e) => handleSmeTextChange(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && save()}
               placeholder="Comma or space separated"
               className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
@@ -4701,6 +4712,18 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
     setName("");
     setQty("");
     setSmeText("");
+  };
+
+  // Same convention used for serials/Have elsewhere in the app: typing
+  // SME numbers bumps Qty up to match how many you've entered, but only
+  // ever up, and only while Qty hasn't already been set higher some
+  // other way — it's a head start, not a lock. Manually setting Qty
+  // above the SME count (partial serial tracking) always sticks.
+  const handleSmeTextChange = (text) => {
+    const newCount = parseSerials(text).length;
+    setSmeText(text);
+    const currentQty = qty.trim() === "" ? 0 : Number(qty) || 0;
+    if (newCount > currentQty) setQty(String(newCount));
   };
 
   const saveEditedItem = (updated) => {
@@ -4782,7 +4805,7 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
           <div className="flex gap-2">
             <input
               value={smeText}
-              onChange={(e) => setSmeText(e.target.value)}
+              onChange={(e) => handleSmeTextChange(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && addItem()}
               placeholder="SME # (optional)"
               className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
