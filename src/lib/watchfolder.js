@@ -79,6 +79,37 @@ export function clearWatchDirectoryHandle() {
   return Promise.all([idbDelete(WATCH_DIR_KEY), idbDelete(WATCH_SEEN_KEY)]);
 }
 
+// Scanners commonly sort their own output into subfolders (by date, or
+// one folder per scan job) rather than dropping files flat into the
+// chosen folder — so this walks in, not just across. pathPrefix keeps
+// each file's identity unique per file even if two different subfolders
+// happen to both contain a "scan001.jpg". Capped at a sane depth rather
+// than left unbounded, purely as a safety net against an unexpectedly
+// huge or deeply-nested tree slowing every single poll. Shared by
+// chooseWatchFolder (seeding what already exists as "already seen") and
+// pollWatchFolderForNewFiles (checking against that) below, so the two
+// always walk the tree exactly the same way.
+const MAX_DEPTH = 6;
+async function walkWatchableEntries(dirHandle, pathPrefix, depth, onFile) {
+  const counts = { totalEntries: 0, totalMatchingExtension: 0 };
+  async function walk(handle, prefix, d) {
+    for await (const entry of handle.values()) {
+      counts.totalEntries++;
+      if (entry.kind === "directory") {
+        if (d < MAX_DEPTH) await walk(entry, `${prefix}${entry.name}/`, d + 1);
+        continue;
+      }
+      if (!WATCHABLE_EXTENSIONS.test(entry.name)) continue;
+      counts.totalMatchingExtension++;
+      const file = await entry.getFile();
+      const identity = `${prefix}${entry.name}:${file.size}:${file.lastModified}`;
+      await onFile(identity, file);
+    }
+  }
+  await walk(dirHandle, pathPrefix, depth);
+  return counts;
+}
+
 export async function chooseWatchFolder() {
   if (!FS_ACCESS_SUPPORTED) {
     return { ok: false, error: "Not supported in this browser." };
@@ -86,7 +117,16 @@ export async function chooseWatchFolder() {
   try {
     const handle = await window.showDirectoryPicker({ mode: "read" });
     await idbSet(WATCH_DIR_KEY, handle);
-    await idbSet(WATCH_SEEN_KEY, []);
+    // Seeds "already seen" with everything already sitting in the folder
+    // at the moment it's picked, rather than starting empty — picking a
+    // folder means "watch for anything added from here on," not "import
+    // this folder's entire existing contents." A scanner's output folder
+    // in particular is likely to already have plenty in it.
+    const alreadyThere = [];
+    await walkWatchableEntries(handle, "", 0, async (identity) => {
+      alreadyThere.push(identity);
+    });
+    await idbSet(WATCH_SEEN_KEY, alreadyThere.slice(-MAX_SEEN_ENTRIES));
     return { ok: true, name: handle.name };
   } catch (err) {
     if (err && err.name === "AbortError") return { ok: false, canceled: true };
@@ -143,40 +183,13 @@ export async function pollWatchFolderForNewFiles() {
   const seen = new Set(seenList);
   const newFiles = [];
   const newlySeen = [];
-  // Mutated in place by walkDirectory below rather than returned, since
-  // it needs to accumulate across every nested folder visited, not just
-  // the top level.
-  const counts = { totalEntries: 0, totalMatchingExtension: 0 };
-
-  // Scanners commonly sort their own output into subfolders (by date, or
-  // one folder per scan job) rather than dropping files flat into the
-  // chosen folder — so this walks in, not just across. pathPrefix keeps
-  // the "seen" identity unique per file even if two different subfolders
-  // happen to both contain a "scan001.jpg". Capped at a sane depth
-  // rather than left unbounded, purely as a safety net against an
-  // unexpectedly huge or deeply-nested tree slowing every single poll.
-  const MAX_DEPTH = 6;
-  async function walkDirectory(dirHandle, pathPrefix, depth) {
-    for await (const entry of dirHandle.values()) {
-      counts.totalEntries++;
-      if (entry.kind === "directory") {
-        if (depth < MAX_DEPTH) {
-          await walkDirectory(entry, `${pathPrefix}${entry.name}/`, depth + 1);
-        }
-        continue;
-      }
-      if (!WATCHABLE_EXTENSIONS.test(entry.name)) continue;
-      counts.totalMatchingExtension++;
-      const file = await entry.getFile();
-      const identity = `${pathPrefix}${entry.name}:${file.size}:${file.lastModified}`;
-      if (seen.has(identity)) continue;
+  let counts;
+  try {
+    counts = await walkWatchableEntries(handle, "", 0, async (identity, file) => {
+      if (seen.has(identity)) return;
       newFiles.push(file);
       newlySeen.push(identity);
-    }
-  }
-
-  try {
-    await walkDirectory(handle, "", 0);
+    });
   } catch (err) {
     return { ok: false, reason: "error", error: err && err.message, files: [] };
   }
