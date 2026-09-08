@@ -143,20 +143,40 @@ export async function pollWatchFolderForNewFiles() {
   const seen = new Set(seenList);
   const newFiles = [];
   const newlySeen = [];
-  let totalEntries = 0;
-  let totalMatchingExtension = 0;
-  try {
-    for await (const entry of handle.values()) {
-      totalEntries++;
-      if (entry.kind !== "file") continue;
+  // Mutated in place by walkDirectory below rather than returned, since
+  // it needs to accumulate across every nested folder visited, not just
+  // the top level.
+  const counts = { totalEntries: 0, totalMatchingExtension: 0 };
+
+  // Scanners commonly sort their own output into subfolders (by date, or
+  // one folder per scan job) rather than dropping files flat into the
+  // chosen folder — so this walks in, not just across. pathPrefix keeps
+  // the "seen" identity unique per file even if two different subfolders
+  // happen to both contain a "scan001.jpg". Capped at a sane depth
+  // rather than left unbounded, purely as a safety net against an
+  // unexpectedly huge or deeply-nested tree slowing every single poll.
+  const MAX_DEPTH = 6;
+  async function walkDirectory(dirHandle, pathPrefix, depth) {
+    for await (const entry of dirHandle.values()) {
+      counts.totalEntries++;
+      if (entry.kind === "directory") {
+        if (depth < MAX_DEPTH) {
+          await walkDirectory(entry, `${pathPrefix}${entry.name}/`, depth + 1);
+        }
+        continue;
+      }
       if (!WATCHABLE_EXTENSIONS.test(entry.name)) continue;
-      totalMatchingExtension++;
+      counts.totalMatchingExtension++;
       const file = await entry.getFile();
-      const identity = `${entry.name}:${file.size}:${file.lastModified}`;
+      const identity = `${pathPrefix}${entry.name}:${file.size}:${file.lastModified}`;
       if (seen.has(identity)) continue;
       newFiles.push(file);
       newlySeen.push(identity);
     }
+  }
+
+  try {
+    await walkDirectory(handle, "", 0);
   } catch (err) {
     return { ok: false, reason: "error", error: err && err.message, files: [] };
   }
@@ -166,5 +186,10 @@ export async function pollWatchFolderForNewFiles() {
     await idbSet(WATCH_SEEN_KEY, merged);
   }
 
-  return { ok: true, files: newFiles, totalEntries, totalMatchingExtension };
+  return {
+    ok: true,
+    files: newFiles,
+    totalEntries: counts.totalEntries,
+    totalMatchingExtension: counts.totalMatchingExtension,
+  };
 }
