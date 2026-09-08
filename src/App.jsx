@@ -4597,12 +4597,95 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
   );
 }
 
+// Return items are a much simpler shape than a job item — no
+// containers, gang, vendor, or catalog link, just name/qty/SME# — but
+// they deserve the same "tap it, edit it, save" pattern every other
+// item list in the app already has, instead of being stuck as
+// add-once-delete-only. Opened from tapping a return item's own card.
+function ReturnItemEditModal({ item, onSave, onCancel }) {
+  const [name, setName] = useState(item.name);
+  const [qty, setQty] = useState(String(item.qty));
+  const [smeText, setSmeText] = useState(item.sme.join(", "));
+
+  const save = () => {
+    if (!name.trim()) return;
+    onSave({
+      ...item,
+      name: name.trim(),
+      qty: qty.trim() === "" ? 0 : Number(qty) || 0,
+      sme: parseSerials(smeText),
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" onClick={onCancel}>
+      <div
+        className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-slate-100 font-semibold mb-4">Edit return item</h3>
+        <div className="space-y-3 mb-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Item name</label>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && save()}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Qty</label>
+            <input
+              type="number"
+              onFocus={selectOnFocus}
+              onClick={selectOnFocus}
+              min="0"
+              value={qty}
+              onChange={(e) => setQty(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && save()}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">SME # (optional)</label>
+            <input
+              value={smeText}
+              onChange={(e) => setSmeText(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && save()}
+              placeholder="Comma or space separated"
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={onCancel}
+            className="flex-1 text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={save}
+            disabled={!name.trim()}
+            className="flex-1 text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
   const [name, setName] = useState("");
   const [qty, setQty] = useState("");
   const [smeText, setSmeText] = useState("");
   const [deleteItemTarget, setDeleteItemTarget] = useState(null);
   const [deleteReturnConfirm, setDeleteReturnConfirm] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
   const [copied, setCopied] = useState(false);
 
   const addItem = () => {
@@ -4618,6 +4701,12 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
     setName("");
     setQty("");
     setSmeText("");
+  };
+
+  const saveEditedItem = (updated) => {
+    playSaveChime();
+    onUpdate({ ...ret, items: ret.items.map((i) => (i.id === updated.id ? updated : i)) });
+    setEditingItem(null);
   };
 
   const deleteItem = (id) => {
@@ -4715,9 +4804,10 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
         ) : (
           <div className="space-y-2 mb-5">
             {ret.items.map((i) => (
-              <div
+              <button
                 key={i.id}
-                className={`border rounded-lg p-3 flex items-center justify-between gap-3 ${
+                onClick={() => setEditingItem(i)}
+                className={`w-full text-left border rounded-lg p-3 flex items-center justify-between gap-3 hover:border-slate-700 ${
                   i.qty === 0
                     ? "border-red-500/40 bg-red-500/10"
                     : "border-slate-800 bg-slate-900"
@@ -4742,13 +4832,21 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
                     </p>
                   )}
                 </div>
-                <button
-                  onClick={() => setDeleteItemTarget(i)}
-                  className="text-slate-600 hover:text-red-400 shrink-0"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <span className="text-slate-500 p-2">
+                    <Pencil className="w-4 h-4" />
+                  </span>
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeleteItemTarget(i);
+                    }}
+                    className="text-slate-600 hover:text-red-400 p-2"
+                  >
+                    <X className="w-4 h-4" />
+                  </span>
+                </div>
+              </button>
             ))}
           </div>
         )}
@@ -4763,6 +4861,14 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
           </button>
         )}
       </main>
+
+      {editingItem && (
+        <ReturnItemEditModal
+          item={editingItem}
+          onSave={saveEditedItem}
+          onCancel={() => setEditingItem(null)}
+        />
+      )}
 
       {deleteItemTarget && (
         <ConfirmDelete
