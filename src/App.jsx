@@ -6573,7 +6573,9 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
               </p>
             )}
             {substituteTargetName && (
-              <p className="text-xs text-sky-400 mt-0.5">↳ Counts toward "{substituteTargetName}"</p>
+              <p className="text-xs text-sky-400 mt-0.5">
+                ↳ Counts toward "{substituteTargetName}" ({item.qtyHave} of these on hand)
+              </p>
             )}
             <p className="text-xs text-slate-600 mt-0.5">
               {item.catalogId
