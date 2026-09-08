@@ -126,7 +126,13 @@ export async function requestWatchFolderPermission() {
 // objects for anything not already processed (by name+size+modified
 // time, so a re-scan under the same filename — a scanner overwriting
 // "scan001.jpg" — is still picked up), and records those as seen so the
-// next poll doesn't pick them up again.
+// next poll doesn't pick them up again. Also reports total counts
+// (every entry seen, and how many matched the watchable extensions)
+// so a caller can tell "genuinely nothing new" apart from "couldn't
+// actually read the folder's contents at all" — the two look identical
+// from the outside otherwise, which matters a lot for an unusual folder
+// (a network share, say) where silently reading zero of everything is a
+// real possibility.
 export async function pollWatchFolderForNewFiles() {
   const handle = await loadWatchDirectoryHandle();
   if (!handle) return { ok: false, reason: "no-folder", files: [] };
@@ -137,10 +143,14 @@ export async function pollWatchFolderForNewFiles() {
   const seen = new Set(seenList);
   const newFiles = [];
   const newlySeen = [];
+  let totalEntries = 0;
+  let totalMatchingExtension = 0;
   try {
     for await (const entry of handle.values()) {
+      totalEntries++;
       if (entry.kind !== "file") continue;
       if (!WATCHABLE_EXTENSIONS.test(entry.name)) continue;
+      totalMatchingExtension++;
       const file = await entry.getFile();
       const identity = `${entry.name}:${file.size}:${file.lastModified}`;
       if (seen.has(identity)) continue;
@@ -156,5 +166,5 @@ export async function pollWatchFolderForNewFiles() {
     await idbSet(WATCH_SEEN_KEY, merged);
   }
 
-  return { ok: true, files: newFiles };
+  return { ok: true, files: newFiles, totalEntries, totalMatchingExtension };
 }
