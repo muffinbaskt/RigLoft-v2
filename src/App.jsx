@@ -197,14 +197,6 @@ import {
   enablePushNotifications,
   disablePushNotifications,
 } from "./lib/api";
-import {
-  chooseWatchFolder,
-  loadWatchDirectoryHandle,
-  clearWatchDirectoryHandle,
-  checkWatchFolderPermission,
-  requestWatchFolderPermission,
-  pollWatchFolderForNewFiles,
-} from "./lib/watchfolder";
 
 
 function Select({ value, onChange, options, labels }) {
@@ -19531,10 +19523,6 @@ function ReceiptArchive({ onGoHome }) {
   const [nameMemory, setNameMemory] = useState({});
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
-  const scanningRef = useRef(false);
-  useEffect(() => {
-    scanningRef.current = scanning;
-  }, [scanning]);
   const [scanProgress, setScanProgress] = useState(null);
   const [scanError, setScanError] = useState("");
   const [search, setSearch] = useState("");
@@ -19550,13 +19538,6 @@ function ReceiptArchive({ onGoHome }) {
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState({});
   const [printingSelection, setPrintingSelection] = useState(false);
-  // "checking" while we look for an existing chosen folder on mount,
-  // then either null (none set up), a name string (actively watching),
-  // or "needs-permission" (a folder was chosen before, but the browser
-  // needs a fresh click to actually regrant access to it).
-  const [watchStatus, setWatchStatus] = useState("checking");
-  const [watchBusy, setWatchBusy] = useState(false);
-  const [lastWatchCheck, setLastWatchCheck] = useState(null); // { time, totalEntries, totalMatchingExtension, newCount } | null
   const entriesRef = useRef([]);
   const catalogRef = useRef([]);
   const fileInputRef = useRef(null);
@@ -19867,94 +19848,6 @@ function ReceiptArchive({ onGoHome }) {
     setScanProgress(null);
   };
 
-  // Checks once, on mount, whether a watch folder was already set up in
-  // an earlier session — separate from the polling effect below, since
-  // this only needs to run once to decide the starting watchStatus.
-  useEffect(() => {
-    (async () => {
-      if (!FS_ACCESS_SUPPORTED) {
-        setWatchStatus(null);
-        return;
-      }
-      const handle = await loadWatchDirectoryHandle();
-      if (!handle) {
-        setWatchStatus(null);
-        return;
-      }
-      const permission = await checkWatchFolderPermission();
-      setWatchStatus(permission === "granted" ? handle.name : "needs-permission");
-    })();
-  }, []);
-
-  // Shared by the timed poll below and the manual "Check now" button, so
-  // both report through the same diagnostic state — a running count of
-  // exactly what the last check actually saw in the folder (every entry,
-  // how many matched a watchable extension, how many were genuinely
-  // new), not just "found nothing" with no way to tell that apart from
-  // "couldn't read the folder at all."
-  const checkWatchFolderNow = async () => {
-    if (scanningRef.current) return;
-    const result = await pollWatchFolderForNewFiles();
-    if (!result.ok) {
-      if (result.reason === "no-permission") {
-        setWatchStatus("needs-permission");
-      } else if (result.reason === "error") {
-        // Surfaced rather than silently retried next tick — a folder
-        // that can't be read right now (a network share that's
-        // dropped, most likely) should be visible, not silent nothing.
-        setScanError(
-          `Couldn't check the watched folder: ${result.error || "it may not be reachable right now"}`
-        );
-      }
-      return;
-    }
-    setLastWatchCheck({
-      time: timeStamp(),
-      totalEntries: result.totalEntries,
-      totalMatchingExtension: result.totalMatchingExtension,
-      newCount: result.files.length,
-    });
-    if (result.files.length > 0) {
-      await runArchiveScans(result.files);
-    }
-  };
-
-  // While actively watching, checks the folder every 15s for anything
-  // new and runs it through the same scan pipeline as a manual Scan tap.
-  // Skips a tick if a scan (manual or from a previous tick) is already
-  // in flight, rather than risking two overlapping batches.
-  useEffect(() => {
-    if (!watchStatus || watchStatus === "needs-permission" || watchStatus === "checking") return;
-    const interval = setInterval(checkWatchFolderNow, 15000);
-    return () => clearInterval(interval);
-  }, [watchStatus]);
-
-  const handleChooseWatchFolder = async () => {
-    setWatchBusy(true);
-    const result = await chooseWatchFolder();
-    setWatchBusy(false);
-    if (result.ok) {
-      setWatchStatus(result.name);
-    } else if (!result.canceled) {
-      setScanError(result.error || "Couldn't set up that folder.");
-    }
-  };
-
-  const handleResumeWatching = async () => {
-    setWatchBusy(true);
-    const granted = await requestWatchFolderPermission();
-    setWatchBusy(false);
-    if (granted) {
-      const handle = await loadWatchDirectoryHandle();
-      setWatchStatus(handle ? handle.name : null);
-    }
-  };
-
-  const handleStopWatching = async () => {
-    await clearWatchDirectoryHandle();
-    setWatchStatus(null);
-  };
-
   const deleteEntry = (entry) => {
     if (entry.photoPath) deleteReferenceDocument(entry.photoPath).catch(() => {});
     saveEntries(entriesRef.current.filter((e) => e.id !== entry.id));
@@ -20152,66 +20045,6 @@ function ReceiptArchive({ onGoHome }) {
           List. Items that match your catalog by name still log vendor spend and cost history,
           same as an approved receipt would.
         </p>
-
-        {FS_ACCESS_SUPPORTED && (
-          <div className="mb-4 text-xs bg-slate-900 border border-slate-800 rounded-md px-3 py-2">
-            {watchStatus === "checking" ? (
-              <span className="text-slate-600">Checking for a watched folder…</span>
-            ) : watchStatus === "needs-permission" ? (
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-amber-400 flex items-center gap-1.5">
-                  <Inbox className="w-3.5 h-3.5" />
-                  Folder watching paused — needs permission again
-                </span>
-                <button
-                  onClick={handleResumeWatching}
-                  disabled={watchBusy}
-                  className="text-amber-400 hover:text-amber-300 font-semibold disabled:opacity-50"
-                >
-                  Resume
-                </button>
-              </div>
-            ) : watchStatus ? (
-              <>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-slate-400 flex items-center gap-1.5 min-w-0">
-                    <Inbox className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    <span className="truncate">
-                      Watching "{watchStatus}" — new scans import automatically while this tab's
-                      open
-                    </span>
-                  </span>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <button onClick={checkWatchFolderNow} className="text-slate-400 hover:text-slate-200">
-                      Check now
-                    </button>
-                    <button onClick={handleStopWatching} className="text-slate-500 hover:text-red-400">
-                      Stop
-                    </button>
-                  </div>
-                </div>
-                <p className="text-slate-600 mt-1">
-                  {lastWatchCheck
-                    ? `Last checked ${lastWatchCheck.time} — ${lastWatchCheck.totalEntries} item${
-                        lastWatchCheck.totalEntries === 1 ? "" : "s"
-                      } in the folder, ${lastWatchCheck.totalMatchingExtension} a scannable type, ${
-                        lastWatchCheck.newCount
-                      } new`
-                    : "Waiting on the first check…"}
-                </p>
-              </>
-            ) : (
-              <button
-                onClick={handleChooseWatchFolder}
-                disabled={watchBusy}
-                className="text-slate-400 hover:text-slate-200 flex items-center gap-1.5 disabled:opacity-50"
-              >
-                <Inbox className="w-3.5 h-3.5" />
-                Auto-import scans from a folder on this computer…
-              </button>
-            )}
-          </div>
-        )}
 
         {scanError && <p className="text-sm text-red-400 mb-4">Couldn't scan that: {scanError}</p>}
         <input
