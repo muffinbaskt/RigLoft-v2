@@ -6567,14 +6567,32 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
               Have {displayHave} of {displayNeeded}
               {item.qtyUnit ? ` ${item.qtyUnit}` : ""} needed
             </p>
-            {combinedInfo && combinedInfo.isTarget && combinedInfo.contributors.length > 0 && (
+            {combinedInfo && combinedInfo.contributors.length > 0 && (
               <p className="text-xs text-sky-400 mt-0.5">
-                🔀 Combined with {combinedInfo.contributors.map((c) => `${c.name} (${c.qtyHave})`).join(", ")}
+                {combinedInfo.mode === "surplus" ? (
+                  combinedInfo.borrowed > 0 ? (
+                    <>
+                      🔁 Borrowed {combinedInfo.borrowed} of surplus from{" "}
+                      {combinedInfo.contributors.map((c) => c.name).join(", ")}
+                    </>
+                  ) : (
+                    <>
+                      🔁 Can share surplus with{" "}
+                      {combinedInfo.contributors.map((c) => `${c.name} (${c.qtyHave})`).join(", ")}
+                    </>
+                  )
+                ) : (
+                  <>
+                    🔀 Combined with{" "}
+                    {combinedInfo.contributors.map((c) => `${c.name} (${c.qtyHave})`).join(", ")}
+                  </>
+                )}
               </p>
             )}
             {substituteTargetName && (
               <p className="text-xs text-sky-400 mt-0.5">
-                ↳ Counts toward "{substituteTargetName}" ({item.qtyHave} of these on hand)
+                ↳ {combinedInfo && combinedInfo.mode === "surplus" ? "Can share surplus with" : "Counts toward"} "
+                {substituteTargetName}" ({item.qtyHave} of these on hand)
               </p>
             )}
             <p className="text-xs text-slate-600 mt-0.5">
@@ -7089,28 +7107,31 @@ function JobNameModal({
 }
 
 // Folds in a substitute-linked item's contributions the same way
-// JobInventory's own combinedTotals does, for any summary view (job
-// tiles, job pickers) that needs a status/outstanding count to agree
-// with what the item's own card actually shows — rather than reading
-// the item's raw `status` field, which is only ever set from that
-// item's own qtyHave/qtyNeeded and never learns about other items
-// linked to it via substituteForItemId. Builds one id -> { have, needed,
-// status } map per item list in a single pass — both the substitute
-// target and every one of its contributors land on the identical
-// combined entry, matching the "counts toward" convention used
-// everywhere else this relationship shows up.
+// JobInventory's own combinedTotals does — same two modes ("pooled":
+// one shared requirement; "surplus": each keeps its own requirement,
+// only leftover crosses over) — for any summary view (job tiles, job
+// pickers) that needs a status/outstanding count to agree with what the
+// item's own card actually shows, rather than reading the item's raw
+// `status` field, which is only ever set from that item's own
+// qtyHave/qtyNeeded and never learns about other items linked to it via
+// substituteForItemId. Builds one id -> { have, needed, status } map per
+// item list in a single pass.
 function buildEffectiveTotalsMap(items) {
-  const contributorsByTarget = {};
+  const map = {};
+
+  // Pooled links
+  const pooledContributorsByTarget = {};
   items.forEach((i) => {
-    if (i.substituteForItemId) {
-      if (!contributorsByTarget[i.substituteForItemId]) contributorsByTarget[i.substituteForItemId] = [];
-      contributorsByTarget[i.substituteForItemId].push(i);
+    if (i.substituteForItemId && i.substituteMode !== "surplus") {
+      if (!pooledContributorsByTarget[i.substituteForItemId]) {
+        pooledContributorsByTarget[i.substituteForItemId] = [];
+      }
+      pooledContributorsByTarget[i.substituteForItemId].push(i);
     }
   });
-  const map = {};
   items.forEach((item) => {
-    if (item.substituteForItemId) return; // filled in below, from its target's entry
-    const contributors = contributorsByTarget[item.id] || [];
+    if (item.substituteForItemId && item.substituteMode !== "surplus") return; // filled in below, from its target's entry
+    const contributors = pooledContributorsByTarget[item.id] || [];
     const have =
       (Number(item.qtyHave) || 0) +
       contributors.reduce((sum, c) => sum + (Number(c.qtyHave) || 0), 0);
@@ -7121,6 +7142,34 @@ function buildEffectiveTotalsMap(items) {
       map[c.id] = { have, needed, status };
     });
   });
+
+  // Surplus links — grouped by target, each item keeps its own needed
+  // and only borrows enough of the group's external surplus to cover
+  // its own shortfall, symmetric across the whole group.
+  const surplusGroupsByTarget = {};
+  items.forEach((i) => {
+    if (!i.substituteForItemId || i.substituteMode !== "surplus") return;
+    const target = items.find((t) => t.id === i.substituteForItemId);
+    if (!target) return;
+    if (!surplusGroupsByTarget[target.id]) surplusGroupsByTarget[target.id] = [target];
+    surplusGroupsByTarget[target.id].push(i);
+  });
+  Object.values(surplusGroupsByTarget).forEach((group) => {
+    group.forEach((item) => {
+      const others = group.filter((other) => other.id !== item.id);
+      const ownHave = Number(item.qtyHave) || 0;
+      const needed = Number(item.qtyNeeded) || 0;
+      const ownShortfall = Math.max(0, needed - ownHave);
+      const externalSurplus = others.reduce(
+        (sum, other) => sum + Math.max(0, (Number(other.qtyHave) || 0) - (Number(other.qtyNeeded) || 0)),
+        0
+      );
+      const have = ownHave + Math.min(externalSurplus, ownShortfall);
+      const status = have >= needed ? "green" : have > 0 ? "yellow" : "red";
+      map[item.id] = { have, needed, status };
+    });
+  });
+
   // A substituteForItemId pointing at an item that's since been deleted —
   // falls back to its own raw values rather than being left out of the map.
   items.forEach((item) => {
@@ -8398,6 +8447,12 @@ function JobInventory({
   const [viewingReceiptFor, setViewingReceiptFor] = useState(null);
   const [linkingSubstituteItem, setLinkingSubstituteItem] = useState(null);
   const [substituteSearch, setSubstituteSearch] = useState("");
+  const [substituteLinkMode, setSubstituteLinkMode] = useState("pooled");
+  useEffect(() => {
+    if (linkingSubstituteItem) {
+      setSubstituteLinkMode(linkingSubstituteItem.substituteMode || "pooled");
+    }
+  }, [linkingSubstituteItem]);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [containersOpen, setContainersOpen] = useState(false);
@@ -8617,31 +8672,36 @@ function JobInventory({
     );
   };
 
-  // Items that point at another item via substituteForItemId get their
-  // qty folded into that item's displayed Have/Needed — purely a display
+  // Items that point at another item via substituteForItemId get folded
+  // into that item's displayed Have/Needed — purely a display
   // combination. Containers, serials, and transfer tracking all stay
   // fully separate per item underneath, since the actual transfer record
   // already lists each item on its own and that distinction has to
-  // survive — this is only about the dashboard correctly showing the
-  // requirement as satisfied when it's being filled by a mix of two
-  // interchangeable things (an old and new tool model, say).
+  // survive.
   //
-  // Both sides of the relationship get the SAME consolidated numbers —
-  // the target's own real qtyNeeded, and the combined qtyHave — not just
-  // the target. A substitute item's own qtyNeeded is usually 0 or
-  // meaningless on its own (it doesn't have an independent requirement),
-  // so showing its bare "X of 0" looks broken; showing the shared total
-  // on both cards makes it clear they're satisfying one requirement
-  // together.
+  // Two modes, chosen per link:
+  // "pooled" — one shared requirement, either item counts toward it
+  // interchangeably (an old and new tool model, say). Both sides show
+  // the SAME consolidated numbers — the target's own real qtyNeeded,
+  // and the combined qtyHave — since a pooled contributor's own
+  // qtyNeeded is usually 0 or meaningless on its own.
+  // "surplus" — each item keeps its OWN real requirement; only whatever
+  // surplus one has left over after meeting its own need can help cover
+  // a shortfall on the other side (two genuinely separate line items
+  // that happen to be able to borrow from each other, not one shared
+  // pool).
   //
   // Computed early (before filtering/sorting/counting below) so that
   // status-based filters, sorts, and the header counts all agree with
   // what the card itself displays — a target item whose own qtyHave is
   // 0 but whose contributors cover the requirement should show (and
   // filter/count) as Complete everywhere, not just visually on its card.
-  const combinedTotals = {}; // itemId -> { qtyHave, qtyNeeded, contributors, isTarget }
+  const combinedTotals = {}; // itemId -> { qtyHave, qtyNeeded, contributors, isTarget, mode }
+
+  // Pass 1: "pooled" links — one shared requirement, either item counts
+  // toward it interchangeably (old/new tool models, say).
   items.forEach((i) => {
-    if (!i.substituteForItemId) return;
+    if (!i.substituteForItemId || i.substituteMode === "surplus") return;
     const target = items.find((t) => t.id === i.substituteForItemId);
     if (!target) return;
     if (!combinedTotals[target.id]) {
@@ -8650,6 +8710,7 @@ function JobInventory({
         qtyNeeded: target.qtyNeeded,
         contributors: [],
         isTarget: true,
+        mode: "pooled",
       };
     }
     combinedTotals[target.id].qtyHave += i.qtyHave;
@@ -8660,12 +8721,48 @@ function JobInventory({
   // number the target shows — same qtyHave, same qtyNeeded — just
   // without re-listing itself as one of the "combined with" names.
   Object.values(combinedTotals).forEach((info) => {
+    if (info.mode !== "pooled") return;
     info.contributors.forEach((c) => {
       combinedTotals[c.id] = {
         qtyHave: info.qtyHave,
         qtyNeeded: info.qtyNeeded,
         contributors: info.contributors.filter((x) => x.id !== c.id),
         isTarget: false,
+        mode: "pooled",
+      };
+    });
+  });
+
+  // Pass 2: "surplus" links — each item keeps its OWN requirement; only
+  // whatever's left over beyond that requirement can cover a shortfall
+  // on the other side. Symmetric by construction (works the same
+  // regardless of which side actually ends up with surplus in practice),
+  // since real usage may only ever go one direction even though the math
+  // doesn't assume that.
+  const surplusGroupsByTarget = {};
+  items.forEach((i) => {
+    if (!i.substituteForItemId || i.substituteMode !== "surplus") return;
+    const target = items.find((t) => t.id === i.substituteForItemId);
+    if (!target) return;
+    if (!surplusGroupsByTarget[target.id]) surplusGroupsByTarget[target.id] = [target];
+    surplusGroupsByTarget[target.id].push(i);
+  });
+  Object.values(surplusGroupsByTarget).forEach((group) => {
+    group.forEach((item) => {
+      const others = group.filter((other) => other.id !== item.id);
+      const ownShortfall = Math.max(0, item.qtyNeeded - item.qtyHave);
+      const externalSurplus = others.reduce(
+        (sum, other) => sum + Math.max(0, other.qtyHave - other.qtyNeeded),
+        0
+      );
+      const borrowed = Math.min(externalSurplus, ownShortfall);
+      combinedTotals[item.id] = {
+        qtyHave: item.qtyHave + borrowed,
+        qtyNeeded: item.qtyNeeded,
+        contributors: others.map((other) => ({ id: other.id, name: other.name, qtyHave: other.qtyHave })),
+        isTarget: item.id === group[0].id,
+        mode: "surplus",
+        borrowed,
       };
     });
   });
@@ -8973,18 +9070,26 @@ function JobInventory({
     setViewingReceiptFor(item.sourceReceipt);
   };
 
-  const linkSubstitute = (item, targetItem) => {
+  const linkSubstitute = (item, targetItem, mode = "pooled") => {
     onUpdateJob((prevJob) => ({
       ...prevJob,
       items: (prevJob.items || []).map((i) =>
-        i.id === item.id ? { ...i, substituteForItemId: targetItem ? targetItem.id : null } : i
+        i.id === item.id
+          ? {
+              ...i,
+              substituteForItemId: targetItem ? targetItem.id : null,
+              substituteMode: targetItem ? mode : null,
+            }
+          : i
       ),
       activityLog: [
         {
           id: uniqueId(),
           time: timeStamp(),
           message: targetItem
-            ? `"${item.name}" now counts toward "${targetItem.name}"'s requirement`
+            ? mode === "surplus"
+              ? `"${item.name}" can now lend leftover stock to "${targetItem.name}" (and vice versa)`
+              : `"${item.name}" now counts toward "${targetItem.name}"'s requirement`
             : `"${item.name}" no longer counts toward another item's requirement`,
         },
         ...prevJob.activityLog,
@@ -10540,6 +10645,31 @@ function JobInventory({
               separately (own containers, own serials, own transfers).
             </p>
             <div className="px-5 pt-3 shrink-0">
+              <div className="flex gap-2 mb-3">
+                <button
+                  onClick={() => setSubstituteLinkMode("pooled")}
+                  className={`flex-1 text-left text-xs rounded-md px-3 py-2 border ${
+                    substituteLinkMode === "pooled"
+                      ? "border-sky-500/50 bg-sky-500/10 text-sky-300"
+                      : "border-slate-700 text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <span className="font-semibold block">Fully pooled</span>
+                  Same requirement, either counts — both show the identical combined Have/Needed.
+                </button>
+                <button
+                  onClick={() => setSubstituteLinkMode("surplus")}
+                  className={`flex-1 text-left text-xs rounded-md px-3 py-2 border ${
+                    substituteLinkMode === "surplus"
+                      ? "border-sky-500/50 bg-sky-500/10 text-sky-300"
+                      : "border-slate-700 text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <span className="font-semibold block">Surplus only</span>
+                  Each keeps its own requirement — only leftover beyond that can cover the other's
+                  shortfall.
+                </button>
+              </div>
               <input
                 autoFocus
                 value={substituteSearch}
@@ -10577,7 +10707,7 @@ function JobInventory({
                   return (
                     <button
                       key={i.id}
-                      onClick={() => linkSubstitute(linkingSubstituteItem, i)}
+                      onClick={() => linkSubstitute(linkingSubstituteItem, i, substituteLinkMode)}
                       className={`w-full text-left text-sm rounded-md px-3 py-2 border mb-1.5 ${
                         linkingSubstituteItem.substituteForItemId === i.id
                           ? "border-sky-500/50 bg-sky-500/10 text-sky-300"
