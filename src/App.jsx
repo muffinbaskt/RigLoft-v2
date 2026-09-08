@@ -19895,7 +19895,16 @@ function ReceiptArchive({ onGoHome }) {
       if (scanningRef.current) return;
       const result = await pollWatchFolderForNewFiles();
       if (!result.ok) {
-        if (result.reason === "no-permission") setWatchStatus("needs-permission");
+        if (result.reason === "no-permission") {
+          setWatchStatus("needs-permission");
+        } else if (result.reason === "error") {
+          // Surfaced rather than silently retried next tick — a folder
+          // that can't be read right now (a network share that's
+          // dropped, most likely) should be visible, not silent nothing.
+          setScanError(
+            `Couldn't check the watched folder: ${result.error || "it may not be reachable right now"}`
+          );
+        }
         return;
       }
       if (result.files.length > 0) {
