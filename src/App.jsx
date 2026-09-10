@@ -6309,7 +6309,23 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
   const removeItem = (id) => {
     setReviewItems((prev) => prev.filter((it) => it.id !== id));
   };
-  const finalQty = (item) => (item.quantityLabel ? item.quantity * craneCount : item.quantity);
+  // Two genuinely different kinds of label end up in quantityLabel, and
+  // they multiply differently — "Per Crane" is a rate against a
+  // job-specific number (the crane count typed in above), while "Set" is
+  // a fixed packaging fact (one set of this hardware is always 2 of the
+  // item) that has nothing to do with how many cranes are on the job.
+  // Conflating the two meant a "1 Set" line was showing as needing just
+  // 1, when it actually means 2. Anything else labeled (Box, Roll, ...)
+  // is left as its raw written number — safer to not guess at a
+  // conversion nobody's confirmed than to invent one.
+  const SET_MULTIPLIER = 2;
+  const finalQty = (item) => {
+    if (!item.quantityLabel) return item.quantity;
+    const label = item.quantityLabel.toLowerCase();
+    if (label.includes("set")) return item.quantity * SET_MULTIPLIER;
+    if (label.includes("crane")) return item.quantity * craneCount;
+    return item.quantity;
+  };
 
   const handleConfirmImport = () => {
     const previewRows = reviewItems.map((it) => ({
@@ -6467,7 +6483,13 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
                             />
                             {it.quantityLabel ? (
                               <span className="text-xs text-amber-400 whitespace-nowrap">
-                                {it.quantityLabel} × {craneCount} = <strong>{finalQty(it)}</strong>
+                                {it.quantityLabel}
+                                {it.quantityLabel.toLowerCase().includes("set")
+                                  ? ` (×${SET_MULTIPLIER}) = `
+                                  : it.quantityLabel.toLowerCase().includes("crane")
+                                  ? ` × ${craneCount} = `
+                                  : " = "}
+                                <strong>{finalQty(it)}</strong>
                               </span>
                             ) : (
                               <span className="text-xs text-slate-500">needed</span>
@@ -6514,7 +6536,24 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
           >
             <X className="w-6 h-6" />
           </button>
-          <ZoomableImage key={viewingCrop.url} src={viewingCrop.url} alt="Scanned page" />
+          <ZoomableImage
+            key={viewingCrop.url}
+            src={viewingCrop.url}
+            alt="Scanned page"
+            overlay={
+              viewingCrop.bbox && (
+                <div
+                  className="absolute border-2 border-amber-500 pointer-events-none"
+                  style={{
+                    left: `${viewingCrop.bbox.x * 100}%`,
+                    top: `${viewingCrop.bbox.y * 100}%`,
+                    width: `${viewingCrop.bbox.width * 100}%`,
+                    height: `${viewingCrop.bbox.height * 100}%`,
+                  }}
+                />
+              )
+            }
+          />
         </div>
       )}
     </div>
