@@ -99,6 +99,7 @@ import {
   RECEIVING_QUEUE_KEY,
   RECEIPT_ARCHIVE_KEY,
   RECEIVING_NAME_MEMORY_KEY,
+  RECEIVING_UNDO_KEY,
   computeJobItemStatus,
   computeJobItemReceived,
   computeUsualVendor,
@@ -21462,17 +21463,18 @@ function ReceivingApp({ onGoHome }) {
   const [confirmingClearDiscarded, setConfirmingClearDiscarded] = useState(false);
   const [confirmingClearAllHistory, setConfirmingClearAllHistory] = useState(false);
   const [viewingHistoryBatch, setViewingHistoryBatch] = useState(null);
-  const [receivingUndoStack, setReceivingUndoStack] = useState([]); // in-memory only, this session
+  const [receivingUndoStack, setReceivingUndoStack] = useState([]);
   const fileInputRef = useRef(null);
 
   const load = async () => {
     try {
-      const [qResult, jResult, lResult, cResult, nResult] = await Promise.all([
+      const [qResult, jResult, lResult, cResult, nResult, uResult] = await Promise.all([
         getWithRetry(RECEIVING_QUEUE_KEY),
         getWithRetry(JOBS_KEY),
         getWithRetry(LOVE_LISTS_KEY),
         getWithRetry(CATALOG_KEY),
         getWithRetry(RECEIVING_NAME_MEMORY_KEY),
+        getWithRetry(RECEIVING_UNDO_KEY),
       ]);
       if (qResult.ok && qResult.value) {
         const loaded = JSON.parse(qResult.value);
@@ -21483,6 +21485,7 @@ function ReceivingApp({ onGoHome }) {
       if (lResult.ok && lResult.value) setLists(JSON.parse(lResult.value));
       if (cResult.ok && cResult.value) setCatalog(JSON.parse(cResult.value));
       if (nResult.ok && nResult.value) setNameMemory(JSON.parse(nResult.value));
+      if (uResult.ok && uResult.value) setReceivingUndoStack(JSON.parse(uResult.value));
     } catch {}
     setLoading(false);
   };
@@ -21497,44 +21500,56 @@ function ReceivingApp({ onGoHome }) {
     saveWithRetry(RECEIVING_QUEUE_KEY, JSON.stringify(next)).catch(() => {});
   };
 
-  // Undo for the two genuinely consequential Receiving actions — approve
-  // and discard — since those are the ones with no other way back once
-  // they've happened (unlike scanning or editing a line, which you can
-  // just redo by hand). Deliberately session-only (not persisted or
-  // synced across devices, unlike the same undo idea on Job Lists):
-  // approve touches jobs, Love Lists, the catalog (vendor spend history),
-  // AND the queue all at once, so a
-  // durable version would mean snapshotting all three datasets in full
-  // on every single approval — a lot of storage for a mistake that's
-  // realistically always caught within the same sitting, not days later.
-  // Capped at the last 3, oldest dropped, no redo.
+  // Undo for Receiving's genuinely consequential actions — approve,
+  // discard, deleting a history entry, and the two bulk "clear" actions
+  // — since those are the ones with no other way back once they've
+  // happened (unlike editing a line's quantity or destination, which you
+  // can just redo by hand, so those never push an entry here). Now
+  // persisted (survives closing the tab, unlike the first version of
+  // this), same as Job Lists' own undo — but two different weights of
+  // entry, because approve is a genuinely different kind of action than
+  // the rest: it touches jobs, Love Lists, AND the catalog's vendor
+  // spend history all at once, so its entry snapshots all three of
+  // those plus the queue. Every other covered action only ever touches
+  // the queue itself, so those entries are far cheaper — just the queue.
+  // Capped at the last 3 either way, oldest dropped, no redo.
   const MAX_RECEIVING_UNDO_ENTRIES = 3;
-  const pushReceivingUndo = (label) => {
+  const persistReceivingUndo = (stack) => {
+    saveWithRetry(RECEIVING_UNDO_KEY, JSON.stringify(stack)).catch(() => {});
+  };
+  const pushReceivingUndo = (label, { full = false } = {}) => {
     const entry = {
       id: uniqueId(),
       time: timeStamp(),
       label,
-      jobsSnapshot: jobs,
-      listsSnapshot: lists,
-      catalogSnapshot: catalog,
       queueSnapshot: queueRef.current,
+      ...(full
+        ? { full: true, jobsSnapshot: jobs, listsSnapshot: lists, catalogSnapshot: catalog }
+        : {}),
     };
-    setReceivingUndoStack((prev) => [entry, ...prev].slice(0, MAX_RECEIVING_UNDO_ENTRIES));
+    setReceivingUndoStack((prev) => {
+      const next = [entry, ...prev].slice(0, MAX_RECEIVING_UNDO_ENTRIES);
+      persistReceivingUndo(next);
+      return next;
+    });
   };
 
   const undoLastReceivingAction = async () => {
     const [mostRecent, ...rest] = receivingUndoStack;
     if (!mostRecent) return;
     setReceivingUndoStack(rest);
-    setJobs(mostRecent.jobsSnapshot);
-    setLists(mostRecent.listsSnapshot);
-    setCatalog(mostRecent.catalogSnapshot);
+    persistReceivingUndo(rest);
     saveQueue(mostRecent.queueSnapshot);
-    await Promise.all([
-      saveWithRetry(JOBS_KEY, JSON.stringify(mostRecent.jobsSnapshot)),
-      saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(mostRecent.listsSnapshot)),
-      saveWithRetry(CATALOG_KEY, JSON.stringify(mostRecent.catalogSnapshot)),
-    ]);
+    if (mostRecent.full) {
+      setJobs(mostRecent.jobsSnapshot);
+      setLists(mostRecent.listsSnapshot);
+      setCatalog(mostRecent.catalogSnapshot);
+      await Promise.all([
+        saveWithRetry(JOBS_KEY, JSON.stringify(mostRecent.jobsSnapshot)),
+        saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(mostRecent.listsSnapshot)),
+        saveWithRetry(CATALOG_KEY, JSON.stringify(mostRecent.catalogSnapshot)),
+      ]);
+    }
     playSaveChime();
   };
 
@@ -21879,12 +21894,25 @@ function ReceivingApp({ onGoHome }) {
   // the photo file itself; this just clears the leftover queue record so
   // discarded (or old approved) receipts don't pile up forever.
   const deleteBatch = (id) => {
+    const batch = queueRef.current.find((b) => b.id === id);
+    if (batch) {
+      pushReceivingUndo(`Deleted "${batch.label || batch.vendor || "receipt"}" from history`);
+    }
     saveQueue(queueRef.current.filter((b) => b.id !== id));
   };
   const clearDiscarded = () => {
     // This is the actual point of no return for a discarded batch — the
     // record AND its photo file(s), since discard itself now only flips
-    // status (see the comment there) to stay undo-able.
+    // status (see the comment there) to stay undo-able. That means undo
+    // on this specific action can only ever bring the queue records
+    // back, not any photo file that's already been deleted — the label
+    // says so, rather than implying a full reversal.
+    const count = queueRef.current.filter((b) => b.status === "discarded").length;
+    if (count > 0) {
+      pushReceivingUndo(
+        `Cleared ${count} discarded receipt${count === 1 ? "" : "s"} (records only — photos already deleted can't come back)`
+      );
+    }
     queueRef.current
       .filter((b) => b.status === "discarded")
       .forEach((b) => {
@@ -21900,6 +21928,10 @@ function ReceivingApp({ onGoHome }) {
   // job's Reference Documents page — deleting the underlying file here
   // would silently break that.
   const clearAllHistory = () => {
+    const count = queueRef.current.filter((b) => b.status !== "pending").length;
+    if (count > 0) {
+      pushReceivingUndo(`Cleared ${count} receipt${count === 1 ? "" : "s"} from history`);
+    }
     saveQueue(queueRef.current.filter((b) => b.status === "pending"));
   };
 
@@ -21933,7 +21965,7 @@ function ReceivingApp({ onGoHome }) {
     );
     if (assignedLines.length === 0) return;
 
-    pushReceivingUndo(`Approved receipt: ${batch.label || batch.vendor || "receipt"}`);
+    pushReceivingUndo(`Approved receipt: ${batch.label || batch.vendor || "receipt"}`, { full: true });
 
     recordVendorPurchases(assignedLines);
 
