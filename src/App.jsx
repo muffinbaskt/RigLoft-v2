@@ -47,6 +47,7 @@ import {
   AlertTriangle,
   DollarSign,
   Shuffle,
+  ExternalLink,
 } from "lucide-react";
 import {
   STORAGE_OPTIONS,
@@ -6463,9 +6464,24 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
                           </div>
                         )}
                         <div className="flex-1 min-w-0">
-                          <p className="text-[10px] text-slate-600 mb-1">
-                            Tap the page to zoom — amber box is the AI's best guess, not always exact
-                          </p>
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <p className="text-[10px] text-slate-600">
+                              Tap the page to zoom — amber box is the AI's best guess, not always exact
+                            </p>
+                            <button
+                              onClick={() =>
+                                window.open(
+                                  pageImageUrls[it.page],
+                                  "_blank",
+                                  "noopener,width=900,height=1100"
+                                )
+                              }
+                              title="Open this page in its own window — drag it to another screen if you've got one"
+                              className="text-slate-500 hover:text-amber-400 shrink-0"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                            </button>
+                          </div>
                           <input
                             value={it.description}
                             onChange={(e) => updateItem(it.id, { description: e.target.value })}
