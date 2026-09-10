@@ -16,6 +16,7 @@ export const RECEIPT_ARCHIVE_KEY = "warehub-receipt-archive";
 // This is what lets a size-specific line ("...4LB SLEDGE...") auto-fill
 // correctly next time without ever guessing at a size from the text.
 export const RECEIVING_NAME_MEMORY_KEY = "warehub-receiving-name-memory";
+export const RECEIVING_UNDO_KEY = "warehub-receiving-undo";
 
 // Shared apply-logic for a single receipt line, used both by the
 // standalone Receiving screen and by pulling a receipt directly from
