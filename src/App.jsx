@@ -6223,6 +6223,7 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
   // THIS job actually has, so that number lives here, typed once, and
   // every rated line's final quantity recomputes live as it changes.
   const [craneCount, setCraneCount] = useState(1);
+  const [viewingCrop, setViewingCrop] = useState(null);
   const fileInputRef = useRef(null);
 
   const gangFromSection = (section) => {
@@ -6427,13 +6428,14 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
                     <div key={it.id} className="border border-slate-800 rounded-lg p-2.5 bg-slate-800/40">
                       <div className="flex gap-2.5">
                         {it.cropUrl ? (
-                          <img
-                            src={it.cropUrl}
-                            alt=""
-                            className="w-28 h-14 object-cover rounded border border-slate-700 shrink-0 bg-white"
-                          />
+                          <button
+                            onClick={() => setViewingCrop(it.cropUrl)}
+                            className="w-40 h-20 shrink-0 rounded border border-slate-700 bg-white overflow-hidden"
+                          >
+                            <img src={it.cropUrl} alt="" className="w-full h-full object-contain" />
+                          </button>
                         ) : (
-                          <div className="w-28 h-14 rounded border border-slate-700 shrink-0 bg-slate-800 flex items-center justify-center">
+                          <div className="w-40 h-20 rounded border border-slate-700 shrink-0 bg-slate-800 flex items-center justify-center">
                             <FileText className="w-4 h-4 text-slate-600" />
                           </div>
                         )}
@@ -6490,6 +6492,21 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
           </>
         )}
       </div>
+
+      {viewingCrop && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
+          onClick={() => setViewingCrop(null)}
+        >
+          <button
+            onClick={() => setViewingCrop(null)}
+            className="absolute top-4 right-4 text-slate-300 hover:text-white"
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <ZoomableImage key={viewingCrop} src={viewingCrop} alt="Scanned row" />
+        </div>
+      )}
     </div>
   );
 }
