@@ -85,7 +85,6 @@ import {
   parseCatalogBulkText,
   newLoveListItem,
   csvEscape,
-  cropImageToDataUrl,
   copyToClipboard,
   emptyCatalogItem,
 } from "./lib/utils";
@@ -6226,22 +6225,6 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
   const [viewingCrop, setViewingCrop] = useState(null);
   const fileInputRef = useRef(null);
 
-  // A slightly-off bounding box is expected, not a bug to chase down
-  // perfectly — the model's row alignment on a dense table isn't
-  // pixel-precise. Rather than trust its exact box, this pads it out a
-  // couple of rows above and below whatever it landed on (bbox.height is
-  // roughly "one row," so a few multiples of that in each direction),
-  // so the row you actually need is very likely visible somewhere in the
-  // wider snippet even when the box itself drifted by one row or so.
-  // Horizontal stays as given — the reported drift has only ever been
-  // vertical (which row), not which column.
-  const expandBboxForContext = (bbox, rows = 2) => {
-    const rowHeight = bbox.height || 0.02;
-    const y = Math.max(0, bbox.y - rowHeight * rows);
-    const bottom = Math.min(1, bbox.y + bbox.height + rowHeight * rows);
-    return { x: bbox.x, y, width: bbox.width, height: bottom - y };
-  };
-
   const gangFromSection = (section) => {
     if (!section) return "Unassigned";
     const s = section.toLowerCase();
@@ -6294,34 +6277,24 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "Scan failed.");
 
-      const items = await Promise.all(
-        (data.items || []).map(async (it) => {
-          let cropUrl = null;
-          try {
-            if (urls[it.page] && it.bbox) {
-              cropUrl = await cropImageToDataUrl(urls[it.page], expandBboxForContext(it.bbox), it.bbox);
-            }
-          } catch {
-            // Missing crop isn't worth failing the whole item over — the
-            // row still shows up for review, just without the snippet.
-          }
-          const match = it.description ? findCatalogMatch(it.description, catalog) : null;
-          return {
-            id: uniqueId(),
-            description: it.description || "",
-            quantity: Number(it.quantity) > 0 ? Number(it.quantity) : 1,
-            quantityLabel: it.quantityLabel || null,
-            section: it.section || null,
-            cropUrl,
-            matchedCatalogName: match ? match.name : null,
-            gang: match ? match.gang : gangFromSection(it.section),
-            storage: match ? match.storage : "Unassigned",
-            storageDetail: match && match.storage === "Other" ? match.storageDetail || "" : "",
-            category: match ? match.category || "" : "",
-            needsTransfer: match ? !!match.needsTransfer : false,
-          };
-        })
-      );
+      const items = (data.items || []).map((it) => {
+        const match = it.description ? findCatalogMatch(it.description, catalog) : null;
+        return {
+          id: uniqueId(),
+          description: it.description || "",
+          quantity: Number(it.quantity) > 0 ? Number(it.quantity) : 1,
+          quantityLabel: it.quantityLabel || null,
+          section: it.section || null,
+          page: it.page,
+          bbox: it.bbox || null,
+          matchedCatalogName: match ? match.name : null,
+          gang: match ? match.gang : gangFromSection(it.section),
+          storage: match ? match.storage : "Unassigned",
+          storageDetail: match && match.storage === "Other" ? match.storageDetail || "" : "",
+          category: match ? match.category || "" : "",
+          needsTransfer: match ? !!match.needsTransfer : false,
+        };
+      });
       setReviewItems(items);
       setStep("review");
     } catch (err) {
@@ -6443,19 +6416,40 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
                   {reviewItems.map((it) => (
                     <div key={it.id} className="border border-slate-800 rounded-lg p-2.5 bg-slate-800/40">
                       <div className="flex gap-2.5">
-                        {it.cropUrl ? (
+                        {pageImageUrls[it.page] ? (
                           <button
-                            onClick={() => setViewingCrop(it.cropUrl)}
-                            className="w-40 h-36 shrink-0 rounded border border-slate-700 bg-white overflow-hidden"
+                            onClick={() => setViewingCrop({ url: pageImageUrls[it.page], bbox: it.bbox })}
+                            className="relative w-24 h-32 shrink-0 rounded border border-slate-700 bg-white overflow-hidden"
                           >
-                            <img src={it.cropUrl} alt="" className="w-full h-full object-contain" />
+                            <img
+                              src={pageImageUrls[it.page]}
+                              alt=""
+                              className="w-full h-full object-contain"
+                            />
+                            {it.bbox && (
+                              <div
+                                className="absolute border-2 border-amber-500"
+                                style={{
+                                  left: `${it.bbox.x * 100}%`,
+                                  top: `${it.bbox.y * 100}%`,
+                                  width: `${it.bbox.width * 100}%`,
+                                  height: `${it.bbox.height * 100}%`,
+                                }}
+                              />
+                            )}
+                            <span className="absolute bottom-0 right-0 bg-slate-950/80 text-slate-300 text-[9px] px-1 rounded-tl">
+                              p{it.page + 1}
+                            </span>
                           </button>
                         ) : (
-                          <div className="w-40 h-36 rounded border border-slate-700 shrink-0 bg-slate-800 flex items-center justify-center">
+                          <div className="w-24 h-32 rounded border border-slate-700 shrink-0 bg-slate-800 flex items-center justify-center">
                             <FileText className="w-4 h-4 text-slate-600" />
                           </div>
                         )}
                         <div className="flex-1 min-w-0">
+                          <p className="text-[10px] text-slate-600 mb-1">
+                            Tap the page to zoom — amber box is the AI's best guess, not always exact
+                          </p>
                           <input
                             value={it.description}
                             onChange={(e) => updateItem(it.id, { description: e.target.value })}
@@ -6520,7 +6514,7 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
           >
             <X className="w-6 h-6" />
           </button>
-          <ZoomableImage key={viewingCrop} src={viewingCrop} alt="Scanned row" />
+          <ZoomableImage key={viewingCrop.url} src={viewingCrop.url} alt="Scanned page" />
         </div>
       )}
     </div>
