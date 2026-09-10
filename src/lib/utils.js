@@ -547,6 +547,7 @@ export function parseImportText(text, catalog) {
         qtyDefaulted,
         matched: !!match,
         matchedCatalogName: match ? match.name : null,
+        catalogId: match ? match.id : null,
         gang: match ? match.gang : "Unassigned",
         storage: match ? match.storage : "Unassigned",
         storageDetail: match && match.storage === "Other" ? match.storageDetail || "" : "",
