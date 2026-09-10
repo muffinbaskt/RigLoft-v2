@@ -6285,6 +6285,7 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
           description: it.description || "",
           quantity: Number(it.quantity) > 0 ? Number(it.quantity) : 1,
           quantityLabel: it.quantityLabel || null,
+          ordered: !!it.ordered,
           section: it.section || null,
           page: it.page,
           bbox: it.bbox || null,
@@ -6339,7 +6340,7 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
       category: it.category,
       serials: [],
       needsTransfer: it.needsTransfer,
-      ordered: false,
+      ordered: it.ordered,
       matched: !!it.matchedCatalogName,
     }));
     onImport(previewRows);
@@ -6517,6 +6518,16 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
                               <X className="w-3.5 h-3.5" />
                             </button>
                           </div>
+                          <button
+                            onClick={() => updateItem(it.id, { ordered: !it.ordered })}
+                            className={`text-[11px] rounded-full px-2 py-0.5 border mt-1 mr-1.5 inline-block ${
+                              it.ordered
+                                ? "bg-sky-500/15 border-sky-500/50 text-sky-300"
+                                : "border-slate-700 text-slate-500 hover:text-slate-300"
+                            }`}
+                          >
+                            {it.ordered ? "✓ Ordered" : "Mark as ordered"}
+                          </button>
                           <p className="text-[11px] text-slate-600 mt-1">
                             {it.matchedCatalogName ? `🔗 ${it.matchedCatalogName}` : "No catalog match"}
                             {it.gang !== "Unassigned" ? ` · ${it.gang}` : ""}
