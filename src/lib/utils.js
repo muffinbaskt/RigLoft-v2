@@ -672,3 +672,29 @@ export function emptyCatalogItem() {
     multiSize: false,
   };
 }
+
+// Crops a rectangular region out of an already-loaded image (a page from
+// a scanned job sheet, say) and returns it as a small JPEG data URL —
+// used to show someone exactly the row a scanned item was read from,
+// right next to the parsed text, rather than asking them to trust OCR
+// blind. bbox is normalized 0-1 (x/y/width/height relative to the full
+// image), matching how the scan-job-sheet function reports coordinates.
+export function cropImageToDataUrl(imageSrc, bbox) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const sx = Math.max(0, bbox.x * img.naturalWidth);
+      const sy = Math.max(0, bbox.y * img.naturalHeight);
+      const sw = Math.max(1, bbox.width * img.naturalWidth);
+      const sh = Math.max(1, bbox.height * img.naturalHeight);
+      const canvas = document.createElement("canvas");
+      canvas.width = sw;
+      canvas.height = sh;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+      resolve(canvas.toDataURL("image/jpeg", 0.85));
+    };
+    img.onerror = () => reject(new Error("Couldn't load image for cropping"));
+    img.src = imageSrc;
+  });
+}
