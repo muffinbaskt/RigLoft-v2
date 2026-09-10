@@ -679,7 +679,13 @@ export function emptyCatalogItem() {
 // right next to the parsed text, rather than asking them to trust OCR
 // blind. bbox is normalized 0-1 (x/y/width/height relative to the full
 // image), matching how the scan-job-sheet function reports coordinates.
-export function cropImageToDataUrl(imageSrc, bbox) {
+// An optional second box (highlightBbox, in the same original-image
+// coordinates as bbox, not the crop's own) gets outlined on top of the
+// result — for cropping a wider region than just the one row a model
+// pointed to (its row alignment on a dense table isn't pixel-precise)
+// while still marking exactly which row it meant, so a neighbor row
+// being the real match is obvious at a glance instead of a guess.
+export function cropImageToDataUrl(imageSrc, bbox, highlightBbox) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
@@ -692,6 +698,15 @@ export function cropImageToDataUrl(imageSrc, bbox) {
       canvas.height = sh;
       const ctx = canvas.getContext("2d");
       ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+      if (highlightBbox) {
+        const hx = highlightBbox.x * img.naturalWidth - sx;
+        const hy = highlightBbox.y * img.naturalHeight - sy;
+        const hw = highlightBbox.width * img.naturalWidth;
+        const hh = highlightBbox.height * img.naturalHeight;
+        ctx.strokeStyle = "#f59e0b";
+        ctx.lineWidth = Math.max(2, sw * 0.008);
+        ctx.strokeRect(hx, hy, hw, hh);
+      }
       resolve(canvas.toDataURL("image/jpeg", 0.85));
     };
     img.onerror = () => reject(new Error("Couldn't load image for cropping"));
