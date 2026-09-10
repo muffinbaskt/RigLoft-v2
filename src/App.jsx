@@ -6226,6 +6226,22 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
   const [viewingCrop, setViewingCrop] = useState(null);
   const fileInputRef = useRef(null);
 
+  // A slightly-off bounding box is expected, not a bug to chase down
+  // perfectly — the model's row alignment on a dense table isn't
+  // pixel-precise. Rather than trust its exact box, this pads it out a
+  // couple of rows above and below whatever it landed on (bbox.height is
+  // roughly "one row," so a few multiples of that in each direction),
+  // so the row you actually need is very likely visible somewhere in the
+  // wider snippet even when the box itself drifted by one row or so.
+  // Horizontal stays as given — the reported drift has only ever been
+  // vertical (which row), not which column.
+  const expandBboxForContext = (bbox, rows = 2) => {
+    const rowHeight = bbox.height || 0.02;
+    const y = Math.max(0, bbox.y - rowHeight * rows);
+    const bottom = Math.min(1, bbox.y + bbox.height + rowHeight * rows);
+    return { x: bbox.x, y, width: bbox.width, height: bottom - y };
+  };
+
   const gangFromSection = (section) => {
     if (!section) return "Unassigned";
     const s = section.toLowerCase();
@@ -6283,7 +6299,7 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
           let cropUrl = null;
           try {
             if (urls[it.page] && it.bbox) {
-              cropUrl = await cropImageToDataUrl(urls[it.page], it.bbox);
+              cropUrl = await cropImageToDataUrl(urls[it.page], expandBboxForContext(it.bbox), it.bbox);
             }
           } catch {
             // Missing crop isn't worth failing the whole item over — the
@@ -6430,12 +6446,12 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
                         {it.cropUrl ? (
                           <button
                             onClick={() => setViewingCrop(it.cropUrl)}
-                            className="w-40 h-20 shrink-0 rounded border border-slate-700 bg-white overflow-hidden"
+                            className="w-40 h-36 shrink-0 rounded border border-slate-700 bg-white overflow-hidden"
                           >
                             <img src={it.cropUrl} alt="" className="w-full h-full object-contain" />
                           </button>
                         ) : (
-                          <div className="w-40 h-20 rounded border border-slate-700 shrink-0 bg-slate-800 flex items-center justify-center">
+                          <div className="w-40 h-36 rounded border border-slate-700 shrink-0 bg-slate-800 flex items-center justify-center">
                             <FileText className="w-4 h-4 text-slate-600" />
                           </div>
                         )}
