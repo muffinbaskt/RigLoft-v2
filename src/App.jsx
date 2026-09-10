@@ -6224,6 +6224,8 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
   // every rated line's final quantity recomputes live as it changes.
   const [craneCount, setCraneCount] = useState(1);
   const [viewingCrop, setViewingCrop] = useState(null);
+  const [linkingItemId, setLinkingItemId] = useState(null);
+  const [catalogPickerSearch, setCatalogPickerSearch] = useState("");
   const fileInputRef = useRef(null);
 
   const gangFromSection = (section) => {
@@ -6290,6 +6292,7 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
           page: it.page,
           bbox: it.bbox || null,
           matchedCatalogName: match ? match.name : null,
+          catalogId: match ? match.id : null,
           gang: match ? match.gang : gangFromSection(it.section),
           storage: match ? match.storage : "Unassigned",
           storageDetail: match && match.storage === "Other" ? match.storageDetail || "" : "",
@@ -6306,7 +6309,27 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
   };
 
   const updateItem = (id, changes) => {
-    setReviewItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...changes } : it)));
+    setReviewItems((prev) =>
+      prev.map((it) => {
+        if (it.id !== id) return it;
+        const merged = { ...it, ...changes };
+        // Re-run auto-matching when the description is hand-edited —
+        // unless this same change (or an earlier manual pick) already
+        // set the catalog link on purpose, in which case a wording edit
+        // shouldn't silently undo a deliberate choice.
+        if ("description" in changes && !("catalogId" in changes) && !it.manuallyLinked) {
+          const match = merged.description ? findCatalogMatch(merged.description, catalog) : null;
+          merged.matchedCatalogName = match ? match.name : null;
+          merged.catalogId = match ? match.id : null;
+          merged.gang = match ? match.gang : gangFromSection(it.section);
+          merged.storage = match ? match.storage : "Unassigned";
+          merged.storageDetail = match && match.storage === "Other" ? match.storageDetail || "" : "";
+          merged.category = match ? match.category || "" : "";
+          merged.needsTransfer = match ? !!match.needsTransfer : false;
+        }
+        return merged;
+      })
+    );
   };
   const removeItem = (id) => {
     setReviewItems((prev) => prev.filter((it) => it.id !== id));
@@ -6342,6 +6365,7 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
       needsTransfer: it.needsTransfer,
       ordered: it.ordered,
       matched: !!it.matchedCatalogName,
+      catalogId: it.catalogId || null,
     }));
     onImport(previewRows);
     onClose();
@@ -6528,10 +6552,18 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
                           >
                             {it.ordered ? "✓ Ordered" : "Mark as ordered"}
                           </button>
-                          <p className="text-[11px] text-slate-600 mt-1">
-                            {it.matchedCatalogName ? `🔗 ${it.matchedCatalogName}` : "No catalog match"}
+                          <button
+                            onClick={() => {
+                              setLinkingItemId(it.id);
+                              setCatalogPickerSearch("");
+                            }}
+                            className="text-[11px] text-slate-500 hover:text-slate-300 hover:underline decoration-dotted mt-1 block"
+                          >
+                            {it.matchedCatalogName
+                              ? `🔗 linked to "${it.matchedCatalogName}" · Change`
+                              : "No catalog match — 🔍 link manually"}
                             {it.gang !== "Unassigned" ? ` · ${it.gang}` : ""}
-                          </p>
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -6551,6 +6583,81 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
           </>
         )}
       </div>
+
+      {linkingItemId && (
+        <div className="fixed inset-0 z-[85] flex items-center justify-center bg-black/70 px-4 py-8">
+          <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold text-sm">Link to catalog item</h3>
+              <button
+                onClick={() => setLinkingItemId(null)}
+                className="text-slate-400 hover:text-slate-200"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-5 pt-4 shrink-0">
+              <input
+                autoFocus
+                value={catalogPickerSearch}
+                onChange={(e) => setCatalogPickerSearch(e.target.value)}
+                placeholder="Search catalog..."
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {reviewItems.find((it) => it.id === linkingItemId)?.matchedCatalogName && (
+                <button
+                  onClick={() => {
+                    updateItem(linkingItemId, {
+                      catalogId: null,
+                      matchedCatalogName: null,
+                      manuallyLinked: true,
+                    });
+                    setLinkingItemId(null);
+                  }}
+                  className="w-full text-left text-sm rounded-md px-3 py-2 border border-red-800/40 text-red-400 hover:bg-red-500/10 mb-2"
+                >
+                  Unlink from catalog
+                </button>
+              )}
+              {catalog
+                .filter((c) => c.name.toLowerCase().includes(catalogPickerSearch.trim().toLowerCase()))
+                .slice(0, 50)
+                .map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => {
+                      updateItem(linkingItemId, {
+                        catalogId: c.id,
+                        matchedCatalogName: c.name,
+                        gang: c.gang,
+                        storage: c.storage,
+                        storageDetail: c.storage === "Other" ? c.storageDetail || "" : "",
+                        category: c.category || "",
+                        needsTransfer: !!c.needsTransfer,
+                        manuallyLinked: true,
+                      });
+                      setLinkingItemId(null);
+                    }}
+                    className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-800 hover:border-slate-700 mb-1.5"
+                  >
+                    <p className="text-slate-100">{c.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {c.storage}
+                      {c.needsTransfer ? " · 🚚 needs transfer" : ""}
+                    </p>
+                  </button>
+                ))}
+              {catalog.filter((c) =>
+                c.name.toLowerCase().includes(catalogPickerSearch.trim().toLowerCase())
+              ).length === 0 && (
+                <p className="text-sm text-slate-500 text-center py-6">No matches.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {viewingCrop && (
         <div
@@ -6680,6 +6787,7 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
           name: newName,
           matched: !!match,
           matchedCatalogName: match ? match.name : null,
+          catalogId: match ? match.id : null,
           gang: match ? match.gang : "Unassigned",
           storage: match ? match.storage : "Unassigned",
           storageDetail: match && match.storage === "Other" ? match.storageDetail || "" : "",
@@ -9780,6 +9888,7 @@ function JobInventory({
         status: containers.length > 0 ? "green" : "red",
         gang: p.gang,
         category: p.category || "",
+        catalogId: p.catalogId || null,
         serials: p.serials || [],
         needsTransfer: !!p.needsTransfer,
         ordered: !!p.ordered,
