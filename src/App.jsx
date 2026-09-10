@@ -13801,8 +13801,96 @@ function LoveListAddForm({ catalog, allLists, onLearnAlias, onSave, onCancel }) 
   const [submittedBy, setSubmittedBy] = useState("");
   const [dateReceived, setDateReceived] = useState(todayStr);
   const [items, setItems] = useState([]);
+  // Generated up front, before the list itself actually exists yet, so
+  // any pages attached during creation can still upload to a real path
+  // (same "job-documents" bucket, same id-based folder Reference
+  // Documents uses after the fact) instead of needing some separate
+  // "staging area" scheme.
+  const [listId] = useState(() => uniqueId());
+  const [referenceDocuments, setReferenceDocuments] = useState([]);
+  const [docsUploading, setDocsUploading] = useState(false);
+  const [docsUploadError, setDocsUploadError] = useState(null);
+  const [pdfQueue, setPdfQueue] = useState([]);
+  const pdfPrompt = pdfQueue[0] || null;
+  const docsPhotoInputRef = useRef(null);
+  const docsFileInputRef = useRef(null);
 
   const canSave = jobLabel.trim() && items.length > 0;
+
+  const addDoc = (result) => {
+    setReferenceDocuments((prev) => [
+      ...prev,
+      {
+        id: uniqueId(),
+        name: result.name,
+        url: result.url,
+        path: result.path,
+        type: result.type || "",
+        uploadedAt: timeStamp(),
+      },
+    ]);
+  };
+
+  const doUploadDoc = async (file) => {
+    const result = await uploadReferenceDocument(listId, file);
+    if (!result.ok) {
+      setDocsUploadError((prev) => (prev ? `${prev} · ${result.error}` : result.error || "Upload failed"));
+      return;
+    }
+    addDoc(result);
+  };
+
+  // Same split as Reference Documents itself: images upload right away,
+  // PDFs each get their own convert-vs-keep decision, since that choice
+  // genuinely depends on what a given PDF actually is.
+  const handleDocsFilesChosen = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (files.length === 0) return;
+    const pdfs = files.filter((f) => f.type === "application/pdf");
+    const others = files.filter((f) => f.type !== "application/pdf");
+    if (others.length > 0) {
+      setDocsUploadError(null);
+      setDocsUploading(true);
+      for (const file of others) {
+        await doUploadDoc(file);
+      }
+      setDocsUploading(false);
+    }
+    if (pdfs.length > 0) setPdfQueue((prev) => [...prev, ...pdfs]);
+  };
+
+  const keepDocPdfAsIs = async () => {
+    if (!pdfPrompt) return;
+    setPdfQueue((prev) => prev.slice(1));
+    setDocsUploadError(null);
+    setDocsUploading(true);
+    await doUploadDoc(pdfPrompt);
+    setDocsUploading(false);
+  };
+
+  const convertDocPdfToPhotos = async () => {
+    if (!pdfPrompt) return;
+    const file = pdfPrompt;
+    setPdfQueue((prev) => prev.slice(1));
+    setDocsUploadError(null);
+    setDocsUploading(true);
+    try {
+      const imageFiles = await pdfToImageFiles(file);
+      for (const imgFile of imageFiles) {
+        const result = await uploadReferenceDocument(listId, imgFile);
+        if (result.ok) addDoc(result);
+      }
+    } catch (err) {
+      setDocsUploadError("Couldn't convert that PDF — " + (err && err.message ? err.message : String(err)));
+    }
+    setDocsUploading(false);
+  };
+
+  const removeDoc = async (doc) => {
+    setReferenceDocuments((prev) => prev.filter((d) => d.id !== doc.id));
+    if (doc.path) await deleteReferenceDocument(doc.path);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
@@ -13878,6 +13966,79 @@ function LoveListAddForm({ catalog, allLists, onLearnAlias, onSave, onCancel }) 
             </div>
           </div>
 
+          <div className="mb-4">
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              Reference documents (optional)
+            </label>
+            <p className="text-xs text-slate-600 mb-2">
+              Attach the original sheet(s) this list came from now, or add them later from the
+              list's own Reference documents panel.
+            </p>
+            {referenceDocuments.length > 0 && (
+              <div className="grid grid-cols-4 gap-2 mb-2">
+                {referenceDocuments.map((doc) => {
+                  const isPhoto = (doc.type || "").startsWith("image/");
+                  return (
+                    <div key={doc.id} className="relative group">
+                      {isPhoto ? (
+                        <div className="aspect-square rounded-md overflow-hidden border border-slate-800">
+                          <img src={doc.url} alt="" className="w-full h-full object-cover" />
+                        </div>
+                      ) : (
+                        <div className="aspect-square rounded-md border border-slate-800 flex items-center justify-center bg-slate-800/40">
+                          <FileText className="w-5 h-5 text-slate-500" />
+                        </div>
+                      )}
+                      <button
+                        onClick={() => removeDoc(doc)}
+                        className="absolute top-1 right-1 bg-slate-950/80 text-slate-300 hover:text-red-400 rounded-full p-1"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {docsUploadError && (
+              <p className="text-xs text-red-400 mb-2">Couldn't upload: {docsUploadError}</p>
+            )}
+            <div className="flex gap-2">
+              <input
+                ref={docsPhotoInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleDocsFilesChosen}
+                className="hidden"
+              />
+              <button
+                onClick={() => docsPhotoInputRef.current && docsPhotoInputRef.current.click()}
+                disabled={docsUploading}
+                className="flex-1 flex items-center justify-center gap-1.5 text-xs rounded-md py-2 bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+              >
+                <Camera className="w-3.5 h-3.5" />
+                {docsUploading ? "Uploading..." : "Take a photo"}
+              </button>
+              <input
+                ref={docsFileInputRef}
+                type="file"
+                accept="application/pdf,image/*"
+                multiple
+                onChange={handleDocsFilesChosen}
+                className="hidden"
+              />
+              <button
+                onClick={() => docsFileInputRef.current && docsFileInputRef.current.click()}
+                disabled={docsUploading}
+                className="flex-1 flex items-center justify-center gap-1.5 text-xs rounded-md py-2 bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                {docsUploading ? "Uploading..." : "Upload a file"}
+              </button>
+            </div>
+          </div>
+
           <label className="block text-xs font-medium text-slate-400 mb-1.5">Items</label>
           <div className="mb-3">
             <LoveListItemEntry
@@ -13924,7 +14085,17 @@ function LoveListAddForm({ catalog, allLists, onLearnAlias, onSave, onCancel }) 
         </div>
         <div className="px-5 py-4 border-t border-slate-800 shrink-0">
           <button
-            onClick={() => onSave({ jobLabel: jobLabel.trim(), subJobLabel: subJobLabel.trim(), submittedBy: submittedBy.trim(), dateReceived, items })}
+            onClick={() =>
+              onSave({
+                id: listId,
+                jobLabel: jobLabel.trim(),
+                subJobLabel: subJobLabel.trim(),
+                submittedBy: submittedBy.trim(),
+                dateReceived,
+                items,
+                referenceDocuments,
+              })
+            }
             disabled={!canSave}
             className="w-full text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400 disabled:opacity-40"
           >
@@ -13932,6 +14103,42 @@ function LoveListAddForm({ catalog, allLists, onLearnAlias, onSave, onCancel }) 
           </button>
         </div>
       </div>
+
+      {pdfPrompt && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-1">
+              That's a PDF{pdfQueue.length > 1 ? ` (1 of ${pdfQueue.length})` : ""}
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              A phone's "scan to PDF" is usually just a photo wrapped in a PDF — converting
+              keeps it easy to zoom into and cuts the file size, with one photo per page. If
+              this is a real multi-page document, keeping it as a PDF makes more sense.
+              {pdfQueue.length > 1 && " You'll get this same choice for each PDF you picked."}
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={convertDocPdfToPhotos}
+                className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Convert to photo(s)
+              </button>
+              <button
+                onClick={keepDocPdfAsIs}
+                className="w-full text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Keep as PDF
+              </button>
+              <button
+                onClick={() => setPdfQueue((prev) => prev.slice(1))}
+                className="w-full text-xs text-slate-500 hover:text-slate-300"
+              >
+                Skip this one
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -17896,6 +18103,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   const activeList = lists.find((l) => l.id === activeListId) || null;
 
   const handleSaveNewList = ({
+    id,
     jobLabel,
     subJobLabel,
     submittedBy,
@@ -17903,10 +18111,11 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
     items,
     scanImageUrl,
     extraScanImageUrls,
+    referenceDocuments,
   }) => {
     if (!isEditor) return;
     const list = {
-      id: uniqueId(),
+      id: id || uniqueId(),
       jobLabel,
       subJobLabel: subJobLabel || "",
       submittedBy,
@@ -17917,6 +18126,11 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
       // additional pages scanned into the same list land here instead,
       // shown alongside any manually-attached reference photos.
       referenceImages: extraScanImageUrls || [],
+      // Separate from referenceImages above — these are proper Reference
+      // Documents (name, type, upload timestamp), attachable at creation
+      // time via the same picker the Reference Documents panel uses
+      // after the fact, not just the scan flow's own pages.
+      referenceDocuments: referenceDocuments || [],
       createdAt: timeStamp(),
       archived: false,
     };
