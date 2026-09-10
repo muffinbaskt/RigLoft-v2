@@ -85,6 +85,7 @@ import {
   parseCatalogBulkText,
   newLoveListItem,
   csvEscape,
+  cropImageToDataUrl,
   copyToClipboard,
   emptyCatalogItem,
 } from "./lib/utils";
@@ -6204,6 +6205,295 @@ function PickListModal({ jobName, items, combinedTotals = {}, catalog = [], onCl
   );
 }
 
+// Turns photographed/scanned pages of a job requisition sheet into real
+// job items — upload, let scan-job-sheet (a separate Supabase Edge
+// Function; see that file's own comments for what it does and how it's
+// deployed) read every filled-in QTY line across all pages, then review
+// each one against a cropped snippet of exactly the row it came from
+// before anything is actually imported. Deliberately never auto-imports
+// — a wrong read here means real inventory numbers, so every line gets
+// looked at, not just trusted.
+function JobSheetScanModal({ catalog, onImport, onClose }) {
+  const [step, setStep] = useState("upload"); // "upload" | "scanning" | "review" | "error"
+  const [scanError, setScanError] = useState("");
+  const [pageImageUrls, setPageImageUrls] = useState([]);
+  const [reviewItems, setReviewItems] = useState([]);
+  // One shared multiplier for every "Per Crane" (or similarly rated)
+  // line at once — the sheet itself has no way to know how many cranes
+  // THIS job actually has, so that number lives here, typed once, and
+  // every rated line's final quantity recomputes live as it changes.
+  const [craneCount, setCraneCount] = useState(1);
+  const fileInputRef = useRef(null);
+
+  const gangFromSection = (section) => {
+    if (!section) return "Unassigned";
+    const s = section.toLowerCase();
+    const found = GANG_OPTIONS.find((g) => g !== "Unassigned" && s.includes(g.toLowerCase()));
+    return found || "Unassigned";
+  };
+
+  const handleFilesChosen = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (files.length === 0) return;
+    setStep("scanning");
+    setScanError("");
+    try {
+      // PDFs get expanded into one image per page first — everything
+      // downstream (the scan call, the crop thumbnails) works on plain
+      // page images either way, whether they started as photos or a PDF.
+      const expanded = [];
+      for (const file of files) {
+        if (file.type === "application/pdf") {
+          const imgs = await pdfToImageFiles(file);
+          expanded.push(...imgs);
+        } else {
+          expanded.push(file);
+        }
+      }
+      if (expanded.length === 0) throw new Error("Nothing to scan in that selection.");
+
+      const urls = expanded.map((f) => URL.createObjectURL(f));
+      setPageImageUrls(urls);
+
+      const pages = await Promise.all(
+        expanded.map(
+          (f) =>
+            new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () =>
+                resolve({ imageBase64: reader.result.split(",")[1], mediaType: f.type || "image/jpeg" });
+              reader.onerror = () => reject(new Error("Couldn't read a page image."));
+              reader.readAsDataURL(f);
+            })
+        )
+      );
+
+      const res = await fetch("https://vwvppivdpxjvmaazcmmg.supabase.co/functions/v1/scan-job-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pages }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Scan failed.");
+
+      const items = await Promise.all(
+        (data.items || []).map(async (it) => {
+          let cropUrl = null;
+          try {
+            if (urls[it.page] && it.bbox) {
+              cropUrl = await cropImageToDataUrl(urls[it.page], it.bbox);
+            }
+          } catch {
+            // Missing crop isn't worth failing the whole item over — the
+            // row still shows up for review, just without the snippet.
+          }
+          const match = it.description ? findCatalogMatch(it.description, catalog) : null;
+          return {
+            id: uniqueId(),
+            description: it.description || "",
+            quantity: Number(it.quantity) > 0 ? Number(it.quantity) : 1,
+            quantityLabel: it.quantityLabel || null,
+            section: it.section || null,
+            cropUrl,
+            matchedCatalogName: match ? match.name : null,
+            gang: match ? match.gang : gangFromSection(it.section),
+            storage: match ? match.storage : "Unassigned",
+            storageDetail: match && match.storage === "Other" ? match.storageDetail || "" : "",
+            category: match ? match.category || "" : "",
+            needsTransfer: match ? !!match.needsTransfer : false,
+          };
+        })
+      );
+      setReviewItems(items);
+      setStep("review");
+    } catch (err) {
+      setScanError(err.message || String(err));
+      setStep("error");
+    }
+  };
+
+  const updateItem = (id, changes) => {
+    setReviewItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...changes } : it)));
+  };
+  const removeItem = (id) => {
+    setReviewItems((prev) => prev.filter((it) => it.id !== id));
+  };
+  const finalQty = (item) => (item.quantityLabel ? item.quantity * craneCount : item.quantity);
+
+  const handleConfirmImport = () => {
+    const previewRows = reviewItems.map((it) => ({
+      name: it.description,
+      qtyNeeded: finalQty(it),
+      qtyUnit: "",
+      container: "",
+      gang: it.gang,
+      storage: it.storage,
+      category: it.category,
+      serials: [],
+      needsTransfer: it.needsTransfer,
+      ordered: false,
+      matched: !!it.matchedCatalogName,
+    }));
+    onImport(previewRows);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-lg rounded-lg max-h-full flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <div>
+            <h2 className="text-slate-100 font-semibold text-base">Scan a job sheet</h2>
+            <p className="text-xs text-slate-500">Upload photos or a PDF — every page at once is fine</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {step === "upload" && (
+          <div className="flex-1 overflow-y-auto px-5 py-8 flex flex-col items-center justify-center text-center">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/pdf,image/*"
+              multiple
+              onChange={handleFilesChosen}
+              className="hidden"
+            />
+            <ScanLine className="w-8 h-8 text-slate-600 mb-3" />
+            <p className="text-sm text-slate-400 mb-4 max-w-xs">
+              Every requested QTY line across every page you pick shows up below for you to
+              review — nothing gets added to the job until you confirm.
+            </p>
+            <button
+              onClick={() => fileInputRef.current && fileInputRef.current.click()}
+              className="text-sm rounded-md px-4 py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+            >
+              Choose photos or a PDF
+            </button>
+          </div>
+        )}
+
+        {step === "scanning" && (
+          <div className="flex-1 flex flex-col items-center justify-center py-16">
+            <div className="w-6 h-6 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin mb-3" />
+            <p className="text-sm text-slate-400">Reading every page...</p>
+          </div>
+        )}
+
+        {step === "error" && (
+          <div className="flex-1 overflow-y-auto px-5 py-8 text-center">
+            <p className="text-sm text-red-400 mb-4">{scanError}</p>
+            <button
+              onClick={() => setStep("upload")}
+              className="text-sm rounded-md px-4 py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              Try again
+            </button>
+          </div>
+        )}
+
+        {step === "review" && (
+          <>
+            <div className="px-5 pt-4 shrink-0 flex items-center gap-3">
+              <label className="text-xs text-slate-400 shrink-0">Cranes on this job</label>
+              <input
+                type="number"
+                min="1"
+                onFocus={selectOnFocus}
+                onClick={selectOnFocus}
+                value={craneCount}
+                onChange={(e) => setCraneCount(Math.max(1, Number(e.target.value) || 1))}
+                className="w-16 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+              <p className="text-xs text-slate-600">
+                Multiplies every "Per Crane"-style line below, live
+              </p>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              <p className="text-xs text-slate-500 mb-3">
+                {reviewItems.length} item{reviewItems.length === 1 ? "" : "s"} found — check each
+                one against its snippet before importing
+              </p>
+              {reviewItems.length === 0 ? (
+                <p className="text-sm text-slate-500 text-center py-10">
+                  Nothing left to import — every line was removed.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {reviewItems.map((it) => (
+                    <div key={it.id} className="border border-slate-800 rounded-lg p-2.5 bg-slate-800/40">
+                      <div className="flex gap-2.5">
+                        {it.cropUrl ? (
+                          <img
+                            src={it.cropUrl}
+                            alt=""
+                            className="w-28 h-14 object-cover rounded border border-slate-700 shrink-0 bg-white"
+                          />
+                        ) : (
+                          <div className="w-28 h-14 rounded border border-slate-700 shrink-0 bg-slate-800 flex items-center justify-center">
+                            <FileText className="w-4 h-4 text-slate-600" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <input
+                            value={it.description}
+                            onChange={(e) => updateItem(it.id, { description: e.target.value })}
+                            className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 mb-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                          />
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="number"
+                              min="0"
+                              onFocus={selectOnFocus}
+                              onClick={selectOnFocus}
+                              value={it.quantity}
+                              onChange={(e) => updateItem(it.id, { quantity: Number(e.target.value) || 0 })}
+                              className="w-16 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                            />
+                            {it.quantityLabel ? (
+                              <span className="text-xs text-amber-400 whitespace-nowrap">
+                                {it.quantityLabel} × {craneCount} = <strong>{finalQty(it)}</strong>
+                              </span>
+                            ) : (
+                              <span className="text-xs text-slate-500">needed</span>
+                            )}
+                            <button
+                              onClick={() => removeItem(it.id)}
+                              className="ml-auto text-slate-500 hover:text-red-400 p-1"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <p className="text-[11px] text-slate-600 mt-1">
+                            {it.matchedCatalogName ? `🔗 ${it.matchedCatalogName}` : "No catalog match"}
+                            {it.gang !== "Unassigned" ? ` · ${it.gang}` : ""}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+              <button
+                onClick={handleConfirmImport}
+                disabled={reviewItems.length === 0}
+                className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+              >
+                Import {reviewItems.length} item{reviewItems.length === 1 ? "" : "s"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCatalog }) {
   const [text, setText] = useState("");
   const [preview, setPreview] = useState(null);
@@ -8578,6 +8868,7 @@ function JobInventory({
   }, [linkingSubstituteItem]);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [jobSheetScanOpen, setJobSheetScanOpen] = useState(false);
   const [containersOpen, setContainersOpen] = useState(false);
   const [containerToOpen, setContainerToOpen] = useState(null);
 
@@ -9619,6 +9910,18 @@ function JobInventory({
                       Import items
                     </button>
                   )}
+                  {isEditor && (
+                    <button
+                      onClick={() => {
+                        setJobSheetScanOpen(true);
+                        setMenuOpen(false);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                    >
+                      <ScanLine className="w-4 h-4 text-slate-400" />
+                      Scan a job sheet
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       setPickListOpen(true);
@@ -10396,6 +10699,14 @@ function JobInventory({
             setImportOpen(false);
             onOpenCatalog();
           }}
+        />
+      )}
+
+      {jobSheetScanOpen && (
+        <JobSheetScanModal
+          catalog={catalog}
+          onImport={importItems}
+          onClose={() => setJobSheetScanOpen(false)}
         />
       )}
 
