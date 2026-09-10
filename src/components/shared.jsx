@@ -14,8 +14,8 @@ import { X, ChevronLeft, ChevronRight } from "lucide-react";
 // native pinch-zoom for free, this is what gives inline photos the same
 // ability. Pass a fresh `key` (usually the photo's URL) from the caller
 // so zoom/pan resets whenever a different photo is shown.
-export function ZoomableImage({ src, alt = "", overlay }) {
-  const [scale, setScale] = useState(1);
+export function ZoomableImage({ src, alt = "", overlay, initialScale = 1 }) {
+  const [scale, setScale] = useState(initialScale);
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const gesture = useRef({ startDist: 0, startScale: 1, startTranslate: { x: 0, y: 0 }, panStart: null });
@@ -121,42 +121,30 @@ export function ZoomableImage({ src, alt = "", overlay }) {
   // Documents, Love List photos, Receiving...) gets the exact same bare
   // <img> as before, untouched. Only when a caller actually passes an
   // overlay (a marker that needs to move/scale together with the image
-  // as it's pinched and panned) does this switch to wrapping the image
-  // in a div and moving the same transform there instead — so the
-  // overlay can sit inside that same transformed coordinate space as a
-  // sibling of the image, rather than needing its own separate zoom math.
+  // as it's pinched and panned) does this switch to a version that
+  // measures the image's real natural pixel size (via onLoad) and sets
+  // the wrapper to that exact size, scaled to fit the screen — rather
+  // than leaning on max-width/max-height shrink-to-fit CSS and hoping
+  // the wrapper box ends up exactly matching the rendered image with no
+  // letterboxing gap. Without that exact match, percentage-based overlay
+  // coordinates only look right by coincidence; this makes it always
+  // correct instead of close-but-off.
   if (overlay) {
     return (
-      <div
-        onDragStart={(e) => e.preventDefault()}
-        onClick={(e) => e.stopPropagation()}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        onWheel={handleWheel}
-        onDoubleClick={handleDoubleClick}
-        onMouseDown={handleMouseDown}
-        style={{
-          position: "relative",
-          display: "inline-block",
-          maxWidth: "100%",
-          maxHeight: "100%",
-          transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
-          transition: scale === 1 ? "transform 0.15s ease" : "none",
-          touchAction: "none",
-          cursor: scale > 1 ? (dragging ? "grabbing" : "grab") : "zoom-in",
-          WebkitUserDrag: "none",
-          userSelect: "none",
-        }}
-      >
-        <img
-          src={src}
-          alt={alt}
-          draggable={false}
-          className="max-w-full max-h-full rounded-lg select-none block"
-        />
-        {overlay}
-      </div>
+      <ZoomableImageWithOverlay
+        src={src}
+        alt={alt}
+        overlay={overlay}
+        scale={scale}
+        translate={translate}
+        dragging={dragging}
+        handleTouchStart={handleTouchStart}
+        handleTouchMove={handleTouchMove}
+        handleTouchEnd={handleTouchEnd}
+        handleWheel={handleWheel}
+        handleDoubleClick={handleDoubleClick}
+        handleMouseDown={handleMouseDown}
+      />
     );
   }
 
@@ -183,6 +171,89 @@ export function ZoomableImage({ src, alt = "", overlay }) {
       }}
       className="max-w-full max-h-full rounded-lg select-none"
     />
+  );
+}
+
+// The overlay-aware render path for ZoomableImage above — split out
+// purely so it can call its own useState/useEffect for measuring the
+// image's real pixel size without those hooks running (uselessly) for
+// every other, far more common, no-overlay call site. Sets the wrapper
+// to that exact measured-and-scaled-to-fit size rather than trusting
+// CSS shrink-to-fit to land on precisely the same box the image itself
+// renders at — which is what a percentage-positioned overlay needs to
+// actually line up with the image instead of drifting off it.
+function ZoomableImageWithOverlay({
+  src,
+  alt,
+  overlay,
+  scale,
+  translate,
+  dragging,
+  handleTouchStart,
+  handleTouchMove,
+  handleTouchEnd,
+  handleWheel,
+  handleDoubleClick,
+  handleMouseDown,
+}) {
+  const [naturalSize, setNaturalSize] = useState(null);
+  const [viewport, setViewport] = useState({ w: window.innerWidth, h: window.innerHeight });
+
+  useEffect(() => {
+    const onResize = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Matches the px-4 py-8 padding every caller of this overlay path
+  // currently wraps its fullscreen container in — an estimate, but one
+  // that only affects overall size, never alignment: as long as the
+  // wrapper's aspect ratio matches the image's own exactly (which
+  // setting both from the same naturalSize guarantees), the overlay's
+  // percentage coordinates land correctly regardless of a few px of
+  // padding guess being slightly off.
+  let displayWidth;
+  let displayHeight;
+  if (naturalSize) {
+    const maxW = Math.max(50, viewport.w - 32);
+    const maxH = Math.max(50, viewport.h - 64);
+    const fit = Math.min(maxW / naturalSize.width, maxH / naturalSize.height, 1);
+    displayWidth = naturalSize.width * fit;
+    displayHeight = naturalSize.height * fit;
+  }
+
+  return (
+    <div
+      onDragStart={(e) => e.preventDefault()}
+      onClick={(e) => e.stopPropagation()}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onWheel={handleWheel}
+      onDoubleClick={handleDoubleClick}
+      onMouseDown={handleMouseDown}
+      style={{
+        position: "relative",
+        width: displayWidth,
+        height: displayHeight,
+        transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
+        transition: scale === 1 ? "transform 0.15s ease" : "none",
+        touchAction: "none",
+        cursor: scale > 1 ? (dragging ? "grabbing" : "grab") : "zoom-in",
+        WebkitUserDrag: "none",
+        userSelect: "none",
+      }}
+    >
+      <img
+        src={src}
+        alt={alt}
+        draggable={false}
+        onLoad={(e) => setNaturalSize({ width: e.target.naturalWidth, height: e.target.naturalHeight })}
+        className="rounded-lg select-none block"
+        style={{ width: displayWidth ? "100%" : "auto", height: displayHeight ? "100%" : "auto" }}
+      />
+      {naturalSize && overlay}
+    </div>
   );
 }
 
