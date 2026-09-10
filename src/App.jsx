@@ -6269,7 +6269,7 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
         )
       );
 
-      const res = await fetch("https://vwvppivdpxjvmaazcmmg.supabase.co/functions/v1/scan-job-sheet", {
+      const res = await fetch("https://vwvppivdpxjvmaazcmmg.supabase.co/functions/v1/rapid-handler", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pages }),
