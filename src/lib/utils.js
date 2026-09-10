@@ -390,11 +390,27 @@ export function normalizeReceived(r) {
 }
 
 export function normalizeText(str) {
+  // Explicit \u escapes rather than typing the actual smart-quote/prime
+  // characters into this regex on purpose — those characters have a way
+  // of silently getting "straightened" back into plain ASCII quotes by
+  // whatever's in the text-editing path between typing them and them
+  // landing in the file (it happened once already writing this exact
+  // fix), which would quietly defeat the very thing this is for.
+  const DOUBLE_QUOTE_CHARS = "\u0022\u201C\u201D\u2033"; // " " " ″
+  const SINGLE_QUOTE_CHARS = "\u0027\u2018\u2019\u2032"; // ' ' ' ′
   const cleaned = str
     .trim()
     .toLowerCase()
-    .replace(/(\d)\s*"/g, "$1in") // 3/4" -> 3/4in
-    .replace(/(\d)\s*'/g, "$1ft") // 16' -> 16ft
+    // Straight ASCII quotes are what someone typing on a keyboard almost
+    // always uses — but an AI extracting text from a photo (job sheet
+    // scans, receipts...) commonly writes measurements with proper
+    // typographic characters instead: "smart" curly quotes or true prime
+    // marks. Those look identical to a person reading them, but without
+    // this, they'd silently fail to normalize into the same "in"/"ft"
+    // token an ASCII-quoted catalog entry produces — the two versions of
+    // the exact same measurement would just never match.
+    .replace(new RegExp(`(\\d)\\s*[${DOUBLE_QUOTE_CHARS}]`, "g"), "$1in") // 3/4" -> 3/4in
+    .replace(new RegExp(`(\\d)\\s*[${SINGLE_QUOTE_CHARS}]`, "g"), "$1ft") // 16' -> 16ft
     .replace(/(\d)\s*(inches|inch)\b/g, "$1in") // 3/4 inches -> 3/4in
     .replace(/(\d)\s*(feet|foot)\b/g, "$1ft") // 16 feet -> 16ft
     .replace(/[^a-z0-9]+/g, " ")
