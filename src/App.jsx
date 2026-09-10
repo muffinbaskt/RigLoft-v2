@@ -6213,7 +6213,7 @@ function PickListModal({ jobName, items, combinedTotals = {}, catalog = [], onCl
 // before anything is actually imported. Deliberately never auto-imports
 // — a wrong read here means real inventory numbers, so every line gets
 // looked at, not just trusted.
-function JobSheetScanModal({ catalog, onImport, onClose }) {
+function JobSheetScanModal({ catalog, onImport, onLearnAlias, onClose }) {
   const [step, setStep] = useState("upload"); // "upload" | "scanning" | "review" | "error"
   const [scanError, setScanError] = useState("");
   const [pageImageUrls, setPageImageUrls] = useState([]);
@@ -6628,6 +6628,7 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
                   <button
                     key={c.id}
                     onClick={() => {
+                      const currentItem = reviewItems.find((it) => it.id === linkingItemId);
                       updateItem(linkingItemId, {
                         catalogId: c.id,
                         matchedCatalogName: c.name,
@@ -6638,6 +6639,12 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
                         needsTransfer: !!c.needsTransfer,
                         manuallyLinked: true,
                       });
+                      // Teaches the catalog this wording means this item,
+                      // so a future scan with similar phrasing auto-links
+                      // instead of needing this same manual pick again.
+                      if (onLearnAlias && currentItem) {
+                        onLearnAlias(c.id, currentItem.description);
+                      }
                       setLinkingItemId(null);
                     }}
                     className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-800 hover:border-slate-700 mb-1.5"
@@ -8990,6 +8997,7 @@ function JobInventory({
   onBackToJobs,
   catalog,
   onSaveCatalogItem,
+  onLearnCatalogAlias,
   onOpenCatalog,
   onRenameJob,
 }) {
@@ -10909,6 +10917,7 @@ function JobInventory({
         <JobSheetScanModal
           catalog={catalog}
           onImport={importItems}
+          onLearnAlias={onLearnCatalogAlias}
           onClose={() => setJobSheetScanOpen(false)}
         />
       )}
@@ -12629,6 +12638,29 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
     });
   };
 
+  // Mirrors Love Lists' own learnCatalogAlias — teaches the catalog that
+  // some raw text (an AI-scanned description, say) means a specific
+  // catalog item, so future scans of similarly-worded lines auto-match
+  // instead of needing manual linking every single time. Persists right
+  // away rather than waiting on this section's own catalog sync step,
+  // since a learned alias silently lost before the next sync would quietly
+  // defeat the entire point of teaching it in the first place.
+  const learnCatalogAliasForJobs = (catalogId, aliasText) => {
+    if (!catalogId || !aliasText || !aliasText.trim()) return;
+    const normAlias = normalizeText(aliasText.trim());
+    setCatalog((prev) => {
+      const next = prev.map((c) => {
+        if (c.id !== catalogId) return c;
+        if (normalizeText(c.name) === normAlias) return c; // matches the real name already
+        const existing = c.aliases || [];
+        if (existing.some((a) => normalizeText(a) === normAlias)) return c; // already known
+        return { ...c, aliases: [...existing, aliasText.trim()] };
+      });
+      saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
   const bulkSaveCatalogItems = (items) => {
     setCatalog((prev) => [...prev, ...items]);
   };
@@ -13252,6 +13284,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           onBackToJobs={() => setShowPicker(true)}
           catalog={catalog}
           onSaveCatalogItem={saveCatalogItem}
+          onLearnCatalogAlias={learnCatalogAliasForJobs}
           onOpenCatalog={() => setCatalogModalOpen(true)}
           onRenameJob={(name, color) => renameJob(activeJob.id, name, color)}
         />
