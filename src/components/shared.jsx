@@ -14,7 +14,7 @@ import { X, ChevronLeft, ChevronRight } from "lucide-react";
 // native pinch-zoom for free, this is what gives inline photos the same
 // ability. Pass a fresh `key` (usually the photo's URL) from the caller
 // so zoom/pan resets whenever a different photo is shown.
-export function ZoomableImage({ src, alt = "" }) {
+export function ZoomableImage({ src, alt = "", overlay }) {
   const [scale, setScale] = useState(1);
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -116,6 +116,49 @@ export function ZoomableImage({ src, alt = "" }) {
       window.removeEventListener("mouseup", onUp);
     };
   }, [dragging]);
+
+  // Two render paths on purpose: every existing caller (Reference
+  // Documents, Love List photos, Receiving...) gets the exact same bare
+  // <img> as before, untouched. Only when a caller actually passes an
+  // overlay (a marker that needs to move/scale together with the image
+  // as it's pinched and panned) does this switch to wrapping the image
+  // in a div and moving the same transform there instead — so the
+  // overlay can sit inside that same transformed coordinate space as a
+  // sibling of the image, rather than needing its own separate zoom math.
+  if (overlay) {
+    return (
+      <div
+        onDragStart={(e) => e.preventDefault()}
+        onClick={(e) => e.stopPropagation()}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onWheel={handleWheel}
+        onDoubleClick={handleDoubleClick}
+        onMouseDown={handleMouseDown}
+        style={{
+          position: "relative",
+          display: "inline-block",
+          maxWidth: "100%",
+          maxHeight: "100%",
+          transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
+          transition: scale === 1 ? "transform 0.15s ease" : "none",
+          touchAction: "none",
+          cursor: scale > 1 ? (dragging ? "grabbing" : "grab") : "zoom-in",
+          WebkitUserDrag: "none",
+          userSelect: "none",
+        }}
+      >
+        <img
+          src={src}
+          alt={alt}
+          draggable={false}
+          className="max-w-full max-h-full rounded-lg select-none block"
+        />
+        {overlay}
+      </div>
+    );
+  }
 
   return (
     <img
