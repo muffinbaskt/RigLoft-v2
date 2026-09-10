@@ -6540,6 +6540,7 @@ function JobSheetScanModal({ catalog, onImport, onClose }) {
             key={viewingCrop.url}
             src={viewingCrop.url}
             alt="Scanned page"
+            initialScale={1.8}
             overlay={
               viewingCrop.bbox && (
                 <div
