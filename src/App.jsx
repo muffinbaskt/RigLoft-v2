@@ -4308,8 +4308,8 @@ const REQUISITION_TEMPLATES = {
 
 
 
-function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
-  const docs = job.referenceDocuments || [];
+function ReferenceDocsModal({ entity, entityLabel, isEditor, onUpdateEntity, onClose }) {
+  const docs = entity.referenceDocuments || [];
   const photoDocs = docs.filter((d) => (d.type || "").startsWith("image/"));
   const fileDocs = docs.filter((d) => !(d.type || "").startsWith("image/"));
   const [uploading, setUploading] = useState(false);
@@ -4323,10 +4323,10 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
 
   const addDoc = (result) => {
     const isPhoto = (result.type || "").startsWith("image/");
-    onUpdateJob((prevJob) => ({
-      ...prevJob,
+    onUpdateEntity((prevEntity) => ({
+      ...prevEntity,
       referenceDocuments: [
-        ...(prevJob.referenceDocuments || []),
+        ...(prevEntity.referenceDocuments || []),
         {
           id: uniqueId(),
           name: result.name,
@@ -4342,13 +4342,13 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
           time: timeStamp(),
           message: isPhoto ? "Added a photo" : `Uploaded reference document "${result.name}"`,
         },
-        ...prevJob.activityLog,
+        ...(prevEntity.activityLog || []),
       ].slice(0, 50),
     }));
   };
 
   const doUpload = async (file) => {
-    const result = await uploadReferenceDocument(job.id, file);
+    const result = await uploadReferenceDocument(entity.id, file);
     if (!result.ok) {
       setUploadError((prev) => (prev ? `${prev} · ${result.error}` : result.error || "Upload failed"));
       return;
@@ -4397,7 +4397,7 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
     try {
       const imageFiles = await pdfToImageFiles(file);
       for (const imgFile of imageFiles) {
-        const result = await uploadReferenceDocument(job.id, imgFile);
+        const result = await uploadReferenceDocument(entity.id, imgFile);
         if (result.ok) addDoc(result);
       }
     } catch (err) {
@@ -4412,9 +4412,9 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
     const doc = deleteTarget;
     setDeleteTarget(null);
     await deleteReferenceDocument(doc.path);
-    onUpdateJob((prevJob) => ({
-      ...prevJob,
-      referenceDocuments: (prevJob.referenceDocuments || []).filter((d) => d.id !== doc.id),
+    onUpdateEntity((prevEntity) => ({
+      ...prevEntity,
+      referenceDocuments: (prevEntity.referenceDocuments || []).filter((d) => d.id !== doc.id),
     }));
   };
 
@@ -4437,7 +4437,7 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
             <div>
               <h2 className="text-slate-100 font-semibold text-base">Reference documents</h2>
               <p className="text-xs text-slate-500">
-                Original sheets, orders, drawings, or receipts for this job
+                Original sheets, orders, drawings, or receipts for {entityLabel}
               </p>
             </div>
             <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
@@ -4448,7 +4448,7 @@ function ReferenceDocsModal({ job, isEditor, onUpdateJob, onClose }) {
           <div className="flex-1 overflow-y-auto px-5 py-4">
             {docs.length === 0 ? (
               <p className="text-sm text-slate-500 text-center py-10">
-                Nothing here yet — attach the original PDF this job's items came from, or snap
+                Nothing here yet — attach the original PDF {entityLabel} came from, or snap
                 a photo of a receipt, so it's easy to reference later.
               </p>
             ) : (
@@ -10693,9 +10693,10 @@ function JobInventory({
 
       {referenceDocsOpen && (
         <ReferenceDocsModal
-          job={job}
+          entity={job}
+          entityLabel="this job"
           isEditor={isEditor}
-          onUpdateJob={onUpdateJob}
+          onUpdateEntity={onUpdateJob}
           onClose={() => setReferenceDocsOpen(false)}
         />
       )}
@@ -14244,6 +14245,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
   const [showPhotosModal, setShowPhotosModal] = useState(false);
   const [showPrintModal, setShowPrintModal] = useState(false);
+  const [referenceDocsOpen, setReferenceDocsOpen] = useState(false);
   const [editingNickname, setEditingNickname] = useState(false);
   const [nicknameDraft, setNicknameDraft] = useState("");
   const [selectMode, setSelectMode] = useState(false);
@@ -14812,6 +14814,16 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           >
             <Printer className="w-4 h-4" />
           </button>
+          <button
+            onClick={() => setReferenceDocsOpen(true)}
+            title="Reference documents"
+            className="text-slate-400 hover:text-slate-200 p-2 shrink-0 relative"
+          >
+            <FileText className="w-4 h-4" />
+            {(list.referenceDocuments || []).length > 0 && (
+              <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-rose-400" />
+            )}
+          </button>
           {isEditor && (
             <button
               onClick={() => onUpdateList({ ...list, archived: !list.archived })}
@@ -14860,6 +14872,16 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
       )}
 
       {showPrintModal && <PrintableLoveListModal list={list} onClose={() => setShowPrintModal(false)} />}
+
+      {referenceDocsOpen && (
+        <ReferenceDocsModal
+          entity={list}
+          entityLabel="this Love List"
+          isEditor={isEditor}
+          onUpdateEntity={onUpdateList}
+          onClose={() => setReferenceDocsOpen(false)}
+        />
+      )}
 
       <main className="max-w-2xl mx-auto px-4 py-5">
         {isEditor &&
@@ -17904,9 +17926,24 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
     setShowScanModal(false);
   };
 
-  const handleUpdateList = (updated) => {
+  // Accepts either a plain updated-list object (existing, still used
+  // everywhere else in Love Lists) or an updater function (needed by
+  // ReferenceDocsModal — shared with Job Lists, where onUpdateJob is
+  // function-style). The function form resolves against the list as it
+  // truly is inside setLists's own updater, not the `list` prop a modal
+  // last saw — same fix Job Lists already has for a rapid multi-file
+  // upload, where a second upload's stale closure could otherwise
+  // silently overwrite the first one's just-added document.
+  const handleUpdateList = (updatedOrUpdater) => {
     if (!isEditor) return;
-    updateLists((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
+    updateLists((prev) =>
+      prev.map((l) => {
+        if (typeof updatedOrUpdater === "function") {
+          return l.id === activeListId ? updatedOrUpdater(l) : l;
+        }
+        return l.id === updatedOrUpdater.id ? updatedOrUpdater : l;
+      })
+    );
   };
 
   const handleDeleteList = (id) => {
