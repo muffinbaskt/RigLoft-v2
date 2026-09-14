@@ -67,6 +67,7 @@ import {
   newJob,
   diffItems,
   parseSerials,
+  formatSerialForDisplay,
   lockedLoveSerials,
   emptyItem,
   getAudioCtx,
@@ -327,7 +328,9 @@ function ItemForm({
       ...initial,
     })
   );
-  const [serialsText, setSerialsText] = useState((initial.serials || []).join(", "));
+  const [serialsText, setSerialsText] = useState(
+    (initial.serials || []).map(formatSerialForDisplay).join(", ")
+  );
   const [addToCatalog, setAddToCatalog] = useState(false);
   const [qtContainerText, setQtContainerText] = useState(
     (initial.containers && initial.containers[0] && initial.containers[0].name) || ""
@@ -1325,7 +1328,7 @@ function SerialsModal({ itemName, serials, onClose }) {
                   key={`${sn}-${idx}`}
                   className="text-xs rounded-md px-2.5 py-1.5 bg-slate-800 border border-slate-700 text-slate-200 font-mono"
                 >
-                  {sn}
+                  {formatSerialForDisplay(sn)}
                 </span>
               ))}
             </div>
@@ -7145,7 +7148,7 @@ function ImportModal({ catalog, existingItems = [], onImport, onClose, onOpenCat
                   </div>
                   <div className="mt-2">
                     <input
-                      value={(p.serials || []).join(", ")}
+                      value={(p.serials || []).map(formatSerialForDisplay).join(", ")}
                       onChange={(e) => updateSerials(p.lineId, e.target.value)}
                       placeholder="SME #s, comma-separated (optional)"
                       className="w-full bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
