@@ -48,6 +48,7 @@ import {
   DollarSign,
   Shuffle,
   ExternalLink,
+  MapPin,
 } from "lucide-react";
 import {
   STORAGE_OPTIONS,
@@ -5966,6 +5967,190 @@ function buildPickListHtml(jobName, groups, sortedGroupKeys, groupOption) {
 </html>`;
 }
 
+// A field-reference sheet, not a to-do list — "where is everything right
+// now," grouped by container so someone can walk up to a conex/gangbox
+// and see everything that's supposed to be in it. Deliberately much
+// simpler than the Pick List: no checkbox column, no Qty Requested/Have/
+// Needed columns (those answer "what do I still need," not "where is
+// it"), and no "Container" column, since the container IS the group
+// header here — every item under "Conex 20 - East" is already known to
+// be in Conex 20 - East. Items not yet placed in any container are left
+// off entirely, since there's no location to report for them.
+function buildItemLocationSheetHtml(jobName, items) {
+  const groups = items.reduce((acc, item) => {
+    (item.containers || []).forEach((c) => {
+      (acc[c.name] = acc[c.name] || []).push({ name: item.name, qty: c.qty, unit: item.qtyUnit });
+    });
+    return acc;
+  }, {});
+  const sortedContainers = Object.keys(groups).sort();
+
+  const sectionsHtml = sortedContainers
+    .map((containerName) => {
+      const rows = groups[containerName]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map(
+          (row) => `
+            <tr>
+              <td>${escapeHtml(row.name)}</td>
+              <td class="qty-col">${escapeHtml(row.qty)}${row.unit ? " " + escapeHtml(row.unit) : ""}</td>
+            </tr>`
+        )
+        .join("");
+      return `
+        <div class="group">
+          <h2>${escapeHtml(containerName)}</h2>
+          <table>
+            <thead><tr><th>Item</th><th class="qty-col">Qty</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+    })
+    .join("");
+
+  const totalItems = Object.values(groups).reduce((sum, g) => sum + g.length, 0);
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Item Location Sheet - ${escapeHtml(jobName)}</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; color: #000; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 2px 0; }
+  .meta { font-size: 12px; color: #555; margin-bottom: 20px; }
+  .group { margin-bottom: 20px; page-break-inside: avoid; }
+  h2 { font-size: 15px; border-bottom: 1px solid #000; padding-bottom: 4px; margin: 0 0 8px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 6px; text-align: left; }
+  thead tr { border-bottom: 1.5px solid #000; }
+  tbody tr { border-top: 1px solid #ccc; }
+  .qty-col { width: 90px; }
+  @media print {
+    body { padding: 0.4in; }
+  }
+</style>
+</head>
+<body>
+  <h1>Item Location Sheet — ${escapeHtml(jobName)}</h1>
+  <p class="meta">Generated ${escapeHtml(new Date().toLocaleString())} · ${sortedContainers.length} container${
+    sortedContainers.length === 1 ? "" : "s"
+  } · ${totalItems} item${totalItems === 1 ? "" : "s"}</p>
+  ${sectionsHtml || "<p>No items are currently placed in a container yet.</p>"}
+</body>
+</html>`;
+}
+
+function ItemLocationSheetModal({ jobName, items, onClose }) {
+  const placedCount = items.filter((i) => (i.containers || []).length > 0).length;
+
+  const handleDownload = () => {
+    try {
+      const html = buildItemLocationSheetHtml(jobName, items);
+      const blob = new Blob([html], { type: "text/html;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const safeName = jobName.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+      link.download = `${safeName || "job"}-item-locations.html`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch {
+      // download unavailable in this environment
+    }
+  };
+
+  const handleDownloadCsv = () => {
+    try {
+      const rows = items.flatMap((item) =>
+        (item.containers || []).map((c) => [item.name, c.qty, item.qtyUnit || "", c.name])
+      );
+      const csv = [["Item", "Qty", "Unit", "Container"], ...rows]
+        .map((r) => r.map(csvEscape).join(","))
+        .join("\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const safeName = jobName.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+      link.download = `${safeName || "job"}-item-locations.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch {
+      // download unavailable in this environment
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40" onClick={onClose}>
+      <div
+        className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <div>
+            <h2 className="text-slate-100 font-semibold text-base flex items-center gap-2">
+              <MapPin className="w-4 h-4 text-slate-400" />
+              Item location sheet
+            </h2>
+            <p className="text-xs text-slate-500">
+              {jobName} · {placedCount} item{placedCount === 1 ? "" : "s"} placed in a container
+            </p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {placedCount === 0 ? (
+            <p className="text-sm text-slate-500 text-center py-10">
+              Nothing's been placed in a container yet — there's nothing to show a location for.
+            </p>
+          ) : (
+            <>
+              <p className="text-xs text-slate-500 mb-3">
+                Grouped by container, so anyone in the field can pull up one section per
+                conex/gangbox and see everything that's supposed to be in it.
+              </p>
+              <ol className="text-xs text-slate-500 space-y-1.5 list-decimal list-inside">
+                <li>Downloads a formatted sheet as a file (no popup needed)</li>
+                <li>Open the downloaded file — it'll open right in your browser</li>
+                <li>
+                  Print it with Ctrl+P (Windows) or Cmd+P (Mac) — "Save as PDF" works there too
+                </li>
+              </ol>
+            </>
+          )}
+        </div>
+
+        {placedCount > 0 && (
+          <div className="px-5 py-4 border-t border-slate-800 shrink-0 space-y-2">
+            <button
+              onClick={handleDownload}
+              className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+            >
+              <Download className="w-4 h-4" />
+              Download location sheet (for printing)
+            </button>
+            <button
+              onClick={handleDownloadCsv}
+              className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 border border-slate-700 text-slate-200 hover:bg-slate-800"
+            >
+              <Download className="w-4 h-4" />
+              Download as CSV (for Excel)
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PickListModal({ jobName, items, combinedTotals = {}, catalog = [], onClose }) {
   const [groupOption, setGroupOption] = useState("gang");
   const [outstandingOnly, setOutstandingOnly] = useState(false);
@@ -9088,6 +9273,7 @@ function JobInventory({
     setContainersOpen(true);
   };
   const [pickListOpen, setPickListOpen] = useState(false);
+  const [itemLocationSheetOpen, setItemLocationSheetOpen] = useState(false);
   const [todoListOpen, setTodoListOpen] = useState(false);
   const [suggestEditTarget, setSuggestEditTarget] = useState(null);
   const [suggestionSentConfirm, setSuggestionSentConfirm] = useState(false);
@@ -10146,6 +10332,16 @@ function JobInventory({
                   </button>
                   <button
                     onClick={() => {
+                      setItemLocationSheetOpen(true);
+                      setMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                  >
+                    <MapPin className="w-4 h-4 text-slate-400" />
+                    Item location sheet
+                  </button>
+                  <button
+                    onClick={() => {
                       setTransferListOpen(true);
                       setMenuOpen(false);
                     }}
@@ -11198,6 +11394,14 @@ function JobInventory({
           combinedTotals={combinedTotals}
           catalog={catalog}
           onClose={() => setPickListOpen(false)}
+        />
+      )}
+
+      {itemLocationSheetOpen && (
+        <ItemLocationSheetModal
+          jobName={job.name}
+          items={items}
+          onClose={() => setItemLocationSheetOpen(false)}
         />
       )}
 
