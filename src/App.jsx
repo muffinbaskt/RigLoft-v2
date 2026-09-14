@@ -6064,9 +6064,24 @@ function ItemLocationSheetModal({ jobName, items, onClose }) {
 
   const handleDownloadCsv = () => {
     try {
-      const rows = items.flatMap((item) =>
-        (item.containers || []).map((c) => [item.name, c.qty, item.qtyUnit || "", c.name])
-      );
+      // Grouped and sorted by container first, matching the printed
+      // version — building the raw rows straight from `items` in
+      // whatever order they happen to be stored in the job (the actual
+      // bug here) meant the same container's items could scatter across
+      // the sheet instead of sitting together.
+      const groups = items.reduce((acc, item) => {
+        (item.containers || []).forEach((c) => {
+          (acc[c.name] = acc[c.name] || []).push({ name: item.name, qty: c.qty, unit: item.qtyUnit || "" });
+        });
+        return acc;
+      }, {});
+      const rows = Object.keys(groups)
+        .sort()
+        .flatMap((containerName) =>
+          groups[containerName]
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map((row) => [row.name, row.qty, row.unit, containerName])
+        );
       const csv = [["Item", "Qty", "Unit", "Container"], ...rows]
         .map((r) => r.map(csvEscape).join(","))
         .join("\n");
