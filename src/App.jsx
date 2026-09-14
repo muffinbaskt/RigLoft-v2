@@ -18795,11 +18795,19 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   // One write instead of N individual ones — matters here specifically
   // since this is meant for clearing out a pile of accumulated
   // "Needs Attention"/no-longer-relevant lists in one go, not archiving
-  // a single list at a time.
+  // a single list at a time. Coerces both sides to strings before
+  // comparing — list.id is a number (uniqueId() returns one), but the
+  // ids arriving here came through an object's keys at some point
+  // (Object.keys/Object.fromEntries, used to track which checkboxes are
+  // selected), and object keys are always strings even when built from
+  // numbers. Comparing a Set of strings against a raw number id would
+  // silently match nothing at all — string vs number is never `===`.
   const handleBulkArchiveLists = (ids) => {
     if (!isEditor || !ids || ids.length === 0) return;
-    const idSet = new Set(ids);
-    updateLists((prev) => prev.map((l) => (idSet.has(l.id) ? { ...l, archived: true } : l)));
+    const idSet = new Set(ids.map(String));
+    updateLists((prev) =>
+      prev.map((l) => (idSet.has(String(l.id)) ? { ...l, archived: true } : l))
+    );
   };
 
   const handleDeleteList = (id) => {
