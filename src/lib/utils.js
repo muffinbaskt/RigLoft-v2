@@ -222,11 +222,36 @@ export function diffItems(before, after) {
   return changes;
 }
 
+// Wrapping a set of SME#s in parentheses — e.g.
+// "(FRAME1, FRAME2, W1, W2, W3, W4, W5, W6)" — groups them as a single
+// physical unit for counting purposes (a six-pack welder frame with its
+// own individually-serialed welders bolted in, say), without losing any
+// individual number: everything inside the parens is still stored,
+// still fully searchable, just kept together as one array entry instead
+// of eight. Anything typed outside parens still counts one-per-number,
+// exactly like before this existed — this only changes behavior where
+// parens are actually used.
 export function parseSerials(text) {
-  return text
+  const groups = [...text.matchAll(/\(([^()]*)\)/g)]
+    .map((m) => m[1].split(/[,\s]+/).map((s) => s.trim()).filter(Boolean))
+    .filter((members) => members.length > 0)
+    .map((members) => members.join(", "));
+  const ungrouped = text
+    .replace(/\([^()]*\)/g, " ")
     .split(/[,\s]+/)
     .map((s) => s.trim())
     .filter(Boolean);
+  return [...groups, ...ungrouped];
+}
+
+// The display-side counterpart to the grouping above — a stored serial
+// entry that contains more than one number (only possible via the
+// parens grouping, since every other path only ever stores one number
+// per entry) gets its parens put back on for display, so a group reads
+// back as visibly one unit everywhere it's shown, not as several loose
+// numbers that happen to be sitting next to each other.
+export function formatSerialForDisplay(entry) {
+  return entry.includes(",") ? `(${entry})` : entry;
 }
 
 // SME#s that already belong to a locked Received/Staged/Sent batch on a
