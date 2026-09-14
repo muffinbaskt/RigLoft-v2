@@ -16676,12 +16676,15 @@ function StaleThresholdsModal({ thresholds, onSave, onClose }) {
   );
 }
 
-function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onSaveThresholds, onOpenList, onAddList, onScanList, onOpenWorkerTasks, onGoHome }) {
+function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onSaveThresholds, onOpenList, onAddList, onScanList, onOpenWorkerTasks, onBulkArchiveLists, onGoHome }) {
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("active"); // "active" | "ready"
   const [showThresholdSettings, setShowThresholdSettings] = useState(false);
   const [showArchivedLists, setShowArchivedLists] = useState(false);
   const [statusFilter, setStatusFilter] = useState(null); // null = off, or a LOVE_STATUSES key
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedListIds, setSelectedListIds] = useState({});
+  const [confirmingBulkArchive, setConfirmingBulkArchive] = useState(false);
 
   const searchLower = search.trim().toLowerCase();
   // Search intentionally bypasses the archive filter — looking something
@@ -16969,15 +16972,56 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
                 </p>
               ) : (
                 <div className="space-y-5">
-                  {archivedListCount > 0 && (
-                    <button
-                      onClick={() => setShowArchivedLists((v) => !v)}
-                      className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1"
-                    >
-                      <Archive className="w-3.5 h-3.5" />
-                      {showArchivedLists ? "Hide" : "Show"} {archivedListCount} archived list
-                      {archivedListCount === 1 ? "" : "s"}
-                    </button>
+                  <div className="flex items-center justify-between gap-2">
+                    {archivedListCount > 0 ? (
+                      <button
+                        onClick={() => setShowArchivedLists((v) => !v)}
+                        className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1"
+                      >
+                        <Archive className="w-3.5 h-3.5" />
+                        {showArchivedLists ? "Hide" : "Show"} {archivedListCount} archived list
+                        {archivedListCount === 1 ? "" : "s"}
+                      </button>
+                    ) : (
+                      <span />
+                    )}
+                    {isEditor && visibleLists.length > 0 && (
+                      <button
+                        onClick={() => {
+                          setSelectMode((v) => !v);
+                          setSelectedListIds({});
+                        }}
+                        className="text-xs text-slate-500 hover:text-slate-300"
+                      >
+                        {selectMode ? "Cancel" : "Select"}
+                      </button>
+                    )}
+                  </div>
+                  {selectMode && (
+                    <div className="flex items-center justify-between gap-2 -mt-3 text-xs">
+                      <button
+                        onClick={() =>
+                          setSelectedListIds(
+                            visibleLists.every((l) => selectedListIds[l.id])
+                              ? {}
+                              : Object.fromEntries(visibleLists.map((l) => [l.id, true]))
+                          )
+                        }
+                        className="text-slate-400 hover:text-slate-200"
+                      >
+                        {visibleLists.every((l) => selectedListIds[l.id])
+                          ? "Deselect all"
+                          : `Select all (${visibleLists.length})`}
+                      </button>
+                      <button
+                        onClick={() => setConfirmingBulkArchive(true)}
+                        disabled={Object.values(selectedListIds).filter(Boolean).length === 0}
+                        className="flex items-center gap-1.5 rounded-md px-3 py-1.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+                      >
+                        <Archive className="w-3.5 h-3.5" />
+                        Archive {Object.values(selectedListIds).filter(Boolean).length} selected
+                      </button>
+                    </div>
                   )}
                   {jobGroups.map((jobLabel) => (
                     <div key={jobLabel}>
@@ -16994,34 +17038,57 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
                             return (
                               <button
                                 key={list.id}
-                                onClick={() => onOpenList(list)}
-                                className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700"
+                                onClick={() =>
+                                  selectMode
+                                    ? setSelectedListIds((prev) => ({ ...prev, [list.id]: !prev[list.id] }))
+                                    : onOpenList(list)
+                                }
+                                className={`w-full text-left bg-slate-900 border rounded-lg p-3 hover:border-slate-700 flex items-start gap-3 ${
+                                  selectMode && selectedListIds[list.id]
+                                    ? "border-amber-500/60 bg-amber-500/5"
+                                    : "border-slate-800"
+                                }`}
                               >
-                                <div className="flex items-center justify-between gap-2 mb-1.5">
-                                  <p className="text-sm text-slate-100 flex items-center gap-1.5">
-                                    {list.subJobLabel || `${list.items.length} item${list.items.length === 1 ? "" : "s"}`}
-                                    {list.archived && (
-                                      <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-500 rounded-full px-1.5 py-0.5">
-                                        Archived
-                                      </span>
+                                {selectMode && (
+                                  <div
+                                    className={`w-5 h-5 mt-0.5 rounded border shrink-0 flex items-center justify-center ${
+                                      selectedListIds[list.id]
+                                        ? "bg-amber-500 border-amber-500"
+                                        : "border-slate-600"
+                                    }`}
+                                  >
+                                    {selectedListIds[list.id] && (
+                                      <CheckCircle2 className="w-3.5 h-3.5 text-slate-950" />
                                     )}
-                                  </p>
-                                  <p className="text-xs text-slate-500">{list.dateReceived}</p>
-                                </div>
-                                {list.subJobLabel && (
-                                  <p className="text-xs text-slate-500 mb-1.5">
-                                    {list.items.length} item{list.items.length === 1 ? "" : "s"}
-                                  </p>
+                                  </div>
                                 )}
-                                <div className="flex flex-wrap gap-1.5">
-                                  {counts.map((s) => (
-                                    <span
-                                      key={s.key}
-                                      className={`text-[10px] rounded-full px-2 py-0.5 border ${s.color}`}
-                                    >
-                                      {s.n} {s.label}
-                                    </span>
-                                  ))}
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                                    <p className="text-sm text-slate-100 flex items-center gap-1.5">
+                                      {list.subJobLabel || `${list.items.length} item${list.items.length === 1 ? "" : "s"}`}
+                                      {list.archived && (
+                                        <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-500 rounded-full px-1.5 py-0.5">
+                                          Archived
+                                        </span>
+                                      )}
+                                    </p>
+                                    <p className="text-xs text-slate-500">{list.dateReceived}</p>
+                                  </div>
+                                  {list.subJobLabel && (
+                                    <p className="text-xs text-slate-500 mb-1.5">
+                                      {list.items.length} item{list.items.length === 1 ? "" : "s"}
+                                    </p>
+                                  )}
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {counts.map((s) => (
+                                      <span
+                                        key={s.key}
+                                        className={`text-[10px] rounded-full px-2 py-0.5 border ${s.color}`}
+                                      >
+                                        {s.n} {s.label}
+                                      </span>
+                                    ))}
+                                  </div>
                                 </div>
                               </button>
                             );
@@ -17115,6 +17182,23 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
             setShowThresholdSettings(false);
           }}
           onClose={() => setShowThresholdSettings(false)}
+        />
+      )}
+
+      {confirmingBulkArchive && (
+        <ConfirmDelete
+          title={`Archive ${Object.values(selectedListIds).filter(Boolean).length} list${
+            Object.values(selectedListIds).filter(Boolean).length === 1 ? "" : "s"
+          }?`}
+          message="Archived lists drop out of Ready to Send and Needs Attention, and off the main list — nothing on them gets deleted, and you can unarchive any of them again later."
+          confirmLabel="Archive"
+          onConfirm={() => {
+            onBulkArchiveLists(Object.keys(selectedListIds).filter((id) => selectedListIds[id]));
+            setConfirmingBulkArchive(false);
+            setSelectMode(false);
+            setSelectedListIds({});
+          }}
+          onCancel={() => setConfirmingBulkArchive(false)}
         />
       )}
     </div>
@@ -18708,6 +18792,16 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
     );
   };
 
+  // One write instead of N individual ones — matters here specifically
+  // since this is meant for clearing out a pile of accumulated
+  // "Needs Attention"/no-longer-relevant lists in one go, not archiving
+  // a single list at a time.
+  const handleBulkArchiveLists = (ids) => {
+    if (!isEditor || !ids || ids.length === 0) return;
+    const idSet = new Set(ids);
+    updateLists((prev) => prev.map((l) => (idSet.has(l.id) ? { ...l, archived: true } : l)));
+  };
+
   const handleDeleteList = (id) => {
     if (!isOwner) return;
     // Sweep every photo attached to this list out of storage before the
@@ -18769,6 +18863,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
         onAddList={() => setShowAddForm(true)}
         onScanList={() => setShowScanModal(true)}
         onOpenWorkerTasks={() => setShowWorkerTasks(true)}
+        onBulkArchiveLists={handleBulkArchiveLists}
         onGoHome={onGoHome}
       />
       {showAddForm && isEditor && (
