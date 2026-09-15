@@ -49,6 +49,7 @@ import {
   Shuffle,
   ExternalLink,
   MapPin,
+  Wrench,
 } from "lucide-react";
 import {
   STORAGE_OPTIONS,
@@ -201,6 +202,7 @@ import {
   enablePushNotifications,
   disablePushNotifications,
 } from "./lib/api";
+import { TOOLS_KEY, TOOL_STATUSES, newTool, logToolEvent } from "./lib/tools";
 
 
 function Select({ value, onChange, options, labels }) {
@@ -13659,7 +13661,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   );
 }
 
-function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onSelectKiosk, onSelectReceiving, onSelectBackorders, onSelectArchive, pendingSuggestionCount = 0, onRequestLogin, onSignOut }) {
+function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onSelectKiosk, onSelectReceiving, onSelectBackorders, onSelectArchive, onSelectTools, pendingSuggestionCount = 0, onRequestLogin, onSignOut }) {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
@@ -13834,6 +13836,15 @@ function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onS
           >
             <BookOpen className="w-5 h-5 text-slate-400" />
             <span className="text-sm font-semibold text-slate-300">Receipt Archive</span>
+          </button>
+        )}
+        {isEditor && (
+          <button
+            onClick={onSelectTools}
+            className="w-full mt-3 flex items-center justify-center gap-2 bg-slate-900 border-2 border-slate-800 hover:border-slate-600 rounded-xl p-4 text-center transition-colors"
+          >
+            <Wrench className="w-5 h-5 text-slate-400" />
+            <span className="text-sm font-semibold text-slate-300">Tools</span>
           </button>
         )}
       </main>
@@ -21749,6 +21760,546 @@ function ReceiptArchive({ onGoHome }) {
   );
 }
 
+// Tools registry, phase 1: a permanent record per physical tool (keyed
+// by SME#), separate from any one job's item list, so "have I seen this
+// number before, and where's it been" is a search instead of a dig
+// through old receipt photos. Manual add/browse/search/history only in
+// this phase — auto-linking SME#s typed elsewhere in the app, and
+// backfilling tools already sitting on current jobs, are later phases.
+function ToolsApp({ onGoHome }) {
+  const [tools, setTools] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [addingTool, setAddingTool] = useState(false);
+  const [viewingToolId, setViewingToolId] = useState(null);
+  const toolsRef = useRef([]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const result = await getWithRetry(TOOLS_KEY);
+        if (result.ok && result.value) {
+          const loaded = JSON.parse(result.value);
+          setTools(loaded);
+          toolsRef.current = loaded;
+        }
+      } catch {}
+      setLoading(false);
+    })();
+  }, []);
+
+  const saveTools = (next) => {
+    toolsRef.current = next;
+    setTools(next);
+    saveWithRetry(TOOLS_KEY, JSON.stringify(next)).catch(() => {});
+  };
+
+  const updateTool = (id, updater) => {
+    saveTools(toolsRef.current.map((t) => (t.id === id ? updater(t) : t)));
+  };
+
+  const deleteTool = (id) => {
+    saveTools(toolsRef.current.filter((t) => t.id !== id));
+  };
+
+  const searchLower = search.trim().toLowerCase();
+  const filtered = tools
+    .filter((t) => statusFilter === "all" || t.status === statusFilter)
+    .filter(
+      (t) =>
+        !searchLower ||
+        (t.sme || "").toLowerCase().includes(searchLower) ||
+        (t.name || "").toLowerCase().includes(searchLower) ||
+        (t.currentJobName || "").toLowerCase().includes(searchLower)
+    )
+    .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+
+  const viewingTool = tools.find((t) => t.id === viewingToolId) || null;
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="w-6 h-6 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (viewingTool) {
+    return (
+      <ToolDetailPage
+        tool={viewingTool}
+        onUpdate={(updater) => updateTool(viewingTool.id, updater)}
+        onDelete={() => {
+          deleteTool(viewingTool.id);
+          setViewingToolId(null);
+        }}
+        onBack={() => setViewingToolId(null)}
+        onGoHome={onGoHome}
+      />
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
+        <div className="flex items-center gap-3">
+          <button onClick={onGoHome} className="text-slate-400 hover:text-slate-200">
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <div>
+            <h1 className="font-bold text-slate-100 flex items-center gap-2">
+              <Wrench className="w-4.5 h-4.5 text-slate-400" />
+              Tools
+            </h1>
+            <p className="text-xs text-slate-500">SME# registry — search by number, name, or job</p>
+          </div>
+        </div>
+        <button
+          onClick={() => setAddingTool(true)}
+          className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
+        >
+          <Plus className="w-4 h-4" />
+          Add tool
+        </button>
+      </header>
+
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search SME #, item name, or job..."
+          className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-3 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+        />
+
+        <div className="flex items-center gap-2 mb-4 overflow-x-auto pb-1">
+          <button
+            onClick={() => setStatusFilter("all")}
+            className={`text-xs rounded-full px-3 py-1.5 border whitespace-nowrap ${
+              statusFilter === "all"
+                ? "bg-slate-700 border-slate-500 text-slate-100"
+                : "border-slate-700 text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            All ({tools.length})
+          </button>
+          {Object.entries(TOOL_STATUSES).map(([key, meta]) => {
+            const count = tools.filter((t) => t.status === key).length;
+            if (count === 0 && statusFilter !== key) return null;
+            return (
+              <button
+                key={key}
+                onClick={() => setStatusFilter(key)}
+                className={`text-xs rounded-full px-3 py-1.5 border whitespace-nowrap ${
+                  statusFilter === key
+                    ? meta.color
+                    : "border-slate-700 text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                {meta.label} ({count})
+              </button>
+            );
+          })}
+        </div>
+
+        {filtered.length === 0 ? (
+          <p className="text-sm text-slate-500 text-center py-12">
+            {tools.length === 0
+              ? "No tools in the registry yet — tap \"Add tool\" to start tracking one."
+              : `Nothing matches "${search}".`}
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {filtered.map((tool) => (
+              <button
+                key={tool.id}
+                onClick={() => setViewingToolId(tool.id)}
+                className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700 flex items-center justify-between gap-3"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm text-slate-100 truncate">
+                    {tool.name || "Unnamed tool"}
+                  </p>
+                  <p className="text-xs text-slate-500 font-mono">
+                    {tool.sme ? `SME# ${tool.sme}` : "No SME# yet"}
+                    {tool.currentJobName ? ` · ${tool.currentJobName}` : ""}
+                  </p>
+                </div>
+                <span
+                  className={`text-[10px] rounded-full px-2 py-1 border shrink-0 ${TOOL_STATUSES[tool.status]?.color || ""}`}
+                >
+                  {TOOL_STATUSES[tool.status]?.label || tool.status}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </main>
+
+      {addingTool && (
+        <AddToolModal
+          onSave={(newT) => {
+            saveTools([newT, ...toolsRef.current]);
+            setAddingTool(false);
+            setViewingToolId(newT.id);
+          }}
+          onClose={() => setAddingTool(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function AddToolModal({ onSave, onClose }) {
+  const [sme, setSme] = useState("");
+  const [name, setName] = useState("");
+
+  const handleSave = () => {
+    if (!name.trim()) return;
+    const trimmedSme = sme.trim();
+    onSave(
+      newTool({
+        sme: trimmedSme || null,
+        name: name.trim(),
+        status: trimmedSme ? "needs_engraving" : "awaiting_sme",
+      })
+    );
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" onClick={onClose}>
+      <div
+        className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-slate-100 font-semibold mb-4">Add a tool</h3>
+        <div className="space-y-3 mb-5">
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Item name</label>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. 6-pack welder frame"
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              SME # (leave blank if you're still waiting on it)
+            </label>
+            <input
+              value={sme}
+              onChange={(e) => setSme(e.target.value)}
+              placeholder="e.g. 4821"
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 font-mono focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={onClose}
+            className="flex-1 text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!name.trim()}
+            className="flex-1 text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+          >
+            Add
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ToolDetailPage({ tool, onUpdate, onDelete, onBack, onGoHome }) {
+  const [editingSme, setEditingSme] = useState(false);
+  const [smeText, setSmeText] = useState(tool.sme || "");
+  const [nameText, setNameText] = useState(tool.name || "");
+  const [jobText, setJobText] = useState(tool.currentJobName || "");
+  const [notesText, setNotesText] = useState(tool.notes || "");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [uploadingReceipt, setUploadingReceipt] = useState(false);
+  const [uploadError, setUploadError] = useState(null);
+  const [viewingReceipt, setViewingReceipt] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const saveSme = () => {
+    const trimmed = smeText.trim();
+    onUpdate((t) => {
+      const wasAwaiting = !t.sme;
+      const updated = { ...t, sme: trimmed || null };
+      if (trimmed && wasAwaiting) {
+        return {
+          ...logToolEvent(updated, "sme_assigned", `SME# ${trimmed} assigned`),
+          status: t.status === "awaiting_sme" ? "needs_engraving" : t.status,
+        };
+      }
+      return updated;
+    });
+    setEditingSme(false);
+  };
+
+  const saveName = () => {
+    if (!nameText.trim()) {
+      setNameText(tool.name || "");
+      return;
+    }
+    onUpdate((t) => ({ ...t, name: nameText.trim() }));
+  };
+
+  const saveNotes = () => {
+    onUpdate((t) => ({ ...t, notes: notesText }));
+  };
+
+  const changeStatus = (newStatus) => {
+    if (newStatus === tool.status) return;
+    onUpdate((t) =>
+      logToolEvent(
+        { ...t, status: newStatus },
+        "status_change",
+        `Status changed to "${TOOL_STATUSES[newStatus]?.label || newStatus}"`
+      )
+    );
+  };
+
+  const moveToJob = () => {
+    const trimmed = jobText.trim();
+    onUpdate((t) => {
+      const updated = { ...t, currentJobName: trimmed || null, status: trimmed ? "on_job" : t.status };
+      return logToolEvent(
+        updated,
+        "moved",
+        trimmed ? `Moved to "${trimmed}"` : "Removed from job (no job set)"
+      );
+    });
+  };
+
+  const handleReceiptChosen = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploadError(null);
+    setUploadingReceipt(true);
+    try {
+      const result = await uploadReferenceDocument(tool.id, file);
+      if (!result.ok) {
+        setUploadError(result.error || "Upload failed");
+      } else {
+        onUpdate((t) =>
+          logToolEvent(
+            { ...t, receiptPath: result.path, receiptUrl: result.url },
+            "receipt_attached",
+            "Receipt photo attached"
+          )
+        );
+      }
+    } catch (err) {
+      setUploadError(err && err.message ? err.message : String(err));
+    }
+    setUploadingReceipt(false);
+  };
+
+  const removeReceipt = async () => {
+    if (tool.receiptPath) await deleteReferenceDocument(tool.receiptPath).catch(() => {});
+    onUpdate((t) => logToolEvent({ ...t, receiptPath: null, receiptUrl: null }, "receipt_removed", "Receipt photo removed"));
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
+        <div className="flex items-center gap-3 min-w-0">
+          <button onClick={onBack} className="text-slate-400 hover:text-slate-200 shrink-0">
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <h1 className="font-bold text-slate-100 truncate">{tool.name || "Unnamed tool"}</h1>
+        </div>
+        <button onClick={() => setConfirmingDelete(true)} className="text-slate-500 hover:text-red-400 shrink-0">
+          <Trash2 className="w-4.5 h-4.5" />
+        </button>
+      </header>
+
+      <main className="max-w-2xl mx-auto px-4 py-5 space-y-5">
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">Item name</label>
+          <input
+            value={nameText}
+            onChange={(e) => setNameText(e.target.value)}
+            onBlur={saveName}
+            className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">SME #</label>
+          {editingSme ? (
+            <div className="flex gap-2">
+              <input
+                autoFocus
+                value={smeText}
+                onChange={(e) => setSmeText(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveSme()}
+                placeholder="e.g. 4821"
+                className="flex-1 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 font-mono focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+              <button
+                onClick={saveSme}
+                className="text-sm rounded-md px-3 py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Save
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                setSmeText(tool.sme || "");
+                setEditingSme(true);
+              }}
+              className="text-sm font-mono text-slate-100 bg-slate-800 border border-slate-700 rounded-md px-3 py-2 hover:border-slate-600 w-full text-left"
+            >
+              {tool.sme || <span className="text-amber-400 font-sans">Tap to enter SME# once it comes back</span>}
+            </button>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">Status</label>
+          <div className="flex flex-wrap gap-1.5">
+            {Object.entries(TOOL_STATUSES).map(([key, meta]) => (
+              <button
+                key={key}
+                onClick={() => changeStatus(key)}
+                className={`text-xs rounded-full px-3 py-1.5 border ${
+                  tool.status === key ? meta.color : "border-slate-700 text-slate-500 hover:text-slate-300"
+                }`}
+              >
+                {meta.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">Current job</label>
+          <div className="flex gap-2">
+            <input
+              value={jobText}
+              onChange={(e) => setJobText(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && moveToJob()}
+              placeholder="Job name/number"
+              className="flex-1 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+            />
+            <button
+              onClick={moveToJob}
+              disabled={jobText.trim() === (tool.currentJobName || "")}
+              className="text-sm rounded-md px-3 py-2 border border-slate-700 text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+            >
+              Update
+            </button>
+          </div>
+          <p className="text-[11px] text-slate-600 mt-1">
+            Logs a "moved" entry below — this is a plain text field for now, not linked live to the
+            actual job yet.
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">Original receipt</label>
+          {tool.receiptUrl ? (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setViewingReceipt(true)}
+                className="w-16 h-16 rounded-md overflow-hidden border border-slate-700 shrink-0"
+              >
+                <img src={tool.receiptUrl} alt="Receipt" className="w-full h-full object-cover" />
+              </button>
+              <button onClick={removeReceipt} className="text-xs text-slate-500 hover:text-red-400">
+                Remove
+              </button>
+            </div>
+          ) : (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,application/pdf"
+                onChange={handleReceiptChosen}
+                className="hidden"
+              />
+              <button
+                onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                disabled={uploadingReceipt}
+                className="text-sm flex items-center gap-1.5 rounded-md px-3 py-2 border border-slate-700 text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+              >
+                <Camera className="w-4 h-4" />
+                {uploadingReceipt ? "Uploading..." : "Attach receipt photo"}
+              </button>
+              {uploadError && <p className="text-xs text-red-400 mt-1">{uploadError}</p>}
+            </>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">Notes</label>
+          <textarea
+            value={notesText}
+            onChange={(e) => setNotesText(e.target.value)}
+            onBlur={saveNotes}
+            rows={2}
+            className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1.5 flex items-center gap-1.5">
+            <History className="w-3.5 h-3.5" />
+            History
+          </label>
+          <div className="space-y-2">
+            {(tool.history || [])
+              .slice()
+              .reverse()
+              .map((entry) => (
+                <div key={entry.id} className="text-xs bg-slate-900 border border-slate-800 rounded-md px-3 py-2">
+                  <p className="text-slate-300">{entry.note}</p>
+                  <p className="text-slate-600 mt-0.5">{formatTaskTimestamp(entry.time)}</p>
+                </div>
+              ))}
+          </div>
+        </div>
+      </main>
+
+      {viewingReceipt && tool.receiptUrl && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
+          onClick={() => setViewingReceipt(false)}
+        >
+          <button
+            onClick={() => setViewingReceipt(false)}
+            className="absolute top-4 right-4 text-slate-300 hover:text-white"
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <ZoomableImage src={tool.receiptUrl} alt="Receipt" />
+        </div>
+      )}
+
+      {confirmingDelete && (
+        <ConfirmDelete
+          title="Delete this tool record?"
+          message={`"${tool.name || "This tool"}"${tool.sme ? ` (SME# ${tool.sme})` : ""} and its whole history will be removed from the registry. This can't be undone.`}
+          onConfirm={onDelete}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 function ReceivingApp({ onGoHome }) {
   const [queue, setQueue] = useState([]);
   // Kept in sync on every single write, synchronously — this is what a
@@ -23580,6 +24131,7 @@ export default function AuthGate() {
           onSelectReceiving={() => navigateToSection("receiving")}
           onSelectBackorders={() => navigateToSection("backorders")}
           onSelectArchive={() => navigateToSection("archive")}
+          onSelectTools={() => navigateToSection("tools")}
           pendingSuggestionCount={pendingSuggestionCount}
           onRequestLogin={() => setShowLogin(true)}
           onSignOut={() => supabase.auth.signOut()}
@@ -23590,6 +24142,8 @@ export default function AuthGate() {
         <BackorderDashboard onGoHome={goToLanding} />
       ) : appSection === "archive" ? (
         <ReceiptArchive onGoHome={goToLanding} />
+      ) : appSection === "tools" ? (
+        <ToolsApp onGoHome={goToLanding} />
       ) : appSection === "love" ? (
         <LoveListsApp
           isEditor={isOwner || isManager}
