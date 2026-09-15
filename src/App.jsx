@@ -202,7 +202,7 @@ import {
   enablePushNotifications,
   disablePushNotifications,
 } from "./lib/api";
-import { TOOLS_KEY, TOOL_STATUSES, newTool, logToolEvent } from "./lib/tools";
+import { TOOLS_KEY, TOOL_STATUSES, newTool, logToolEvent, syncSmesIntoRegistry } from "./lib/tools";
 
 
 function Select({ value, onChange, options, labels }) {
@@ -4698,7 +4698,7 @@ function ReturnItemEditModal({ item, onSave, onCancel }) {
   );
 }
 
-function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
+function ReturnDetailPage({ ret, onUpdate, onSyncToolsFromItem, onBack, onGoHome, onDeleteReturn }) {
   const [name, setName] = useState("");
   const [qty, setQty] = useState("");
   const [smeText, setSmeText] = useState("");
@@ -4717,6 +4717,9 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
       sme: parseSerials(smeText),
     };
     onUpdate({ ...ret, items: [...ret.items, newItem] });
+    if (onSyncToolsFromItem && newItem.sme.length > 0) {
+      onSyncToolsFromItem(newItem.sme, newItem.name);
+    }
     setName("");
     setQty("");
     setSmeText("");
@@ -4737,6 +4740,9 @@ function ReturnDetailPage({ ret, onUpdate, onBack, onGoHome, onDeleteReturn }) {
   const saveEditedItem = (updated) => {
     playSaveChime();
     onUpdate({ ...ret, items: ret.items.map((i) => (i.id === updated.id ? updated : i)) });
+    if (onSyncToolsFromItem && updated.sme && updated.sme.length > 0) {
+      onSyncToolsFromItem(updated.sme, updated.name);
+    }
     setEditingItem(null);
   };
 
@@ -9204,6 +9210,7 @@ function JobInventory({
   catalog,
   onSaveCatalogItem,
   onLearnCatalogAlias,
+  onSyncToolsFromItem,
   onOpenCatalog,
   onRenameJob,
 }) {
@@ -9678,6 +9685,13 @@ function JobInventory({
         ].slice(0, 50),
       }));
     }
+    // Any SME#s on this item get synced into the Tools registry
+    // regardless of whether this was a new item or an edit — a fresh
+    // number gets registered, one already known gets moved/updated in
+    // place. Harmless no-op call when there's nothing in the SME# field.
+    if (onSyncToolsFromItem && item.serials && item.serials.length > 0) {
+      onSyncToolsFromItem(item.serials, item.name, job.name);
+    }
     setFormState(null);
   };
 
@@ -10142,6 +10156,17 @@ function JobInventory({
         ...prevJob.activityLog,
       ].slice(0, 50),
     }));
+    // Same Tools registry sync as a regular item save — any row that
+    // came in with SME#s attached (only ever the paste-text Import;
+    // the job sheet scanner has no SME# field, so its rows are always a
+    // harmless no-op here) gets those numbers linked in too.
+    if (onSyncToolsFromItem) {
+      newItems.forEach((it) => {
+        if (it.serials && it.serials.length > 0) {
+          onSyncToolsFromItem(it.serials, it.name, job.name);
+        }
+      });
+    }
   };
 
   const counts = {
@@ -11709,6 +11734,8 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   const [generalTodos, setGeneralTodos] = useState([]);
   const [workers, setWorkers] = useState([]);
   const [workerTasks, setWorkerTasks] = useState([]);
+  const [tools, setTools] = useState([]);
+  const toolsRef = useRef([]);
   const [catalogModalOpen, setCatalogModalOpen] = useState(false);
   const catalogSaveTimer = useRef(null);
   const catalogRef = useRef([]);
@@ -12104,6 +12131,17 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
       }
     } catch {
       // corrupted stored data — just start empty
+    }
+    try {
+      const toolsResult = await getWithRetry(TOOLS_KEY);
+      if (toolsResult.ok && toolsResult.value) {
+        const loadedTools = JSON.parse(toolsResult.value);
+        setTools(loadedTools);
+        toolsRef.current = loadedTools;
+      }
+    } catch {
+      // corrupted stored data — just start empty; SME sync simply has
+      // nothing to match against until this loads successfully
     }
 
     let loadedJobs = null;
@@ -12886,6 +12924,44 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
     });
   };
 
+  // Phase 2 of the Tools registry — the actual auto-link. Every SME#
+  // entry point in Job Lists (a regular item's SME# field, and the
+  // paste-text Import) routes through here, so a number typed in either
+  // place lands in the same shared registry instead of the registry
+  // only knowing about tools added to it by hand. Reads from
+  // toolsRef.current (not the tools state variable) specifically so a
+  // rapid sequence of saves — several items saved back to back — each
+  // sees the truly latest registry rather than a stale snapshot from
+  // whenever this closure was created.
+  const syncToolsFromJobItem = (smeNumbers, itemName, jobName) => {
+    if (!smeNumbers || smeNumbers.length === 0) return;
+    const next = syncSmesIntoRegistry(toolsRef.current, smeNumbers, itemName, {
+      type: "job",
+      jobId: activeJobId,
+      jobName,
+    });
+    if (next !== toolsRef.current) {
+      toolsRef.current = next;
+      setTools(next);
+      saveWithRetry(TOOLS_KEY, JSON.stringify(next)).catch(() => {});
+    }
+  };
+
+  // Same registry, "returned" context instead of "job" — a Return means
+  // the physical tool is coming off whatever job it was on, not moving
+  // to a new one, so this always lands a matched tool in "storage" with
+  // no job attached, regardless of which return or which job it came
+  // from.
+  const syncToolsFromReturn = (smeNumbers, itemName) => {
+    if (!smeNumbers || smeNumbers.length === 0) return;
+    const next = syncSmesIntoRegistry(toolsRef.current, smeNumbers, itemName, { type: "returned" });
+    if (next !== toolsRef.current) {
+      toolsRef.current = next;
+      setTools(next);
+      saveWithRetry(TOOLS_KEY, JSON.stringify(next)).catch(() => {});
+    }
+  };
+
   const bulkSaveCatalogItems = (items) => {
     setCatalog((prev) => [...prev, ...items]);
   };
@@ -13427,6 +13503,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
         <ReturnDetailPage
           ret={activeReturn}
           onUpdate={updateReturn}
+          onSyncToolsFromItem={syncToolsFromReturn}
           onBack={() => {
             setActiveReturnId(null);
             setShowReturnsListPage(true);
@@ -13510,6 +13587,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           catalog={catalog}
           onSaveCatalogItem={saveCatalogItem}
           onLearnCatalogAlias={learnCatalogAliasForJobs}
+          onSyncToolsFromItem={syncToolsFromJobItem}
           onOpenCatalog={() => setCatalogModalOpen(true)}
           onRenameJob={(name, color) => renameJob(activeJob.id, name, color)}
         />
@@ -15216,7 +15294,7 @@ function PrintableLoveListModal({ list, onClose }) {
   );
 }
 
-function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onBack, onGoHome }) {
+function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onSyncToolsFromItem, onBack, onGoHome }) {
   const [addingItem, setAddingItem] = useState(false);
   const [showPullFromReceiving, setShowPullFromReceiving] = useState(false);
   const [mergingItem, setMergingItem] = useState(null);
@@ -15350,6 +15428,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     if (!editingSmeFor) return;
     const enteredNew = parseSerials(smeDraft);
     playSaveChime();
+    let finalSerials = [];
     onUpdateList({
       ...list,
       items: list.items.map((i) => {
@@ -15361,6 +15440,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         const locked = lockedLoveSerials(i);
         const newlyEntered = enteredNew.filter((s) => !locked.includes(s));
         const newSerials = [...new Set([...locked, ...newlyEntered])];
+        finalSerials = newSerials;
 
         const prevCount = (i.serials || []).length;
         const newCount = newSerials.length;
@@ -15386,6 +15466,13 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         return { ...i, serials: newSerials, qtyHave };
       }),
     });
+    // Syncs the item's full current SME# set, not just what was newly
+    // typed — harmless for numbers already known to the registry (the
+    // sync is a no-op if nothing actually changed), and makes sure
+    // nothing that predates this sync existing gets left out.
+    if (onSyncToolsFromItem && finalSerials.length > 0) {
+      onSyncToolsFromItem(finalSerials, editingSmeFor.name, list.jobLabel);
+    }
     setEditingSmeFor(null);
   };
 
@@ -18855,6 +18942,8 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
   const [showWorkerTasks, setShowWorkerTasks] = useState(false);
+  const [tools, setTools] = useState([]);
+  const toolsRef = useRef([]);
 
   useEffect(() => {
     (async () => {
@@ -18880,6 +18969,16 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
         const tasksResult = await getWithRetry(WORKER_TASKS_KEY);
         if (tasksResult.ok && tasksResult.value) setWorkerTasks(JSON.parse(tasksResult.value).map(migrateWorkerTask));
       } catch {}
+      try {
+        const toolsResult = await getWithRetry(TOOLS_KEY);
+        if (toolsResult.ok && toolsResult.value) {
+          const loadedTools = JSON.parse(toolsResult.value);
+          setTools(loadedTools);
+          toolsRef.current = loadedTools;
+        }
+      } catch {
+        // Tools registry sync just won't be available this session
+      }
       try {
         const thresholdsResult = await getWithRetry(STALE_THRESHOLDS_KEY);
         if (thresholdsResult.ok && thresholdsResult.value) {
@@ -18963,6 +19062,27 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
       saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
       return next;
     });
+  };
+
+  // Fourth and last of the Tools registry's auto-link points — same
+  // sync as Job Lists' items/Import and Returns, just reached through
+  // Love Lists' own separate copy of the data instead of sharing state
+  // with the Job Lists side of the app. context is "job" here (an item
+  // on a Love List is understood to be sitting on that list's job),
+  // named for the list's own job label since a Love List doesn't carry
+  // a real jobId the way Job Lists' jobs do.
+  const syncToolsFromLoveListItem = (smeNumbers, itemName, jobLabel) => {
+    if (!isEditor || !smeNumbers || smeNumbers.length === 0) return;
+    const next = syncSmesIntoRegistry(toolsRef.current, smeNumbers, itemName, {
+      type: "job",
+      jobId: null,
+      jobName: jobLabel,
+    });
+    if (next !== toolsRef.current) {
+      toolsRef.current = next;
+      setTools(next);
+      saveWithRetry(TOOLS_KEY, JSON.stringify(next)).catch(() => {});
+    }
   };
 
   const activeList = lists.find((l) => l.id === activeListId) || null;
@@ -19087,6 +19207,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
         onUpdateList={handleUpdateList}
         onDeleteList={handleDeleteList}
         onLearnAlias={learnCatalogAlias}
+        onSyncToolsFromItem={syncToolsFromLoveListItem}
         onBack={() => setActiveListId(null)}
         onGoHome={onGoHome}
       />
@@ -20802,18 +20923,22 @@ function ReceiptArchive({ onGoHome }) {
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState({});
   const [printingSelection, setPrintingSelection] = useState(false);
+  const [confirmingSendToTools, setConfirmingSendToTools] = useState(null);
+  const [tools, setTools] = useState([]);
   const entriesRef = useRef([]);
   const catalogRef = useRef([]);
+  const toolsRef = useRef([]);
   const fileInputRef = useRef(null);
   const nameDebounceTimers = useRef({});
 
   useEffect(() => {
     (async () => {
       try {
-        const [eResult, cResult, nResult] = await Promise.all([
+        const [eResult, cResult, nResult, tResult] = await Promise.all([
           getWithRetry(RECEIPT_ARCHIVE_KEY),
           getWithRetry(CATALOG_KEY),
           getWithRetry(RECEIVING_NAME_MEMORY_KEY),
+          getWithRetry(TOOLS_KEY),
         ]);
         if (eResult.ok && eResult.value) {
           const loaded = JSON.parse(eResult.value);
@@ -20826,6 +20951,11 @@ function ReceiptArchive({ onGoHome }) {
           catalogRef.current = loadedCatalog;
         }
         if (nResult.ok && nResult.value) setNameMemory(JSON.parse(nResult.value));
+        if (tResult.ok && tResult.value) {
+          const loadedTools = JSON.parse(tResult.value);
+          setTools(loadedTools);
+          toolsRef.current = loadedTools;
+        }
       } catch {}
       setLoading(false);
     })();
@@ -20835,6 +20965,12 @@ function ReceiptArchive({ onGoHome }) {
     entriesRef.current = next;
     setEntries(next);
     saveWithRetry(RECEIPT_ARCHIVE_KEY, JSON.stringify(next)).catch(() => {});
+  };
+
+  const saveTools = (next) => {
+    toolsRef.current = next;
+    setTools(next);
+    saveWithRetry(TOOLS_KEY, JSON.stringify(next)).catch(() => {});
   };
 
   // Same fix as the bulk-scan queue bug from earlier — reads and writes
@@ -21498,13 +21634,39 @@ function ReceiptArchive({ onGoHome }) {
 
             <button
               onClick={() => setConfirmingSendToReceiving(viewingEntry)}
-              className="w-full text-left text-xs text-slate-400 hover:text-slate-200 border border-dashed border-slate-700 rounded-md px-3 py-2 mb-4"
+              className="w-full text-left text-xs text-slate-400 hover:text-slate-200 border border-dashed border-slate-700 rounded-md px-3 py-2 mb-2"
             >
               📥{" "}
               {viewingEntry.sentToReceiving
                 ? "Send to Receiving again (creates another pending receipt)"
                 : "Send to Receiving — assign these items to a job or Love List"}
             </button>
+
+            {(() => {
+              // The actual "recognize a tool" logic: an item only counts
+              // as a tool candidate if it matches something in the
+              // catalog AND that catalog entry is tagged Transfer — the
+              // same heuristic (Transfer tag + catalog link) used to
+              // reason about which items genuinely need SME# tracking,
+              // rather than treating every single line on a receipt
+              // (shop rags, consumables, generic hardware) as if it
+              // needs its own tool record.
+              const toolCandidates = (viewingEntry.items || []).filter((it) => {
+                const match = it.name ? findCatalogMatch(it.name, catalog) : null;
+                return match && match.needsTransfer;
+              });
+              if (toolCandidates.length === 0) return null;
+              return (
+                <button
+                  onClick={() => setConfirmingSendToTools({ ...viewingEntry, toolCandidates })}
+                  className="w-full text-left text-xs text-slate-400 hover:text-slate-200 border border-dashed border-slate-700 rounded-md px-3 py-2 mb-4"
+                >
+                  <Wrench className="w-3.5 h-3.5 inline mr-1.5" />
+                  Send to Tools — {toolCandidates.length} item{toolCandidates.length === 1 ? "" : "s"} on
+                  this receipt look{toolCandidates.length === 1 ? "s" : ""} like tools
+                </button>
+              );
+            })()}
 
             {viewingEntry.photoUrl && (
               <button
@@ -21746,6 +21908,28 @@ function ReceiptArchive({ onGoHome }) {
         </div>
       )}
 
+      {confirmingSendToTools && (
+        <AddToolModal
+          title={`Send to Tools — ${confirmingSendToTools.vendor || "receipt"}`}
+          initialRows={confirmingSendToTools.toolCandidates.map((it) => ({
+            id: uniqueId(),
+            name: it.name,
+            qty: String(Math.max(1, Number(it.shippedQty) || 1)),
+            smeText: "",
+          }))}
+          existingReceipt={
+            confirmingSendToTools.photoUrl
+              ? { path: confirmingSendToTools.photoPath, url: confirmingSendToTools.photoUrl }
+              : null
+          }
+          onSave={(newTools) => {
+            saveTools([...newTools, ...toolsRef.current]);
+            setConfirmingSendToTools(null);
+          }}
+          onClose={() => setConfirmingSendToTools(null)}
+        />
+      )}
+
       {printingEntry && (
         <PrintableReceiptModal entry={printingEntry} onClose={() => setPrintingEntry(null)} />
       )}
@@ -21960,8 +22144,12 @@ function ToolsApp({ onGoHome }) {
 // up front, shared by everything this batch creates; the rows below it
 // are where each actual item/quantity/SME# gets entered, as many as the
 // receipt actually has.
-function AddToolModal({ onSave, onClose }) {
-  const [rows, setRows] = useState([{ id: uniqueId(), name: "", qty: "1", smeText: "" }]);
+function AddToolModal({ onSave, onClose, initialRows, existingReceipt, title = "Add tools" }) {
+  const [rows, setRows] = useState(
+    initialRows && initialRows.length > 0
+      ? initialRows
+      : [{ id: uniqueId(), name: "", qty: "1", smeText: "" }]
+  );
   const [receiptFile, setReceiptFile] = useState(null);
   const [receiptPreviewUrl, setReceiptPreviewUrl] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -21997,10 +22185,12 @@ function AddToolModal({ onSave, onClose }) {
     // Uploaded once here, before any tool records exist, rather than
     // per-tool — every tool this batch creates points at the same
     // uploaded file instead of the receipt getting re-uploaded once per
-    // item.
-    let receiptPath = null;
-    let receiptUrl = null;
-    if (receiptFile) {
+    // item. When existingReceipt is provided (sent over from an already-
+    // archived receipt), there's nothing to upload at all — every tool
+    // just points at that same already-stored photo directly.
+    let receiptPath = existingReceipt ? existingReceipt.path : null;
+    let receiptUrl = existingReceipt ? existingReceipt.url : null;
+    if (!existingReceipt && receiptFile) {
       const batchId = uniqueId();
       const result = await uploadReferenceDocument(batchId, receiptFile);
       if (!result.ok) {
@@ -22028,7 +22218,7 @@ function AddToolModal({ onSave, onClose }) {
           tool = logToolEvent(
             { ...tool, receiptPath, receiptUrl },
             "receipt_attached",
-            "Receipt photo attached"
+            existingReceipt ? "Receipt photo attached from the Archive" : "Receipt photo attached"
           );
         }
         return tool;
@@ -22046,7 +22236,7 @@ function AddToolModal({ onSave, onClose }) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
-          <h3 className="text-slate-100 font-semibold">Add tools</h3>
+          <h3 className="text-slate-100 font-semibold">{title}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
             <X className="w-5 h-5" />
           </button>
@@ -22054,9 +22244,22 @@ function AddToolModal({ onSave, onClose }) {
 
         <div className="flex-1 overflow-y-auto px-5 py-4">
           <label className="block text-xs font-medium text-slate-400 mb-1.5">
-            Receipt photo (optional — shared by every row below)
+            {existingReceipt
+              ? "Receipt photo — already attached from the Archive"
+              : "Receipt photo (optional — shared by every row below)"}
           </label>
-          {receiptPreviewUrl ? (
+          {existingReceipt ? (
+            <div className="flex items-center gap-2 mb-4">
+              <img
+                src={existingReceipt.url}
+                alt=""
+                className="w-14 h-14 rounded-md object-cover border border-slate-700"
+              />
+              <p className="text-xs text-slate-500">
+                Every tool created here will point at this same photo — no re-upload needed.
+              </p>
+            </div>
+          ) : receiptPreviewUrl ? (
             <div className="flex items-center gap-2 mb-4">
               <img
                 src={receiptPreviewUrl}
