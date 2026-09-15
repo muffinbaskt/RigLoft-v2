@@ -21938,10 +21938,13 @@ function ToolsApp({ onGoHome }) {
 
       {addingTool && (
         <AddToolModal
-          onSave={(newT) => {
-            saveTools([newT, ...toolsRef.current]);
+          onSave={(newTools) => {
+            saveTools([...newTools, ...toolsRef.current]);
             setAddingTool(false);
-            setViewingToolId(newT.id);
+            // No single detail page to jump to anymore now that this can
+            // create several tools at once — back to the list, where
+            // everything just added shows up at the top (sorted newest
+            // first) so they're easy to spot and open individually.
           }}
           onClose={() => setAddingTool(false)}
         />
@@ -21950,53 +21953,192 @@ function ToolsApp({ onGoHome }) {
   );
 }
 
+// Handles both real shapes a receipt actually shows up in — 5 of the
+// same die grinder on one receipt, or a mixed batch of 10+ different
+// tools on one receipt — without making either case mean re-uploading
+// the same photo over and over. The receipt (if any) is uploaded once,
+// up front, shared by everything this batch creates; the rows below it
+// are where each actual item/quantity/SME# gets entered, as many as the
+// receipt actually has.
 function AddToolModal({ onSave, onClose }) {
-  const [sme, setSme] = useState("");
-  const [name, setName] = useState("");
+  const [rows, setRows] = useState([{ id: uniqueId(), name: "", qty: "1", smeText: "" }]);
+  const [receiptFile, setReceiptFile] = useState(null);
+  const [receiptPreviewUrl, setReceiptPreviewUrl] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+  const fileInputRef = useRef(null);
 
-  const handleSave = () => {
-    if (!name.trim()) return;
-    const trimmedSme = sme.trim();
-    onSave(
-      newTool({
-        sme: trimmedSme || null,
-        name: name.trim(),
-        status: trimmedSme ? "needs_engraving" : "awaiting_sme",
-      })
-    );
+  const updateRow = (id, changes) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...changes } : r)));
+  };
+  const addRow = () => {
+    setRows((prev) => [...prev, { id: uniqueId(), name: "", qty: "1", smeText: "" }]);
+  };
+  const removeRow = (id) => {
+    setRows((prev) => (prev.length > 1 ? prev.filter((r) => r.id !== id) : prev));
+  };
+
+  const handleReceiptChosen = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setReceiptFile(file);
+    setReceiptPreviewUrl(URL.createObjectURL(file));
+  };
+
+  const validRows = rows.filter((r) => r.name.trim());
+  const totalCount = validRows.reduce((sum, r) => sum + (Math.max(1, Number(r.qty) || 1)), 0);
+
+  const handleSave = async () => {
+    if (validRows.length === 0) return;
+    setSaving(true);
+    setSaveError(null);
+
+    // Uploaded once here, before any tool records exist, rather than
+    // per-tool — every tool this batch creates points at the same
+    // uploaded file instead of the receipt getting re-uploaded once per
+    // item.
+    let receiptPath = null;
+    let receiptUrl = null;
+    if (receiptFile) {
+      const batchId = uniqueId();
+      const result = await uploadReferenceDocument(batchId, receiptFile);
+      if (!result.ok) {
+        setSaveError(result.error || "Couldn't upload the receipt — you can still add the tools and attach it later.");
+      } else {
+        receiptPath = result.path;
+        receiptUrl = result.url;
+      }
+    }
+
+    const newTools = validRows.flatMap((row) => {
+      const qty = Math.max(1, Number(row.qty) || 1);
+      const smes = row.smeText
+        .split(/[,\n]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      return Array.from({ length: qty }, (_, i) => {
+        const sme = smes[i] || null;
+        let tool = newTool({
+          name: row.name.trim(),
+          sme,
+          status: sme ? "needs_engraving" : "awaiting_sme",
+        });
+        if (receiptUrl) {
+          tool = logToolEvent(
+            { ...tool, receiptPath, receiptUrl },
+            "receipt_attached",
+            "Receipt photo attached"
+          );
+        }
+        return tool;
+      });
+    });
+
+    onSave(newTools);
+    setSaving(false);
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8" onClick={onClose}>
       <div
-        className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5"
+        className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-lg max-h-full flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="text-slate-100 font-semibold mb-4">Add a tool</h3>
-        <div className="space-y-3 mb-5">
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">Item name</label>
-            <input
-              autoFocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. 6-pack welder frame"
-              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">
-              SME # (leave blank if you're still waiting on it)
-            </label>
-            <input
-              value={sme}
-              onChange={(e) => setSme(e.target.value)}
-              placeholder="e.g. 4821"
-              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 font-mono focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-            />
-          </div>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <h3 className="text-slate-100 font-semibold">Add tools</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
         </div>
-        <div className="flex gap-2">
+
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">
+            Receipt photo (optional — shared by every row below)
+          </label>
+          {receiptPreviewUrl ? (
+            <div className="flex items-center gap-2 mb-4">
+              <img
+                src={receiptPreviewUrl}
+                alt=""
+                className="w-14 h-14 rounded-md object-cover border border-slate-700"
+              />
+              <button
+                onClick={() => {
+                  setReceiptFile(null);
+                  setReceiptPreviewUrl(null);
+                }}
+                className="text-xs text-slate-500 hover:text-red-400"
+              >
+                Remove
+              </button>
+            </div>
+          ) : (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,application/pdf"
+                onChange={handleReceiptChosen}
+                className="hidden"
+              />
+              <button
+                onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                className="mb-4 flex items-center gap-1.5 text-sm rounded-md px-3 py-2 border border-slate-700 text-slate-200 hover:bg-slate-800"
+              >
+                <Camera className="w-4 h-4" />
+                Attach receipt photo
+              </button>
+            </>
+          )}
+
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">Items on this receipt</label>
+          <div className="space-y-2 mb-3">
+            {rows.map((row) => (
+              <div key={row.id} className="border border-slate-800 rounded-lg p-2.5 bg-slate-800/40">
+                <div className="flex gap-2 mb-2">
+                  <input
+                    value={row.name}
+                    onChange={(e) => updateRow(row.id, { name: e.target.value })}
+                    placeholder="Item name, e.g. Die grinder"
+                    className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                  />
+                  <input
+                    type="number"
+                    min="1"
+                    onFocus={selectOnFocus}
+                    onClick={selectOnFocus}
+                    value={row.qty}
+                    onChange={(e) => updateRow(row.id, { qty: e.target.value })}
+                    className="w-16 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                  />
+                  {rows.length > 1 && (
+                    <button onClick={() => removeRow(row.id)} className="text-slate-500 hover:text-red-400 p-1.5">
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+                <input
+                  value={row.smeText}
+                  onChange={(e) => updateRow(row.id, { smeText: e.target.value })}
+                  placeholder={
+                    Number(row.qty) > 1
+                      ? "SME #s if you already have them, comma-separated, one per item"
+                      : "SME # if you already have it (optional)"
+                  }
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-md px-2.5 py-1.5 font-mono focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                />
+              </div>
+            ))}
+          </div>
+          <button onClick={addRow} className="text-xs text-amber-400 hover:text-amber-300 flex items-center gap-1">
+            <Plus className="w-3.5 h-3.5" />
+            Add another item from this receipt
+          </button>
+          {saveError && <p className="text-xs text-red-400 mt-3">{saveError}</p>}
+        </div>
+
+        <div className="px-5 py-4 border-t border-slate-800 shrink-0 flex gap-2">
           <button
             onClick={onClose}
             className="flex-1 text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
@@ -22005,10 +22147,10 @@ function AddToolModal({ onSave, onClose }) {
           </button>
           <button
             onClick={handleSave}
-            disabled={!name.trim()}
+            disabled={validRows.length === 0 || saving}
             className="flex-1 text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
           >
-            Add
+            {saving ? "Adding..." : `Add ${totalCount} tool${totalCount === 1 ? "" : "s"}`}
           </button>
         </div>
       </div>
