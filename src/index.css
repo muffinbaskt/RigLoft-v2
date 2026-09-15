@@ -5,3 +5,16 @@
 html, body, #root {
   height: 100%;
 }
+
+/* iOS PWA: the viewport-fit=cover meta tag in index.html lets the app
+   draw edge-to-edge, including up under the status bar / notch / Dynamic
+   Island — but without this, every screen's top header (all of them use
+   a plain <header> element, sticky to the top of their own screen) draws
+   its buttons right into that reserved system-UI strip, where iOS
+   swallows taps before they ever reach the page. This pushes each
+   header's actual content down below that reserved area — env() resolves
+   to 0 on anything without a notch/Dynamic Island, so this is a no-op on
+   older iPhones, Android, and desktop. */
+header {
+  padding-top: env(safe-area-inset-top);
+}
