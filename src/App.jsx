@@ -22230,7 +22230,7 @@ function AddToolModal({ onSave, onClose, initialRows, existingReceipt, title = "
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8" onClick={onClose}>
+    <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/70 px-4 py-8" onClick={onClose}>
       <div
         className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-lg max-h-full flex flex-col"
         onClick={(e) => e.stopPropagation()}
