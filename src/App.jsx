@@ -216,6 +216,8 @@ import {
   parseSmeItemSerialTable,
   parseSmeItemSerialCsv,
   attachSerialNumbers,
+  findBackfillCandidates,
+  applyToolsBackfill,
 } from "./lib/tools";
 
 
@@ -22020,6 +22022,7 @@ function ToolsApp({ onGoHome }) {
   const [viewingToolId, setViewingToolId] = useState(null);
   const [managingTransferTags, setManagingTransferTags] = useState(false);
   const [importingSerials, setImportingSerials] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
   const toolsRef = useRef([]);
 
   useEffect(() => {
@@ -22142,6 +22145,13 @@ function ToolsApp({ onGoHome }) {
             Transfer-tagged items
           </button>
           <button
+            onClick={() => setBackfilling(true)}
+            className="flex items-center gap-1.5 text-sm rounded-md px-3 py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            <RotateCcw className="w-4 h-4" />
+            Backfill from jobs
+          </button>
+          <button
             onClick={() => setAddingTool(true)}
             className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
           >
@@ -22249,6 +22259,158 @@ function ToolsApp({ onGoHome }) {
           onClose={() => setImportingSerials(false)}
         />
       )}
+
+      {backfilling && (
+        <ToolsBackfillModal
+          tools={tools}
+          catalog={catalog}
+          onSave={(updatedTools) => {
+            saveTools(updatedTools);
+            setBackfilling(false);
+          }}
+          onClose={() => setBackfilling(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Phase 3 — scans every job at once (per Bryan's call: one pass from
+// here rather than a button on each individual job page) for SME#s that
+// are already sitting on job items from before the registry existed.
+// Loads jobs fresh on open rather than keeping them in ToolsApp's own
+// state permanently — this modal is the only place in the Tools section
+// that ever needs the full job list, and jobs can be a large blob not
+// worth carrying around the rest of the time. Candidates come from
+// findBackfillCandidates (read-only) and nothing is written to the
+// registry until Bryan reviews the list and confirms — same
+// review-before-commit shape as ImportSerialNumbersModal.
+function ToolsBackfillModal({ tools, catalog, onSave, onClose }) {
+  const [step, setStep] = useState("loading"); // "loading" | "review" | "error"
+  const [error, setError] = useState("");
+  const [candidates, setCandidates] = useState([]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const jobsResult = await getWithRetry(JOBS_KEY);
+        const jobs = jobsResult.ok && jobsResult.value ? JSON.parse(jobsResult.value) : [];
+        const found = findBackfillCandidates(jobs, catalog, tools).map((c) => ({
+          ...c,
+          id: uniqueId(),
+        }));
+        setCandidates(found);
+        setStep("review");
+      } catch (err) {
+        setError(err && err.message ? err.message : String(err));
+        setStep("error");
+      }
+    })();
+    // Only needs to run once, on open — catalog/tools are a snapshot
+    // taken at the moment Bryan opened this, same as everywhere else in
+    // the app a review list is built from a point-in-time read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const removeCandidate = (id) => setCandidates((prev) => prev.filter((c) => c.id !== id));
+
+  const byJob = candidates.reduce((acc, c) => {
+    (acc[c.jobName] = acc[c.jobName] || []).push(c);
+    return acc;
+  }, {});
+
+  const handleConfirm = () => {
+    const updated = applyToolsBackfill(tools, candidates);
+    onSave(updated);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/70 px-4 py-8" onClick={onClose}>
+      <div
+        className="bg-slate-900 border border-slate-700 w-full max-w-lg rounded-lg max-h-full flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <div>
+            <h2 className="text-slate-100 font-semibold text-base">Backfill from jobs</h2>
+            <p className="text-xs text-slate-500">SME#s already on jobs, never synced to the registry</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {step === "loading" && (
+          <div className="flex-1 flex flex-col items-center justify-center py-16">
+            <div className="w-6 h-6 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin mb-3" />
+            <p className="text-sm text-slate-400">Scanning every job...</p>
+          </div>
+        )}
+
+        {step === "error" && (
+          <div className="flex-1 overflow-y-auto px-5 py-8 text-center">
+            <p className="text-sm text-red-400 mb-4">{error}</p>
+            <button
+              onClick={onClose}
+              className="text-sm rounded-md px-4 py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              Close
+            </button>
+          </div>
+        )}
+
+        {step === "review" && (
+          <>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              <p className="text-xs text-slate-500 mb-3">
+                {candidates.length === 0
+                  ? "Nothing found — every tool-tagged SME# already on a job is already in the registry."
+                  : `${candidates.length} SME# ${candidates.length === 1 ? "isn't" : "aren't"} in the registry yet, found across ${Object.keys(byJob).length} job${Object.keys(byJob).length === 1 ? "" : "s"}.`}
+              </p>
+              {Object.entries(byJob).map(([jobName, rows]) => (
+                <div key={jobName} className="mb-4">
+                  <p className="text-xs font-semibold text-slate-400 mb-1.5">{jobName}</p>
+                  <div className="space-y-2">
+                    {rows.map((row) => (
+                      <div
+                        key={row.id}
+                        className="border border-slate-800 rounded-lg p-2.5 bg-slate-800/40 flex items-center justify-between gap-2"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-xs font-mono text-slate-300 truncate">
+                            SME# {row.sme}
+                            <span className="text-slate-500 font-sans"> · {row.itemName || "Unnamed item"}</span>
+                          </p>
+                          <span
+                            className={`inline-block mt-1 text-[10px] rounded-full px-2 py-0.5 border ${TOOL_STATUSES[row.status]?.color || ""}`}
+                          >
+                            will be added as: {toolStatusLabel({ status: row.status, currentJobName: row.jobName })}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => removeCandidate(row.id)}
+                          className="text-slate-500 hover:text-red-400 p-1 shrink-0"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+              <button
+                onClick={handleConfirm}
+                disabled={candidates.length === 0}
+                className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+              >
+                Add {candidates.length} tool{candidates.length === 1 ? "" : "s"} to the registry
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
