@@ -1922,7 +1922,10 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
 
       {confirmFull && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3 className="text-slate-100 font-semibold mb-1.5">
               Mark everything as transferred?
             </h3>
