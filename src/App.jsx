@@ -76,6 +76,7 @@ import {
   playSoftTap,
   totalHave,
   isContainerTransferred,
+  isContainerShipped,
   migrateItemContainers,
   singularize,
   normalizeReceived,
@@ -3529,12 +3530,18 @@ function ContainerDetailModal({
   onClose,
   onPull,
   onBack,
+  onMarkShipped,
+  onUnmarkShipped,
 }) {
   const transferred = isContainerTransferred(containerName, items);
+  const shipped = isContainerShipped(containerName, items);
   const [picking, setPicking] = useState(false);
   const [selected, setSelected] = useState({});
   const [qtyOverrides, setQtyOverrides] = useState({});
   const [pickSearch, setPickSearch] = useState("");
+  const [confirmingShip, setConfirmingShip] = useState(false);
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const [shipDate, setShipDate] = useState(todayStr);
 
   const inContainerFor = (name) =>
     items
@@ -3699,6 +3706,11 @@ function ContainerDetailModal({
                     Transferred
                   </span>
                 )}
+                {shipped && (
+                  <span className="shrink-0 text-[10px] uppercase tracking-wide bg-sky-500/15 text-sky-300 border border-sky-500/40 rounded-full px-2 py-0.5">
+                    Shipped
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-500">
                 {inContainer.length} item{inContainer.length === 1 ? "" : "s"}
@@ -3732,11 +3744,11 @@ function ContainerDetailModal({
         </div>
 
         {isEditor && (
-          <div className="px-5 py-4 border-t border-slate-800 shrink-0">
-            {transferred ? (
+          <div className="px-5 py-4 border-t border-slate-800 shrink-0 space-y-2">
+            {transferred || shipped ? (
               <p className="text-xs text-slate-500 text-center">
-                This container is marked transferred — it's no longer here, so new items can't
-                be pulled into it.
+                This container is marked {transferred ? "transferred" : "shipped"} — it's no
+                longer here, so new items can't be pulled into it.
               </p>
             ) : (
               <button
@@ -3747,9 +3759,86 @@ function ContainerDetailModal({
                 Pull items into this container
               </button>
             )}
+            {onMarkShipped && onUnmarkShipped && inContainer.length > 0 && (
+              shipped ? (
+                <button
+                  onClick={() => onUnmarkShipped()}
+                  className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+                >
+                  <Truck className="w-4 h-4" />
+                  Unmark as shipped
+                </button>
+              ) : (
+                <button
+                  onClick={() => setConfirmingShip(true)}
+                  className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 border border-sky-500/50 text-sky-300 hover:bg-sky-500/10"
+                >
+                  <Truck className="w-4 h-4" />
+                  Mark as shipped
+                </button>
+              )
+            )}
           </div>
         )}
       </div>
+
+      {confirmingShip && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4"
+          onClick={(e) => {
+            e.stopPropagation();
+            setConfirmingShip(false);
+          }}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-slate-100 font-semibold mb-1.5">Mark this container shipped?</h3>
+            <p className="text-slate-400 text-sm mb-4">
+              All {inContainer.length} item{inContainer.length === 1 ? "" : "s"} in "{containerName}"
+              will be marked shipped — separate from Transfer, this just records that it physically
+              went out.
+            </p>
+            <p className="text-xs text-slate-500 mb-1.5">Ship date</p>
+            <div className="flex gap-2 mb-5">
+              <button
+                onClick={() => setShipDate(todayStr)}
+                className={`flex-1 text-sm rounded-md py-2 border transition-colors ${
+                  shipDate === todayStr
+                    ? "bg-sky-500/15 border-sky-500/50 text-sky-300"
+                    : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Today
+              </button>
+              <input
+                type="date"
+                value={shipDate}
+                onChange={(e) => setShipDate(e.target.value)}
+                className="flex-1 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500/60"
+              />
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmingShip(false)}
+                className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  onMarkShipped(shipDate);
+                  setConfirmingShip(false);
+                }}
+                className="flex-1 text-sm rounded-md py-2.5 bg-sky-500 text-slate-950 font-semibold hover:bg-sky-400"
+              >
+                Confirm shipped
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -5714,6 +5803,8 @@ function ContainersModal({
   onRename,
   onDelete,
   onPull,
+  onMarkShipped,
+  onUnmarkShipped,
 }) {
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -5752,6 +5843,8 @@ function ContainersModal({
         onClose={onClose}
         onBack={() => setOpenContainer(null)}
         onPull={(qtyMap) => onPull(openContainer, qtyMap)}
+        onMarkShipped={onMarkShipped ? (date) => onMarkShipped(openContainer, date) : undefined}
+        onUnmarkShipped={onUnmarkShipped ? () => onUnmarkShipped(openContainer) : undefined}
       />
     );
   }
@@ -5819,12 +5912,37 @@ function ContainersModal({
                               Transferred
                             </span>
                           )}
+                          {isContainerShipped(name, items) && (
+                            <span className="shrink-0 text-[10px] uppercase tracking-wide bg-sky-500/15 text-sky-300 border border-sky-500/40 rounded-full px-2 py-0.5">
+                              Shipped
+                            </span>
+                          )}
                         </div>
                         <p className="text-xs text-slate-500">
                           {countFor(name)} item{countFor(name) === 1 ? "" : "s"}
                         </p>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
+                        {isEditor && countFor(name) > 0 && onMarkShipped && onUnmarkShipped && (
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (isContainerShipped(name, items)) {
+                                onUnmarkShipped(name);
+                              } else {
+                                onMarkShipped(name, new Date().toISOString().slice(0, 10));
+                              }
+                            }}
+                            title={isContainerShipped(name, items) ? "Unmark as shipped" : "Mark as shipped"}
+                            className={`p-1.5 rounded-md hover:bg-slate-800 ${
+                              isContainerShipped(name, items)
+                                ? "text-sky-400 hover:text-sky-300"
+                                : "text-slate-500 hover:text-sky-300"
+                            }`}
+                          >
+                            <Truck className="w-3.5 h-3.5" />
+                          </span>
+                        )}
                         {isEditor && (
                           <>
                             <span
@@ -9512,6 +9630,51 @@ function JobInventory({
     }));
   };
 
+  // Shipped is deliberately separate from the Transfer-tag system — see
+  // isContainerShipped. Marking a container Shipped stamps every item
+  // portion currently sitting in it, whether or not that item is
+  // transfer-tagged, so a plain-supplies container (nothing SME-tracked
+  // in it at all) can still be marked as having gone out. today's date
+  // is recorded per item the same way transferredDate is, so "when did
+  // this ship" stays answerable later.
+  const markContainerShipped = (containerName, date) => {
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      items: prevJob.items.map((i) => {
+        if (!(i.containers || []).some((c) => c.name === containerName)) return i;
+        const merged = [...new Set([...(i.shippedContainers || []), containerName])];
+        return { ...i, shippedContainers: merged, shippedDate: date };
+      }),
+      activityLog: [
+        {
+          id: uniqueId(),
+          time: timeStamp(),
+          message: `Marked container "${containerName}" as shipped (${date})`,
+        },
+        ...prevJob.activityLog,
+      ].slice(0, 50),
+    }));
+  };
+
+  const unmarkContainerShipped = (containerName) => {
+    onUpdateJob((prevJob) => ({
+      ...prevJob,
+      items: prevJob.items.map((i) =>
+        (i.shippedContainers || []).includes(containerName)
+          ? { ...i, shippedContainers: (i.shippedContainers || []).filter((n) => n !== containerName) }
+          : i
+      ),
+      activityLog: [
+        {
+          id: uniqueId(),
+          time: timeStamp(),
+          message: `Unmarked container "${containerName}" as shipped`,
+        },
+        ...prevJob.activityLog,
+      ].slice(0, 50),
+    }));
+  };
+
   const matchesProcFilter = (item) => {
     if (procFilter === "All") return true;
     if (procFilter === "not_ordered") return !item.ordered;
@@ -11221,6 +11384,8 @@ function JobInventory({
           onRename={renameContainer}
           onDelete={deleteContainer}
           onPull={pullItemsIntoContainer}
+          onMarkShipped={markContainerShipped}
+          onUnmarkShipped={unmarkContainerShipped}
         />
       )}
 
