@@ -256,6 +256,17 @@ function stripLikelyCategoryTag(words) {
   return words;
 }
 
+// A loose "this token looks like an identifier, not a descriptive word"
+// check — used wherever a row has to be found by scanning for
+// number-like tokens rather than reading an exact known column (the PDF
+// path, and CSV's own fallback when no header is recognized). Real SME#s
+// and serials aren't always pure digits — a serial with a manufacturer's
+// letter prefix ("P053751") is common — so this allows a handful of
+// leading/trailing letters around a run of digits, rather than requiring
+// digits-only, while still correctly rejecting an ordinary word like
+// "Comealong" or "Category" that has no digits in it at all.
+const ID_LIKE_PATTERN = /^[A-Za-z]{0,4}\d+[A-Za-z]{0,4}$/;
+
 export function parseSmeSerialLines(lines) {
   const rows = [];
   lines.forEach((line) => {
@@ -263,7 +274,7 @@ export function parseSmeSerialLines(lines) {
     if (tokens.length < 2) return;
     const first = tokens[0];
     const last = tokens[tokens.length - 1];
-    if (!/^\d+$/.test(first) || !/^\d+$/.test(last)) return;
+    if (!ID_LIKE_PATTERN.test(first) || !ID_LIKE_PATTERN.test(last)) return;
     if (first === last) return; // a lone number on its own line, not a real SME+Serial pair
     rows.push({
       sme: first,
@@ -365,7 +376,7 @@ export function parseSmeItemSerialCsv(csvText) {
       serial: (row[colIndex.serial] || "").trim(),
       nameGuess: (row[colIndex.item] || "").trim(),
     }))
-    .filter((r) => /^\d+$/.test(r.sme) && /^\d+$/.test(r.serial));
+    .filter((r) => r.sme && r.serial); // exact columns are known here, so just require both aren't blank
 }
 
 
@@ -428,7 +439,7 @@ export function parseSmeItemSerialTable(rows) {
     const sme = (colTexts.sme || []).join(" ").trim();
     const serial = (colTexts.serial || []).join(" ").trim();
     const nameGuess = (colTexts.item || []).join(" ").trim();
-    if (!/^\d+$/.test(sme) || !/^\d+$/.test(serial)) return;
+    if (!sme || !serial) return; // an exact column is known here, so just require it isn't blank
     results.push({ sme, serial, nameGuess });
   });
   return results;
