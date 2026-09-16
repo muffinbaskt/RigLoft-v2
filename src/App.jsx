@@ -18985,6 +18985,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   const [workerTasks, setWorkerTasks] = useState([]);
   const [staleThresholds, setStaleThresholds] = useState(DEFAULT_STALE_THRESHOLD_DAYS);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [activeListId, setActiveListId] = useState(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
@@ -18992,51 +18993,67 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   const [tools, setTools] = useState([]);
   const toolsRef = useRef([]);
 
+  // The one load that's allowed to block the whole screen: if this
+  // specifically fails (a flaky connection is the common case in the
+  // field), we must NOT let the app quietly start from an empty list —
+  // any edit after that would flush the empty state back and genuinely
+  // erase every real Love List. Mirrors the same guard Job Lists already
+  // has for jobs/catalog. Everything else loaded below (catalog, workers,
+  // tasks, tools, thresholds) stays lower-stakes/soft-fail, same as before.
+  const loadAll = async () => {
+    setLoading(true);
+    setLoadFailed(false);
+    let loadedLists = [];
+    try {
+      const result = await getWithRetry(LOVE_LISTS_KEY);
+      if (!result.ok) {
+        setLoadFailed(true);
+        setLoading(false);
+        return;
+      }
+      if (result.value) loadedLists = JSON.parse(result.value);
+      setLists(loadedLists);
+    } catch {
+      // corrupted stored data (not a read failure) — safe to start empty
+    }
+    try {
+      const catalogResult = await getWithRetry(CATALOG_KEY);
+      if (catalogResult.ok && catalogResult.value) setCatalog(JSON.parse(catalogResult.value));
+    } catch {
+      // catalog linking just won't be available this session
+    }
+    try {
+      const workersResult = await getWithRetry(WORKERS_KEY);
+      if (workersResult.ok && workersResult.value) setWorkers(JSON.parse(workersResult.value));
+    } catch {}
+    try {
+      const tasksResult = await getWithRetry(WORKER_TASKS_KEY);
+      if (tasksResult.ok && tasksResult.value) setWorkerTasks(JSON.parse(tasksResult.value).map(migrateWorkerTask));
+    } catch {}
+    try {
+      const toolsResult = await getWithRetry(TOOLS_KEY);
+      if (toolsResult.ok && toolsResult.value) {
+        const loadedTools = JSON.parse(toolsResult.value);
+        setTools(loadedTools);
+        toolsRef.current = loadedTools;
+      }
+    } catch {
+      // Tools registry sync just won't be available this session
+    }
+    try {
+      const thresholdsResult = await getWithRetry(STALE_THRESHOLDS_KEY);
+      if (thresholdsResult.ok && thresholdsResult.value) {
+        setStaleThresholds({ ...DEFAULT_STALE_THRESHOLD_DAYS, ...JSON.parse(thresholdsResult.value) });
+      }
+    } catch {
+      // custom thresholds just won't be available this session — defaults still work fine
+    }
+    setLoading(false);
+    if (isEditor) maybeAutoBackupLoveLists(loadedLists);
+  };
+
   useEffect(() => {
-    (async () => {
-      let loadedLists = [];
-      try {
-        const result = await getWithRetry(LOVE_LISTS_KEY);
-        if (result.ok && result.value) loadedLists = JSON.parse(result.value);
-        setLists(loadedLists);
-      } catch {
-        // corrupted stored data — start empty
-      }
-      try {
-        const catalogResult = await getWithRetry(CATALOG_KEY);
-        if (catalogResult.ok && catalogResult.value) setCatalog(JSON.parse(catalogResult.value));
-      } catch {
-        // catalog linking just won't be available this session
-      }
-      try {
-        const workersResult = await getWithRetry(WORKERS_KEY);
-        if (workersResult.ok && workersResult.value) setWorkers(JSON.parse(workersResult.value));
-      } catch {}
-      try {
-        const tasksResult = await getWithRetry(WORKER_TASKS_KEY);
-        if (tasksResult.ok && tasksResult.value) setWorkerTasks(JSON.parse(tasksResult.value).map(migrateWorkerTask));
-      } catch {}
-      try {
-        const toolsResult = await getWithRetry(TOOLS_KEY);
-        if (toolsResult.ok && toolsResult.value) {
-          const loadedTools = JSON.parse(toolsResult.value);
-          setTools(loadedTools);
-          toolsRef.current = loadedTools;
-        }
-      } catch {
-        // Tools registry sync just won't be available this session
-      }
-      try {
-        const thresholdsResult = await getWithRetry(STALE_THRESHOLDS_KEY);
-        if (thresholdsResult.ok && thresholdsResult.value) {
-          setStaleThresholds({ ...DEFAULT_STALE_THRESHOLD_DAYS, ...JSON.parse(thresholdsResult.value) });
-        }
-      } catch {
-        // custom thresholds just won't be available this session — defaults still work fine
-      }
-      setLoading(false);
-      if (isEditor) maybeAutoBackupLoveLists(loadedLists);
-    })();
+    loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -19082,7 +19099,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   };
 
   const updateLists = (updater) => {
-    if (!isEditor) return;
+    if (!isEditor || loadFailed) return;
     setLists((prev) => {
       const next = updater(prev);
       saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(next)).catch(() => {});
@@ -19234,6 +19251,35 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
         <div className="w-4 h-4 border-2 border-slate-700 border-t-rose-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (loadFailed) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center px-4">
+        <div className="max-w-sm text-center">
+          <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-700/40 flex items-center justify-center mx-auto mb-4">
+            <X className="w-6 h-6 text-red-400" />
+          </div>
+          <h2 className="font-semibold text-slate-100 mb-2">Couldn't load your Love Lists</h2>
+          <p className="text-sm text-slate-500 mb-5">
+            To protect what's already saved, nothing will be changed or saved until this loads
+            successfully. This is usually a temporary connection issue.
+          </p>
+          <button
+            onClick={loadAll}
+            className="inline-flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-4 py-2 hover:bg-amber-400"
+          >
+            Try again
+          </button>
+          <button
+            onClick={onGoHome}
+            className="block mx-auto mt-3 text-xs text-slate-600 hover:text-slate-400 underline underline-offset-2"
+          >
+            Back to home
+          </button>
+        </div>
       </div>
     );
   }
