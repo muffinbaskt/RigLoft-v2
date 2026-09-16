@@ -1461,12 +1461,15 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
     )
     .join("\n\n");
 
-  // Only items with an SME# tracked make it into the copied/printed
-  // record — bulk untracked items don't need a paper trail the same way.
-  const smeTransferItems = transferItems.filter((i) => i.serials && i.serials.length > 0);
-
+  // Everything transfer-tagged belongs on this list — not just the
+  // subset that happens to carry an SME#. Angle wings, weld lead, air
+  // arcs and the like are genuinely transfer-tracked but never
+  // individually engraved, so restricting this to serialed items was
+  // silently dropping real transfer items off the paper trail. lineFor
+  // already handles both (serials, or a plain name x qty line), so no
+  // separate line format is needed here.
   const asText = [
-    smeTransferItems.map(lineFor).join("\n"),
+    transferItems.map(lineFor).join("\n"),
     requisitions.length > 0 ? `\nRequisitions:\n${reqCategoriesText}` : "",
   ]
     .filter(Boolean)
@@ -1543,10 +1546,15 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
 
   // Shown right after confirming either kind of transfer — a focused,
   // copy-ready list of exactly what just moved, for printing/pasting
-  // somewhere without needing to re-open the full transfer list.
+  // somewhere without needing to re-open the full transfer list. Same
+  // fix as asText above: this list can include ordinary untracked items
+  // that only tagged along because they shared a container with
+  // something transfer-tagged (see nonSmeItemsInContainer) — those
+  // stay off the copy text, same as always. But a transfer-tagged item
+  // with no serial# is a real part of the transfer and belongs on it.
   if (justTransferred) {
-    const smeJustTransferred = justTransferred.filter((i) => i.serials && i.serials.length > 0);
-    const text = smeJustTransferred.map(lineFor).join("\n");
+    const taggedJustTransferred = justTransferred.filter((i) => i.needsTransfer);
+    const text = taggedJustTransferred.map(lineFor).join("\n");
     const copyJustTransferred = async () => {
       const ok = await copyToClipboard(`Transferred — ${jobName}\n\n${text}`);
       if (ok) {
@@ -1587,7 +1595,7 @@ function TransferListModal({ jobName, items, requisitions = [], catalog = [], on
             </div>
           </div>
           <div className="px-5 py-4 border-t border-slate-800 shrink-0 space-y-2">
-            {smeJustTransferred.length > 0 && (
+            {taggedJustTransferred.length > 0 && (
               <button
                 onClick={copyJustTransferred}
                 className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
