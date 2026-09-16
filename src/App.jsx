@@ -21675,6 +21675,9 @@ function ReceiptArchive({ onGoHome }) {
               {viewingEntry.sentToReceiving && (
                 <p className="text-xs text-sky-400 mt-1.5">📥 Already sent to Receiving</p>
               )}
+              {viewingEntry.sentToTools && (
+                <p className="text-xs text-violet-400 mt-1.5">🔧 Already sent to Tools</p>
+              )}
             </div>
 
             <button
@@ -21689,15 +21692,21 @@ function ReceiptArchive({ onGoHome }) {
 
             {(() => {
               // The actual "recognize a tool" logic: an item only counts
-              // as a tool candidate if it matches something in the
-              // catalog AND that catalog entry is tagged Transfer — the
-              // same heuristic (Transfer tag + catalog link) used to
-              // reason about which items genuinely need SME# tracking,
-              // rather than treating every single line on a receipt
-              // (shop rags, consumables, generic hardware) as if it
-              // needs its own tool record.
+              // as a tool candidate if it's linked to a catalog entry
+              // AND that entry is tagged Transfer — the same heuristic
+              // (Transfer tag + catalog link) used to reason about which
+              // items genuinely need SME# tracking, rather than treating
+              // every single line on a receipt (shop rags, consumables,
+              // generic hardware) as if it needs its own tool record.
+              //
+              // Reads each line's own catalogId — same as the "🔗 linked
+              // to X" / "No catalog match" text shown on that exact line
+              // below — rather than independently re-guessing a name
+              // match. Re-deriving its own guess meant this could still
+              // "see" a match by name even after manually unlinking that
+              // exact line, disagreeing with what the line itself says.
               const toolCandidates = (viewingEntry.items || []).filter((it) => {
-                const match = it.name ? findCatalogMatch(it.name, catalog) : null;
+                const match = it.catalogId ? catalog.find((c) => c.id === it.catalogId) : null;
                 return isToolCandidate(match);
               });
               if (toolCandidates.length === 0) return null;
@@ -21707,8 +21716,9 @@ function ReceiptArchive({ onGoHome }) {
                   className="w-full text-left text-xs text-slate-400 hover:text-slate-200 border border-dashed border-slate-700 rounded-md px-3 py-2 mb-4"
                 >
                   <Wrench className="w-3.5 h-3.5 inline mr-1.5" />
-                  Send to Tools — {toolCandidates.length} item{toolCandidates.length === 1 ? "" : "s"} on
-                  this receipt look{toolCandidates.length === 1 ? "s" : ""} like tools
+                  {viewingEntry.sentToTools
+                    ? `Send to Tools again — ${toolCandidates.length} item${toolCandidates.length === 1 ? "" : "s"} look${toolCandidates.length === 1 ? "s" : ""} like tools`
+                    : `Send to Tools — ${toolCandidates.length} item${toolCandidates.length === 1 ? "" : "s"} on this receipt look${toolCandidates.length === 1 ? "s" : ""} like tools`}
                 </button>
               );
             })()}
@@ -21969,6 +21979,11 @@ function ReceiptArchive({ onGoHome }) {
           }
           onSave={(newTools) => {
             saveTools([...newTools, ...toolsRef.current]);
+            saveEntries(
+              entriesRef.current.map((e) =>
+                e.id === confirmingSendToTools.id ? { ...e, sentToTools: true } : e
+              )
+            );
             setConfirmingSendToTools(null);
           }}
           onClose={() => setConfirmingSendToTools(null)}
