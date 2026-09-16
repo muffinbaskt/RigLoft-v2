@@ -191,7 +191,7 @@ import {
   fetchResolvedSuggestions,
   storagePathFromPublicUrl,
   pdfToImageFiles,
-  extractPdfLines,
+  extractPdfRows,
   uploadReferenceDocument,
   uploadLoveListScan,
   uploadWorkerTaskPhoto,
@@ -213,6 +213,8 @@ import {
   toolStatusLabel,
   isToolCandidate,
   parseSmeSerialLines,
+  parseSmeItemSerialTable,
+  parseSmeItemSerialCsv,
   attachSerialNumbers,
 } from "./lib/tools";
 
@@ -22341,12 +22343,18 @@ function ImportSerialNumbersModal({ tools, onSave, onClose }) {
     try {
       const allRows = [];
       for (const file of files) {
-        const lines = await extractPdfLines(file);
-        allRows.push(...parseSmeSerialLines(lines));
+        const isCsv = /\.csv$/i.test(file.name) || file.type === "text/csv";
+        if (isCsv) {
+          const text = await file.text();
+          allRows.push(...parseSmeItemSerialCsv(text));
+        } else {
+          const pdfRows = await extractPdfRows(file);
+          allRows.push(...parseSmeItemSerialTable(pdfRows));
+        }
       }
       if (allRows.length === 0) {
         throw new Error(
-          "Couldn't find any SME#/Serial# pairs in that file — it may be a scanned image rather than a real text PDF."
+          "Couldn't find any SME#/Serial# pairs in that file — a PDF may be a scanned image rather than real text, or a CSV's header row doesn't have recognizable SME/Item/Serial column names."
         );
       }
       setRows(
@@ -22387,7 +22395,7 @@ function ImportSerialNumbersModal({ tools, onSave, onClose }) {
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
           <div>
             <h2 className="text-slate-100 font-semibold text-base">Import serial numbers</h2>
-            <p className="text-xs text-slate-500">Reads real PDF text — no OCR guessing on the numbers</p>
+            <p className="text-xs text-slate-500">PDF or CSV — reads real text, no OCR guessing on the numbers</p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
             <X className="w-5 h-5" />
@@ -22399,21 +22407,23 @@ function ImportSerialNumbersModal({ tools, onSave, onClose }) {
             <input
               ref={fileInputRef}
               type="file"
-              accept="application/pdf"
+              accept="application/pdf,.csv,text/csv"
               multiple
               onChange={handleFilesChosen}
               className="hidden"
             />
             <Upload className="w-8 h-8 text-slate-600 mb-3" />
             <p className="text-sm text-slate-400 mb-4 max-w-xs">
-              Pick as many of these files as you've got at once — every row lands in one review
-              list before anything's saved.
+              PDF or CSV, mixed together is fine — pick as many of these files as you've got at
+              once, and every row lands in one review list before anything's saved. A CSV
+              exported straight from Google Sheets (File → Download → CSV) reads its Item column
+              exactly, no guessing needed there.
             </p>
             <button
               onClick={() => fileInputRef.current && fileInputRef.current.click()}
               className="text-sm rounded-md px-4 py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
             >
-              Choose PDF file(s)
+              Choose file(s)
             </button>
           </div>
         )}
