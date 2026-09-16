@@ -19108,6 +19108,40 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
     });
   };
 
+  // Job Lists already has an "Import all data (restore backup)" path —
+  // Love Lists never got the equivalent, which is exactly the gap that
+  // left no in-app way to restore one of downloadLoveListsBackupFile's
+  // own auto-backup files after a wipe. Same shape: confirm, read the
+  // file, sanity-check its structure, then push it through the normal
+  // save path (updateLists) rather than writing storage directly, so it
+  // gets the same auto-backup-on-save treatment as any other edit.
+  const [restoreError, setRestoreError] = useState(null);
+  const restoreLoveListsBackup = (file) => {
+    if (!isEditor) return;
+    if (
+      !window.confirm(
+        "This replaces every Love List currently saved with what's in this backup file. Continue?"
+      )
+    ) {
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const parsed = JSON.parse(e.target.result);
+        if (!Array.isArray(parsed.loveLists)) {
+          setRestoreError("That file doesn't look like a Riggy Love Lists backup.");
+          return;
+        }
+        setRestoreError(null);
+        updateLists(() => parsed.loveLists);
+      } catch {
+        setRestoreError("Couldn't read that file — make sure it's an unmodified Riggy backup.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
   // Every manual catalog link is a real signal: "when someone writes this
   // phrase, they mean this item." Remembering it means next time OCR or
   // auto-match sees the same inconsistent phrasing, it can suggest the
@@ -19339,6 +19373,24 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
             reloadWorkerData();
           }}
         />
+      )}
+      {isEditor && (
+        <div className="text-center pb-6 -mt-2">
+          <label className="text-xs text-slate-600 hover:text-slate-400 underline underline-offset-2 cursor-pointer">
+            Restore Love Lists from backup file
+            <input
+              type="file"
+              accept="application/json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files[0];
+                if (file) restoreLoveListsBackup(file);
+                e.target.value = "";
+              }}
+            />
+          </label>
+          {restoreError && <p className="text-xs text-red-400 mt-2">{restoreError}</p>}
+        </div>
       )}
     </>
   );
