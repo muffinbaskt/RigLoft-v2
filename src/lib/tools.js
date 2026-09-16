@@ -219,19 +219,43 @@ export function markToolsTransferred(currentTools, smeNumbers, jobId, jobName) {
   return tools;
 }
 
-// Turns a flat list of text lines (from extractPdfLines, or a pasted
-// CSV/text block) into {sme, serial, nameGuess} rows — the actual
-// parsing strategy is deliberately simple: take the FIRST number on the
-// line as the SME# and the LAST number as the Serial#, and treat
-// whatever sits between them as a name guess, without ever trying to
-// tell "Item" and "Category" apart. That's on purpose — the two numbers
-// are the only fields that actually matter for attaching a serial to a
-// tool (matched by SME#, which is already that tool's own key), and a
-// parser that doesn't need to understand the middle columns can't be
-// thrown off by however many words happen to be in them. A line with no
-// leading/trailing number (a header row, a blank line) is silently
-// skipped rather than surfaced as an error, since a table export
-// commonly has exactly one such row and it's not a mistake.
+// Turns a flat list of text lines (from extractPdfRows flattened, or a
+// pasted CSV/text block) into {sme, serial, nameGuess} rows. The SME#
+// and Serial# extraction is exact and doesn't need explaining: the
+// FIRST number on the line is the SME#, the LAST is the Serial# — that
+// holds regardless of how many words sit between them, so it's not
+// thrown off by column layouts this parser never tries to understand. A
+// line with no leading/trailing number (a header row, a blank line) is
+// silently skipped rather than surfaced as an error, since a table
+// export commonly has exactly one such row and it's not a mistake.
+//
+// The name guess is a softer, best-effort cleanup — worth being honest
+// about its limits, unlike the two numbers above. These exports
+// typically read SME / Item / Category / Serial, and the Category word
+// often just restates part of the Item name (a "Grinder" whose Category
+// is "Grinders", say) — so if the trailing word(s) of the combined
+// middle text share a stem with something earlier in it, they're
+// assumed to be that Category tag and dropped, leaving just the actual
+// item name. This is a text-pattern guess, not a real understanding of
+// the file's columns (an earlier attempt at genuine column-position
+// detection turned out not to survive real files — pdf.js can merge
+// closely-spaced columns into one run of text, so there's often no
+// reliable position data to reconstruct columns from at all) — it's
+// always editable in review before anything saves, same as everywhere
+// else a guess like this shows up in the app.
+function stripLikelyCategoryTag(words) {
+  for (const trailCount of [2, 1]) {
+    if (words.length <= trailCount) continue;
+    const trailing = words.slice(-trailCount);
+    const earlier = words.slice(0, -trailCount);
+    const earlierStems = new Set(earlier.filter((w) => w.length >= 4).map((w) => w.toLowerCase().slice(0, 4)));
+    if (trailing.some((w) => w.length >= 4 && earlierStems.has(w.toLowerCase().slice(0, 4)))) {
+      return words.slice(0, -trailCount);
+    }
+  }
+  return words;
+}
+
 export function parseSmeSerialLines(lines) {
   const rows = [];
   lines.forEach((line) => {
@@ -244,10 +268,170 @@ export function parseSmeSerialLines(lines) {
     rows.push({
       sme: first,
       serial: last,
-      nameGuess: tokens.slice(1, -1).join(" "),
+      nameGuess: stripLikelyCategoryTag(tokens.slice(1, -1)).join(" "),
     });
   });
   return rows;
+}
+
+// A small dependency-free CSV parser rather than pulling in a library —
+// handles the one thing a naive split(",") gets wrong: a quoted field
+// containing its own commas (an item name like "4 1/2\", Chrome" would
+// otherwise get torn into extra columns) and doubled "" as an escaped
+// quote inside a quoted field, both standard CSV. Returns an array of
+// rows, each an array of cell strings.
+export function parseCsvText(text) {
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += c;
+      }
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ",") {
+      row.push(field);
+      field = "";
+    } else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field);
+      field = "";
+      if (row.some((cell) => cell.trim() !== "")) rows.push(row);
+      row = [];
+    } else {
+      field += c;
+    }
+  }
+  if (field !== "" || row.length > 0) {
+    row.push(field);
+    if (row.some((cell) => cell.trim() !== "")) rows.push(row);
+  }
+  return rows;
+}
+
+// Unlike the PDF path, a real CSV has actual delimited columns — no
+// guessing needed at all here, unlike stripLikelyCategoryTag above. The
+// header row is matched by column name (case-insensitive, a few
+// reasonable variants allowed per column) to find which column is
+// which, then every value is read straight from its own real column.
+export function parseSmeItemSerialCsv(csvText) {
+  const table = parseCsvText(csvText);
+  if (table.length === 0) return [];
+
+  const COLUMN_PATTERNS = {
+    sme: /^sme#?$/i,
+    item: /^item$/i,
+    serial: /^serial#?$/i,
+  };
+
+  let headerIndex = -1;
+  let colIndex = null;
+  for (let i = 0; i < table.length; i++) {
+    const found = {};
+    table[i].forEach((cell, idx) => {
+      const text = cell.trim();
+      const matched = Object.entries(COLUMN_PATTERNS).find(([, pattern]) => pattern.test(text));
+      if (matched) found[matched[0]] = idx;
+    });
+    if (found.sme !== undefined && found.item !== undefined && found.serial !== undefined) {
+      headerIndex = i;
+      colIndex = found;
+      break;
+    }
+  }
+
+  // No recognizable header — fall back to the same first/last-number
+  // heuristic the PDF path uses, on each row joined back into one line,
+  // so an unusually-labeled export still produces something.
+  if (!colIndex) {
+    return parseSmeSerialLines(table.map((row) => row.join(" ")));
+  }
+
+  return table
+    .slice(headerIndex + 1)
+    .map((row) => ({
+      sme: (row[colIndex.sme] || "").trim(),
+      serial: (row[colIndex.serial] || "").trim(),
+      nameGuess: (row[colIndex.item] || "").trim(),
+    }))
+    .filter((r) => /^\d+$/.test(r.sme) && /^\d+$/.test(r.serial));
+}
+
+
+// The real column-aware parser — reconstructs actual table columns from
+// positioned text (see extractPdfRows) instead of treating a whole line
+// as one blob of text. Finds the header row by matching "SME"/"Item"/
+// "Serial" labels (case-insensitive, trailing # optional), uses every
+// header cell's X position — including ones like "Category" that aren't
+// being kept — as a column boundary, then assigns each data row's text
+// to whichever column it falls under. Tracking every header's boundary,
+// not just the three being kept, is what actually fixes the
+// Item/Category bleed-together: without a boundary for Category, its
+// text would get silently absorbed into Item instead of being dropped.
+// Only sme/item/serial values are kept; anything else is discarded.
+export function parseSmeItemSerialTable(rows) {
+  if (!rows || rows.length === 0) return [];
+  const HEADER_PATTERNS = { sme: /^sme#?$/i, item: /^item$/i, serial: /^serial#?$/i };
+
+  let headerRowIndex = -1;
+  let headerCells = null;
+  for (let i = 0; i < rows.length; i++) {
+    const cells = rows[i].map((cell) => {
+      const text = cell.str.trim();
+      const matched = Object.entries(HEADER_PATTERNS).find(([, pattern]) => pattern.test(text));
+      return { x: cell.x, key: matched ? matched[0] : "_ignore" };
+    });
+    const found = new Set(cells.filter((c) => c.key !== "_ignore").map((c) => c.key));
+    if (found.has("sme") && found.has("item") && found.has("serial")) {
+      headerRowIndex = i;
+      headerCells = cells.sort((a, b) => a.x - b.x);
+      break;
+    }
+  }
+
+  // No recognizable header at all (a differently-formatted export, say)
+  // — fall back to the simpler first-number/last-number heuristic on
+  // each row's flattened text, so an unusual layout still produces
+  // something rather than nothing.
+  if (!headerCells) {
+    const flatLines = rows.map((row) => row.map((c) => c.str).join(" ").replace(/\s+/g, " ").trim());
+    return parseSmeSerialLines(flatLines);
+  }
+
+  const results = [];
+  rows.slice(headerRowIndex + 1).forEach((row) => {
+    const colTexts = {};
+    row.forEach((cell) => {
+      // The column whose boundary is the closest one at-or-before this
+      // cell's X — iterating boundaries in ascending order and always
+      // overwriting with the latest qualifying one lands on exactly
+      // that, without needing a separate "look ahead to the next
+      // boundary" step.
+      let assigned = null;
+      for (const header of headerCells) {
+        if (cell.x >= header.x - 5) assigned = header.key;
+      }
+      if (!assigned || assigned === "_ignore") return;
+      (colTexts[assigned] = colTexts[assigned] || []).push(cell.str);
+    });
+    const sme = (colTexts.sme || []).join(" ").trim();
+    const serial = (colTexts.serial || []).join(" ").trim();
+    const nameGuess = (colTexts.item || []).join(" ").trim();
+    if (!/^\d+$/.test(sme) || !/^\d+$/.test(serial)) return;
+    results.push({ sme, serial, nameGuess });
+  });
+  return results;
 }
 
 // Applies a batch of {sme, serial, nameGuess} rows (already reviewed by
