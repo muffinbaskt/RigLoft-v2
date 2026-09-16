@@ -219,6 +219,77 @@ export function markToolsTransferred(currentTools, smeNumbers, jobId, jobName) {
   return tools;
 }
 
+// Phase 3 — Backfill. Finds SME#s that are already sitting on job items
+// from before this registry existed, so they can be pulled in without a
+// second data-entry pass. Only looks at items that are (a) genuine tool
+// candidates per the catalog link (needsTransfer, not excluded) and (b)
+// actually have an SME# typed in — a Transfer-tagged item with no SME#
+// is one of the legitimate exceptions (angle wings, weld lead, air
+// arcs...) and correctly isn't a tool. Any SME# already known to the
+// registry is skipped entirely — a prior Phase 2 sync already caught
+// it, so there's nothing to backfill there.
+//
+// Status is decided per item, not assumed: if the item's own
+// transferredContainers has anything in it, a real transfer has already
+// been locked for it on this job, so the tool is genuinely on_job, not
+// merely staged. Everything else lands as staged — same as a fresh
+// SME# typed into an ItemForm — since it hasn't actually been confirmed
+// transferred.
+//
+// Returns candidates for review before anything is committed (see
+// applyToolsBackfill) — this only reads, never mutates the registry.
+export function findBackfillCandidates(jobs, catalog, existingTools) {
+  const known = new Set(existingTools.map((t) => t.sme));
+  const seen = new Set(); // guards the same SME# showing up twice across jobs/items in one scan
+  const candidates = [];
+
+  (jobs || []).forEach((job) => {
+    (job.items || []).forEach((item) => {
+      const catalogEntry = item.catalogId ? catalog.find((c) => c.id === item.catalogId) : null;
+      if (!isToolCandidate(catalogEntry)) return;
+      const smeNumbers = [...new Set((item.serials || []).map((s) => (s || "").trim()).filter(Boolean))];
+      if (smeNumbers.length === 0) return;
+      const status = (item.transferredContainers || []).length > 0 ? "on_job" : "staged";
+      smeNumbers.forEach((sme) => {
+        if (known.has(sme) || seen.has(sme)) return;
+        seen.add(sme);
+        candidates.push({
+          sme,
+          itemName: item.name || "",
+          jobId: job.id,
+          jobName: job.name || "",
+          status,
+        });
+      });
+    });
+  });
+
+  return candidates;
+}
+
+// Commits a reviewed batch of backfill candidates to the registry.
+// Always creates brand-new tool records — a candidate whose SME# was
+// already known was already filtered out by findBackfillCandidates, so
+// this never needs to merge into an existing one.
+export function applyToolsBackfill(currentTools, candidates) {
+  let tools = [...currentTools];
+  candidates.forEach((c) => {
+    const tool = logToolEvent(
+      {
+        ...newTool({ sme: c.sme, name: c.itemName, status: c.status }),
+        currentJobId: c.jobId || null,
+        currentJobName: c.jobName || null,
+      },
+      "backfilled",
+      c.status === "on_job"
+        ? `Backfilled — already on "${c.jobName}"`
+        : `Backfilled — staged in "${c.jobName}"`
+    );
+    tools = [...tools, tool];
+  });
+  return tools;
+}
+
 // Turns a flat list of text lines (from extractPdfRows flattened, or a
 // pasted CSV/text block) into {sme, serial, nameGuess} rows. The SME#
 // and Serial# extraction is exact and doesn't need explaining: the
