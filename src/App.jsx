@@ -218,6 +218,7 @@ import {
   attachSerialNumbers,
   findBackfillCandidates,
   applyToolsBackfill,
+  applyToolMerge,
 } from "./lib/tools";
 
 
@@ -22293,7 +22294,12 @@ function ToolsApp({ onGoHome }) {
     return (
       <ToolDetailPage
         tool={viewingTool}
+        allTools={tools}
         onUpdate={(updater) => updateTool(viewingTool.id, updater)}
+        onMerge={(sourceId, targetId) => {
+          saveTools(applyToolMerge(toolsRef.current, sourceId, targetId));
+          setViewingToolId(targetId);
+        }}
         onDelete={() => {
           deleteTool(viewingTool.id);
           setViewingToolId(null);
@@ -23110,7 +23116,7 @@ function AddToolModal({ onSave, onClose, initialRows, existingReceipt, title = "
   );
 }
 
-function ToolDetailPage({ tool, onUpdate, onDelete, onBack, onGoHome }) {
+function ToolDetailPage({ tool, allTools = [], onUpdate, onMerge, onDelete, onBack, onGoHome }) {
   const [editingSme, setEditingSme] = useState(false);
   const [smeText, setSmeText] = useState(tool.sme || "");
   const [editingSerial, setEditingSerial] = useState(false);
@@ -23122,10 +23128,24 @@ function ToolDetailPage({ tool, onUpdate, onDelete, onBack, onGoHome }) {
   const [uploadingReceipt, setUploadingReceipt] = useState(false);
   const [uploadError, setUploadError] = useState(null);
   const [viewingReceipt, setViewingReceipt] = useState(false);
+  const [mergeCandidate, setMergeCandidate] = useState(null); // other tool record already holding this SME#
   const fileInputRef = useRef(null);
 
   const saveSme = () => {
     const trimmed = smeText.trim();
+    // Before committing a real change, check whether that SME# already
+    // belongs to a different record — typing a number in doesn't mean
+    // this is a brand-new tool if the registry already knows this
+    // number from somewhere else (see mergeToolRecords). Only the
+    // duplicate check blocks the save; anything else goes through as
+    // before.
+    if (trimmed && trimmed !== (tool.sme || "")) {
+      const duplicate = allTools.find((t) => t.id !== tool.id && t.sme === trimmed);
+      if (duplicate) {
+        setMergeCandidate(duplicate);
+        return;
+      }
+    }
     onUpdate((t) => {
       const wasAwaiting = !t.sme;
       const updated = { ...t, sme: trimmed || null };
@@ -23137,6 +23157,13 @@ function ToolDetailPage({ tool, onUpdate, onDelete, onBack, onGoHome }) {
       }
       return updated;
     });
+    setEditingSme(false);
+  };
+
+  const confirmMerge = () => {
+    if (!mergeCandidate || !onMerge) return;
+    onMerge(tool.id, mergeCandidate.id);
+    setMergeCandidate(null);
     setEditingSme(false);
   };
 
@@ -23438,6 +23465,43 @@ function ToolDetailPage({ tool, onUpdate, onDelete, onBack, onGoHome }) {
           onConfirm={onDelete}
           onCancel={() => setConfirmingDelete(false)}
         />
+      )}
+
+      {mergeCandidate && (
+        <div
+          className="fixed inset-0 z-[95] flex items-center justify-center bg-black/70 px-4"
+          onClick={() => setMergeCandidate(null)}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-slate-100 font-semibold text-base mb-2">Merge with existing tool?</h2>
+            <p className="text-sm text-slate-400 mb-1">
+              SME# {smeText.trim()} is already registered as{" "}
+              <span className="text-slate-200">{mergeCandidate.name || "Unnamed tool"}</span> —{" "}
+              {toolStatusLabel(mergeCandidate)}.
+            </p>
+            <p className="text-sm text-slate-400 mb-4">
+              Merging keeps that record{tool.receiptPath ? ", carries this one's receipt over to it," : ""} and
+              removes this duplicate entry. Its history is kept, not lost.
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setMergeCandidate(null)}
+                className="flex-1 text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmMerge}
+                className="flex-1 text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Merge
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
