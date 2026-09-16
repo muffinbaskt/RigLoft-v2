@@ -300,6 +300,55 @@ export async function pdfToImageFiles(file) {
   return files;
 }
 
+// pdfToImageFiles above unwraps a PDF into photos for OCR; this instead
+// pulls the PDF's own embedded text directly — for a real (not scanned)
+// text-based PDF, like an SME#/Serial# table exported straight from a
+// spreadsheet, this is far more reliable than reading it as an image:
+// zero risk of a vision model misreading a digit, since it's reading the
+// actual characters the PDF stores, not guessing from pixels. Groups
+// text items into visual lines by Y position (pdf.js's text items come
+// back as individual runs of text with position data, not already
+// organized into rows), since a table's cell boundaries aren't preserved
+// as structure once extracted — only the visual layout is.
+export async function extractPdfLines(file) {
+  const pdfjsLib = await loadPdfJs();
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const lines = [];
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const content = await page.getTextContent();
+    // transform[5] is each text run's Y position (PDF points, origin at
+    // bottom-left) — items on the same printed line land at the same Y,
+    // barring tiny sub-pixel differences, so a small rounding tolerance
+    // groups them correctly without needing exact equality.
+    const rows = new Map();
+    content.items.forEach((item) => {
+      if (!item.str || !item.str.trim()) return;
+      const y = Math.round(item.transform[5]);
+      const x = item.transform[4];
+      const key = [...rows.keys()].find((k) => Math.abs(k - y) <= 2) ?? y;
+      if (!rows.has(key)) rows.set(key, []);
+      rows.get(key).push({ x, str: item.str });
+    });
+    // Pages read top-to-bottom, but PDF Y coordinates increase upward —
+    // sort descending to get lines back in the order they're actually
+    // printed on the page.
+    [...rows.entries()]
+      .sort((a, b) => b[0] - a[0])
+      .forEach(([, items]) => {
+        const lineText = items
+          .sort((a, b) => a.x - b.x)
+          .map((i) => i.str)
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (lineText) lines.push(lineText);
+      });
+  }
+  return lines;
+}
+
 export async function uploadReferenceDocument(jobId, file) {
   try {
     const uploadFile = await resizeImageForUpload(file);
