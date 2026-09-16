@@ -191,6 +191,7 @@ import {
   fetchResolvedSuggestions,
   storagePathFromPublicUrl,
   pdfToImageFiles,
+  extractPdfLines,
   uploadReferenceDocument,
   uploadLoveListScan,
   uploadWorkerTaskPhoto,
@@ -211,6 +212,8 @@ import {
   markToolsTransferred,
   toolStatusLabel,
   isToolCandidate,
+  parseSmeSerialLines,
+  attachSerialNumbers,
 } from "./lib/tools";
 
 
@@ -21999,6 +22002,7 @@ function ToolsApp({ onGoHome }) {
   const [addingTool, setAddingTool] = useState(false);
   const [viewingToolId, setViewingToolId] = useState(null);
   const [managingTransferTags, setManagingTransferTags] = useState(false);
+  const [importingSerials, setImportingSerials] = useState(false);
   const toolsRef = useRef([]);
 
   useEffect(() => {
@@ -22107,6 +22111,13 @@ function ToolsApp({ onGoHome }) {
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setImportingSerials(true)}
+            className="flex items-center gap-1.5 text-sm rounded-md px-3 py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            <Upload className="w-4 h-4" />
+            Import serial #s
+          </button>
+          <button
             onClick={() => setManagingTransferTags(true)}
             className="flex items-center gap-1.5 text-sm rounded-md px-3 py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
           >
@@ -22210,6 +22221,17 @@ function ToolsApp({ onGoHome }) {
           onClose={() => setAddingTool(false)}
         />
       )}
+
+      {importingSerials && (
+        <ImportSerialNumbersModal
+          tools={tools}
+          onSave={(updatedTools) => {
+            saveTools(updatedTools);
+            setImportingSerials(false);
+          }}
+          onClose={() => setImportingSerials(false)}
+        />
+      )}
     </div>
   );
 }
@@ -22293,6 +22315,193 @@ function TransferTagsManagerPage({ catalog, onToggleExclude, onBack }) {
           </div>
         )}
       </main>
+    </div>
+  );
+}
+
+// PDF-only for now (the reliable, text-extraction path — see
+// extractPdfLines) since that's the format actually being handed over;
+// CSV/Excel would work just as well through the same parseSmeSerialLines
+// logic if that ever comes up instead. Supports picking several files
+// at once ("I have quite a few of these") — every row across every file
+// lands in one combined review list rather than needing to repeat this
+// per file.
+function ImportSerialNumbersModal({ tools, onSave, onClose }) {
+  const [step, setStep] = useState("upload"); // "upload" | "processing" | "review" | "error"
+  const [error, setError] = useState("");
+  const [rows, setRows] = useState([]);
+  const fileInputRef = useRef(null);
+
+  const handleFilesChosen = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (files.length === 0) return;
+    setStep("processing");
+    setError("");
+    try {
+      const allRows = [];
+      for (const file of files) {
+        const lines = await extractPdfLines(file);
+        allRows.push(...parseSmeSerialLines(lines));
+      }
+      if (allRows.length === 0) {
+        throw new Error(
+          "Couldn't find any SME#/Serial# pairs in that file — it may be a scanned image rather than a real text PDF."
+        );
+      }
+      setRows(
+        allRows.map((r) => ({
+          id: uniqueId(),
+          sme: r.sme,
+          serial: r.serial,
+          nameGuess: r.nameGuess,
+        }))
+      );
+      setStep("review");
+    } catch (err) {
+      setError(err && err.message ? err.message : String(err));
+      setStep("error");
+    }
+  };
+
+  const updateRow = (id, changes) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...changes } : r)));
+  };
+  const removeRow = (id) => {
+    setRows((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const newCount = rows.filter((r) => !tools.some((t) => t.sme === r.sme)).length;
+
+  const handleConfirm = () => {
+    const updated = attachSerialNumbers(tools, rows);
+    onSave(updated);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/70 px-4 py-8" onClick={onClose}>
+      <div
+        className="bg-slate-900 border border-slate-700 w-full max-w-lg rounded-lg max-h-full flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <div>
+            <h2 className="text-slate-100 font-semibold text-base">Import serial numbers</h2>
+            <p className="text-xs text-slate-500">Reads real PDF text — no OCR guessing on the numbers</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {step === "upload" && (
+          <div className="flex-1 overflow-y-auto px-5 py-8 flex flex-col items-center justify-center text-center">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/pdf"
+              multiple
+              onChange={handleFilesChosen}
+              className="hidden"
+            />
+            <Upload className="w-8 h-8 text-slate-600 mb-3" />
+            <p className="text-sm text-slate-400 mb-4 max-w-xs">
+              Pick as many of these files as you've got at once — every row lands in one review
+              list before anything's saved.
+            </p>
+            <button
+              onClick={() => fileInputRef.current && fileInputRef.current.click()}
+              className="text-sm rounded-md px-4 py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+            >
+              Choose PDF file(s)
+            </button>
+          </div>
+        )}
+
+        {step === "processing" && (
+          <div className="flex-1 flex flex-col items-center justify-center py-16">
+            <div className="w-6 h-6 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin mb-3" />
+            <p className="text-sm text-slate-400">Reading...</p>
+          </div>
+        )}
+
+        {step === "error" && (
+          <div className="flex-1 overflow-y-auto px-5 py-8 text-center">
+            <p className="text-sm text-red-400 mb-4">{error}</p>
+            <button
+              onClick={() => setStep("upload")}
+              className="text-sm rounded-md px-4 py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              Try again
+            </button>
+          </div>
+        )}
+
+        {step === "review" && (
+          <>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              <p className="text-xs text-slate-500 mb-3">
+                {rows.length} row{rows.length === 1 ? "" : "s"} found
+                {newCount > 0 &&
+                  ` — ${newCount} SME# ${newCount === 1 ? "isn't" : "aren't"} in the registry yet and will be added as new tools`}
+              </p>
+              {rows.length === 0 ? (
+                <p className="text-sm text-slate-500 text-center py-10">Nothing left to import.</p>
+              ) : (
+                <div className="space-y-2">
+                  {rows.map((row) => {
+                    const existing = tools.find((t) => t.sme === row.sme);
+                    return (
+                      <div key={row.id} className="border border-slate-800 rounded-lg p-2.5 bg-slate-800/40">
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className="text-xs font-mono text-slate-400 shrink-0">
+                            SME# {row.sme}
+                          </span>
+                          <span className="text-slate-600 shrink-0">→</span>
+                          <input
+                            value={row.serial}
+                            onChange={(e) => updateRow(row.id, { serial: e.target.value })}
+                            className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-xs font-mono rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                          />
+                          <button
+                            onClick={() => removeRow(row.id)}
+                            className="text-slate-500 hover:text-red-400 p-1 shrink-0"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        {existing ? (
+                          <p className="text-[11px] text-emerald-400">
+                            🔗 {existing.name || "Unnamed tool"} — {toolStatusLabel(existing)}
+                          </p>
+                        ) : (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] text-amber-400 shrink-0">No existing tool — will create:</span>
+                            <input
+                              value={row.nameGuess}
+                              onChange={(e) => updateRow(row.id, { nameGuess: e.target.value })}
+                              className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-200 text-[11px] rounded-md px-1.5 py-0.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+              <button
+                onClick={handleConfirm}
+                disabled={rows.length === 0}
+                className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+              >
+                Attach {rows.length} serial number{rows.length === 1 ? "" : "s"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -22517,6 +22726,8 @@ function AddToolModal({ onSave, onClose, initialRows, existingReceipt, title = "
 function ToolDetailPage({ tool, onUpdate, onDelete, onBack, onGoHome }) {
   const [editingSme, setEditingSme] = useState(false);
   const [smeText, setSmeText] = useState(tool.sme || "");
+  const [editingSerial, setEditingSerial] = useState(false);
+  const [serialText, setSerialText] = useState(tool.serialNumber || "");
   const [nameText, setNameText] = useState(tool.name || "");
   const [jobText, setJobText] = useState(tool.currentJobName || "");
   const [notesText, setNotesText] = useState(tool.notes || "");
@@ -22540,6 +22751,19 @@ function ToolDetailPage({ tool, onUpdate, onDelete, onBack, onGoHome }) {
       return updated;
     });
     setEditingSme(false);
+  };
+
+  const saveSerial = () => {
+    const trimmed = serialText.trim();
+    onUpdate((t) => {
+      if (t.serialNumber === (trimmed || null)) return t;
+      return logToolEvent(
+        { ...t, serialNumber: trimmed || null },
+        "serial_attached",
+        trimmed ? `Serial# ${trimmed} attached` : "Serial# removed"
+      );
+    });
+    setEditingSerial(false);
   };
 
   const saveName = () => {
@@ -22660,6 +22884,40 @@ function ToolDetailPage({ tool, onUpdate, onDelete, onBack, onGoHome }) {
               className="text-sm font-mono text-slate-100 bg-slate-800 border border-slate-700 rounded-md px-3 py-2 hover:border-slate-600 w-full text-left"
             >
               {tool.sme || <span className="text-amber-400 font-sans">Tap to enter SME# once it comes back</span>}
+            </button>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">
+            Serial # (manufacturer's own, separate from SME#)
+          </label>
+          {editingSerial ? (
+            <div className="flex gap-2">
+              <input
+                autoFocus
+                value={serialText}
+                onChange={(e) => setSerialText(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveSerial()}
+                placeholder="e.g. 527668"
+                className="flex-1 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 font-mono focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+              <button
+                onClick={saveSerial}
+                className="text-sm rounded-md px-3 py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Save
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                setSerialText(tool.serialNumber || "");
+                setEditingSerial(true);
+              }}
+              className="text-sm font-mono text-slate-100 bg-slate-800 border border-slate-700 rounded-md px-3 py-2 hover:border-slate-600 w-full text-left"
+            >
+              {tool.serialNumber || <span className="text-slate-500 font-sans">Tap to add a serial number</span>}
             </button>
           )}
         </div>
