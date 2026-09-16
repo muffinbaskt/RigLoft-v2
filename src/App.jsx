@@ -2623,7 +2623,14 @@ function CatalogModal({
             const match = i.name && i.name.trim() ? findCatalogMatch(i.name, catalog) : null;
             if (match) {
               linked++;
-              return { ...i, catalogId: match.id };
+              // A fresh link has to carry the catalog's own needsTransfer
+              // over onto the item — without this, an item created
+              // before it ever had a catalog link (Import, paste-text,
+              // an old job predating the link) gets its catalogId fixed
+              // here but silently stays invisible to Full Transfer
+              // forever, since Transfer reads the item's OWN
+              // needsTransfer field, not the catalog's, at transfer time.
+              return { ...i, catalogId: match.id, needsTransfer: !!match.needsTransfer };
             }
             return i;
           }),
@@ -2640,7 +2647,7 @@ function CatalogModal({
             const match = i.name && i.name.trim() ? findCatalogMatch(i.name, catalog) : null;
             if (match) {
               linked++;
-              return { ...i, catalogId: match.id };
+              return { ...i, catalogId: match.id, needsTransfer: !!match.needsTransfer };
             }
             return i;
           }),
