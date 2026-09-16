@@ -290,6 +290,57 @@ export function applyToolsBackfill(currentTools, candidates) {
   return tools;
 }
 
+// Merging two tool records into one — the case this covers: a tool
+// gets added at receiving time with its receipt but no SME# yet
+// (awaiting_sme), and by the time the real number comes back from the
+// boss, that same SME# has already landed in the registry some other
+// way (typed onto a job item before the receiving side caught up, via
+// syncSmesIntoRegistry). Without this, assigning the number would leave
+// two separate records for one physical tool — the real one (with
+// wherever it actually is) and this one (with the receipt, orphaned).
+//
+// target is the record that already had the SME# — kept as the base,
+// since it's the one actually reflecting the tool's real lifecycle
+// position (status, current job). source is the one being resolved
+// (had the receipt, was awaiting its number) — only its receipt,
+// serial#, name, and notes fill in anything target is missing; target's
+// own values always win when both have one. Histories are combined and
+// re-sorted chronologically rather than one replacing the other, so the
+// full trail (including the receiving-side events source only had)
+// survives the merge.
+export function mergeToolRecords(target, source) {
+  const combinedHistory = [...(target.history || []), ...(source.history || [])].sort((a, b) =>
+    (a.time || "").localeCompare(b.time || "")
+  );
+  const merged = {
+    ...target,
+    name: target.name || source.name || "",
+    receiptPath: target.receiptPath || source.receiptPath || null,
+    receiptUrl: target.receiptUrl || source.receiptUrl || null,
+    serialNumber: target.serialNumber || source.serialNumber || null,
+    notes: [target.notes, source.notes].filter((n) => n && n.trim()).join("\n\n"),
+    history: combinedHistory,
+  };
+  return logToolEvent(
+    merged,
+    "merged",
+    `Merged with a duplicate record for the same SME# (was "${source.name || "unnamed"}"${
+      source.receiptPath ? " — receipt carried over" : ""
+    })`
+  );
+}
+
+// Applies the merge to the registry: source is removed entirely, target
+// is replaced with the merged record. Returns the registry unchanged if
+// either id isn't found, rather than guessing.
+export function applyToolMerge(currentTools, sourceId, targetId) {
+  const source = currentTools.find((t) => t.id === sourceId);
+  const target = currentTools.find((t) => t.id === targetId);
+  if (!source || !target) return currentTools;
+  const merged = mergeToolRecords(target, source);
+  return currentTools.filter((t) => t.id !== sourceId && t.id !== targetId).concat(merged);
+}
+
 // Turns a flat list of text lines (from extractPdfRows flattened, or a
 // pasted CSV/text block) into {sme, serial, nameGuess} rows. The SME#
 // and Serial# extraction is exact and doesn't need explaining: the
