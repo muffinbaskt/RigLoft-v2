@@ -70,6 +70,7 @@ export function newTool({ sme = null, name = "", status = "awaiting_sme" } = {})
     currentJobName: null,
     receiptPath: null,
     receiptUrl: null,
+    serialNumber: null,
     notes: "",
     history: [
       {
@@ -218,3 +219,69 @@ export function markToolsTransferred(currentTools, smeNumbers, jobId, jobName) {
   return tools;
 }
 
+// Turns a flat list of text lines (from extractPdfLines, or a pasted
+// CSV/text block) into {sme, serial, nameGuess} rows — the actual
+// parsing strategy is deliberately simple: take the FIRST number on the
+// line as the SME# and the LAST number as the Serial#, and treat
+// whatever sits between them as a name guess, without ever trying to
+// tell "Item" and "Category" apart. That's on purpose — the two numbers
+// are the only fields that actually matter for attaching a serial to a
+// tool (matched by SME#, which is already that tool's own key), and a
+// parser that doesn't need to understand the middle columns can't be
+// thrown off by however many words happen to be in them. A line with no
+// leading/trailing number (a header row, a blank line) is silently
+// skipped rather than surfaced as an error, since a table export
+// commonly has exactly one such row and it's not a mistake.
+export function parseSmeSerialLines(lines) {
+  const rows = [];
+  lines.forEach((line) => {
+    const tokens = line.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length < 2) return;
+    const first = tokens[0];
+    const last = tokens[tokens.length - 1];
+    if (!/^\d+$/.test(first) || !/^\d+$/.test(last)) return;
+    if (first === last) return; // a lone number on its own line, not a real SME+Serial pair
+    rows.push({
+      sme: first,
+      serial: last,
+      nameGuess: tokens.slice(1, -1).join(" "),
+    });
+  });
+  return rows;
+}
+
+// Applies a batch of {sme, serial, nameGuess} rows (already reviewed by
+// a human — see JobSheetScanModal's own review-before-commit pattern,
+// used the same way here) to the registry. A row whose SME# already
+// exists gets its serialNumber attached in place, logged; a row whose
+// SME# has never been seen gets a brand-new tool created from it (using
+// nameGuess as a starting name, since these files can predate the
+// registry itself — an older tool that was never typed into any SME#
+// field elsewhere in the app shouldn't be left permanently unregistrable
+// just because this happens to be the first time its number shows up
+// anywhere).
+export function attachSerialNumbers(currentTools, rows) {
+  let tools = [...currentTools];
+  rows.forEach((row) => {
+    const sme = (row.sme || "").trim();
+    if (!sme) return;
+    const idx = tools.findIndex((t) => t.sme === sme);
+    if (idx === -1) {
+      const tool = logToolEvent(
+        { ...newTool({ sme, name: row.name || row.nameGuess || "", status: "storage" }), serialNumber: row.serial || null },
+        "serial_attached",
+        row.serial ? `Serial# ${row.serial} attached (new tool, imported)` : "Imported from file"
+      );
+      tools = [...tools, tool];
+      return;
+    }
+    const existing = tools[idx];
+    if (existing.serialNumber === (row.serial || null)) return;
+    tools[idx] = logToolEvent(
+      { ...existing, serialNumber: row.serial || null },
+      "serial_attached",
+      `Serial# ${row.serial} attached`
+    );
+  });
+  return tools;
+}
