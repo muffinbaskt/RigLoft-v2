@@ -7656,6 +7656,12 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
             Transferred
           </span>
         )}
+        {(item.shippedContainers || []).length > 0 && (
+          <span className="text-xs rounded-full px-2.5 py-1 border border-sky-500/40 bg-sky-500/10 text-sky-300 flex items-center gap-1">
+            <Truck className="w-3 h-3" />
+            Shipped
+          </span>
+        )}
         {item.backorderQty > 0 && (
           <span className="text-xs rounded-full px-2.5 py-1 border border-red-500/40 bg-red-500/10 text-red-300">
             {item.backorderQty} on backorder
