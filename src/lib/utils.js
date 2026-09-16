@@ -385,6 +385,26 @@ export function isContainerTransferred(containerName, items) {
   );
 }
 
+// A separate, deliberately independent tracking system from Transfer
+// (above). Transfer is specifically about the tagged-tool workflow — SME
+// numbers, the Transfer List, the whole registry-sync machinery. Shipped
+// is a plain "did this container physically leave and go to a job" mark
+// that applies to everything sitting in a container, tagged or not — a
+// container with zero transfer-tagged items in it can still be marked
+// Shipped in full. Same all-or-nothing shape as isContainerTransferred
+// (every item portion in the container has to carry the mark, and an
+// empty/unused container is never "shipped"), just against its own
+// separate shippedContainers field so the two systems never collide.
+export function isContainerShipped(containerName, items) {
+  const inContainer = (items || []).filter((i) =>
+    (i.containers || []).some((c) => c.name === containerName)
+  );
+  if (inContainer.length === 0) return false;
+  return inContainer.every((i) =>
+    (i.shippedContainers || []).includes(containerName)
+  );
+}
+
 // Converts an old single-container item into the new breakdown-list shape.
 // Safe to call on already-migrated items (returns them unchanged).
 export function migrateItemContainers(item) {
