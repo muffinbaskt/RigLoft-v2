@@ -302,19 +302,22 @@ export async function pdfToImageFiles(file) {
 
 // pdfToImageFiles above unwraps a PDF into photos for OCR; this instead
 // pulls the PDF's own embedded text directly — for a real (not scanned)
-// text-based PDF, like an SME#/Serial# table exported straight from a
-// spreadsheet, this is far more reliable than reading it as an image:
-// zero risk of a vision model misreading a digit, since it's reading the
-// actual characters the PDF stores, not guessing from pixels. Groups
-// text items into visual lines by Y position (pdf.js's text items come
-// back as individual runs of text with position data, not already
-// organized into rows), since a table's cell boundaries aren't preserved
-// as structure once extracted — only the visual layout is.
-export async function extractPdfLines(file) {
+// text-based PDF, like an SME#/Item/Category/Serial table exported
+// straight from a spreadsheet, this is far more reliable than reading it
+// as an image: zero risk of a vision model misreading a digit, since
+// it's reading the actual characters the PDF stores, not guessing from
+// pixels. Returns each visual line as its own array of {x, str} text
+// runs (position preserved, not yet joined into one string) — pdf.js's
+// text items come back as individual runs with position data, not
+// already organized into rows or columns, and keeping the X position
+// around is what lets a caller reconstruct actual table COLUMNS
+// afterward (see parseSmeItemSerialTable) rather than only ever getting
+// one flattened line of text per row.
+export async function extractPdfRows(file) {
   const pdfjsLib = await loadPdfJs();
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  const lines = [];
+  const allRows = [];
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const content = await page.getTextContent();
@@ -337,16 +340,11 @@ export async function extractPdfLines(file) {
     [...rows.entries()]
       .sort((a, b) => b[0] - a[0])
       .forEach(([, items]) => {
-        const lineText = items
-          .sort((a, b) => a.x - b.x)
-          .map((i) => i.str)
-          .join(" ")
-          .replace(/\s+/g, " ")
-          .trim();
-        if (lineText) lines.push(lineText);
+        const sorted = items.slice().sort((a, b) => a.x - b.x);
+        if (sorted.length > 0) allRows.push(sorted);
       });
   }
-  return lines;
+  return allRows;
 }
 
 export async function uploadReferenceDocument(jobId, file) {
