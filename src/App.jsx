@@ -202,7 +202,16 @@ import {
   enablePushNotifications,
   disablePushNotifications,
 } from "./lib/api";
-import { TOOLS_KEY, TOOL_STATUSES, newTool, logToolEvent, syncSmesIntoRegistry } from "./lib/tools";
+import {
+  TOOLS_KEY,
+  TOOL_STATUSES,
+  newTool,
+  logToolEvent,
+  syncSmesIntoRegistry,
+  markToolsTransferred,
+  toolStatusLabel,
+  isToolCandidate,
+} from "./lib/tools";
 
 
 function Select({ value, onChange, options, labels }) {
@@ -9211,6 +9220,7 @@ function JobInventory({
   onSaveCatalogItem,
   onLearnCatalogAlias,
   onSyncToolsFromItem,
+  onMarkToolsFromTransfer,
   onOpenCatalog,
   onRenameJob,
 }) {
@@ -9860,6 +9870,19 @@ function JobInventory({
         ...prevJob.activityLog,
       ].slice(0, 50),
     }));
+    // The actual staged→on_job moment for the Tools registry — a
+    // confirmed transfer, not just an SME# being typed somewhere. Only
+    // the items genuinely included in this transfer (via pairs) get
+    // their SME#s advanced, not the whole job's item list.
+    if (onMarkToolsFromTransfer) {
+      const transferredItemIds = new Set(pairs.map((p) => p.itemId));
+      const smeNumbers = items
+        .filter((i) => transferredItemIds.has(i.id))
+        .flatMap((i) => i.serials || []);
+      if (smeNumbers.length > 0) {
+        onMarkToolsFromTransfer(smeNumbers, job.name);
+      }
+    }
   };
 
   const unlockTransferItem = (id) => {
@@ -12962,6 +12985,22 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
     }
   };
 
+  // The staged→on_job half of the Tools lifecycle — called specifically
+  // when a transfer actually gets confirmed on the job side (Job Lists'
+  // "mark as transferred" action), not just whenever an SME# gets typed
+  // somewhere. That's the deliberate distinction: typing an SME# onto a
+  // job item only ever stages a tool there; it takes this separate,
+  // explicit confirmation to actually call it on the job.
+  const markToolsFromTransfer = (smeNumbers, jobName) => {
+    if (!smeNumbers || smeNumbers.length === 0) return;
+    const next = markToolsTransferred(toolsRef.current, smeNumbers, activeJobId, jobName);
+    if (next !== toolsRef.current) {
+      toolsRef.current = next;
+      setTools(next);
+      saveWithRetry(TOOLS_KEY, JSON.stringify(next)).catch(() => {});
+    }
+  };
+
   const bulkSaveCatalogItems = (items) => {
     setCatalog((prev) => [...prev, ...items]);
   };
@@ -13588,6 +13627,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           onSaveCatalogItem={saveCatalogItem}
           onLearnCatalogAlias={learnCatalogAliasForJobs}
           onSyncToolsFromItem={syncToolsFromJobItem}
+          onMarkToolsFromTransfer={markToolsFromTransfer}
           onOpenCatalog={() => setCatalogModalOpen(true)}
           onRenameJob={(name, color) => renameJob(activeJob.id, name, color)}
         />
@@ -21653,7 +21693,7 @@ function ReceiptArchive({ onGoHome }) {
               // needs its own tool record.
               const toolCandidates = (viewingEntry.items || []).filter((it) => {
                 const match = it.name ? findCatalogMatch(it.name, catalog) : null;
-                return match && match.needsTransfer;
+                return isToolCandidate(match);
               });
               if (toolCandidates.length === 0) return null;
               return (
@@ -21952,22 +21992,28 @@ function ReceiptArchive({ onGoHome }) {
 // backfilling tools already sitting on current jobs, are later phases.
 function ToolsApp({ onGoHome }) {
   const [tools, setTools] = useState([]);
+  const [catalog, setCatalog] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [addingTool, setAddingTool] = useState(false);
   const [viewingToolId, setViewingToolId] = useState(null);
+  const [managingTransferTags, setManagingTransferTags] = useState(false);
   const toolsRef = useRef([]);
 
   useEffect(() => {
     (async () => {
       try {
-        const result = await getWithRetry(TOOLS_KEY);
-        if (result.ok && result.value) {
-          const loaded = JSON.parse(result.value);
+        const [toolsResult, catalogResult] = await Promise.all([
+          getWithRetry(TOOLS_KEY),
+          getWithRetry(CATALOG_KEY),
+        ]);
+        if (toolsResult.ok && toolsResult.value) {
+          const loaded = JSON.parse(toolsResult.value);
           setTools(loaded);
           toolsRef.current = loaded;
         }
+        if (catalogResult.ok && catalogResult.value) setCatalog(JSON.parse(catalogResult.value));
       } catch {}
       setLoading(false);
     })();
@@ -21977,6 +22023,16 @@ function ToolsApp({ onGoHome }) {
     toolsRef.current = next;
     setTools(next);
     saveWithRetry(TOOLS_KEY, JSON.stringify(next)).catch(() => {});
+  };
+
+  const toggleCatalogToolExclusion = (catalogId) => {
+    setCatalog((prev) => {
+      const next = prev.map((c) =>
+        c.id === catalogId ? { ...c, excludeFromTools: !c.excludeFromTools } : c
+      );
+      saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
   };
 
   const updateTool = (id, updater) => {
@@ -22024,6 +22080,16 @@ function ToolsApp({ onGoHome }) {
     );
   }
 
+  if (managingTransferTags) {
+    return (
+      <TransferTagsManagerPage
+        catalog={catalog}
+        onToggleExclude={toggleCatalogToolExclusion}
+        onBack={() => setManagingTransferTags(false)}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
@@ -22039,13 +22105,22 @@ function ToolsApp({ onGoHome }) {
             <p className="text-xs text-slate-500">SME# registry — search by number, name, or job</p>
           </div>
         </div>
-        <button
-          onClick={() => setAddingTool(true)}
-          className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
-        >
-          <Plus className="w-4 h-4" />
-          Add tool
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setManagingTransferTags(true)}
+            className="flex items-center gap-1.5 text-sm rounded-md px-3 py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            <ListChecks className="w-4 h-4" />
+            Transfer-tagged items
+          </button>
+          <button
+            onClick={() => setAddingTool(true)}
+            className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
+          >
+            <Plus className="w-4 h-4" />
+            Add tool
+          </button>
+        </div>
       </header>
 
       <main className="max-w-2xl mx-auto px-4 py-5">
@@ -22106,13 +22181,15 @@ function ToolsApp({ onGoHome }) {
                   </p>
                   <p className="text-xs text-slate-500 font-mono">
                     {tool.sme ? `SME# ${tool.sme}` : "No SME# yet"}
-                    {tool.currentJobName ? ` · ${tool.currentJobName}` : ""}
+                    {tool.currentJobName && tool.status !== "staged" && tool.status !== "on_job"
+                      ? ` · ${tool.currentJobName}`
+                      : ""}
                   </p>
                 </div>
                 <span
                   className={`text-[10px] rounded-full px-2 py-1 border shrink-0 ${TOOL_STATUSES[tool.status]?.color || ""}`}
                 >
-                  {TOOL_STATUSES[tool.status]?.label || tool.status}
+                  {toolStatusLabel(tool)}
                 </span>
               </button>
             ))}
@@ -22144,6 +22221,82 @@ function ToolsApp({ onGoHome }) {
 // up front, shared by everything this batch creates; the rows below it
 // are where each actual item/quantity/SME# gets entered, as many as the
 // receipt actually has.
+// Lets Bryan review every catalog item currently carrying the Transfer
+// tag and decide, per item, whether it should actually be recognized as
+// a Tools candidate — the exceptions (angle wings, weld lead, air arcs,
+// per his own examples) that need real transfer tracking but are never
+// individually engraved with an SME#, so treating them as a tool
+// candidate on every incoming receipt would just be noise. Toggling
+// here never touches the item's actual Transfer tag — that keeps
+// working for transfer tracking exactly as it always has — this only
+// controls whether isToolCandidate() picks it up.
+function TransferTagsManagerPage({ catalog, onToggleExclude, onBack }) {
+  const [search, setSearch] = useState("");
+  const transferTagged = catalog
+    .filter((c) => c.needsTransfer)
+    .filter((c) => !search.trim() || c.name.toLowerCase().includes(search.trim().toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
+        <div className="flex items-center gap-3 min-w-0">
+          <button onClick={onBack} className="text-slate-400 hover:text-slate-200 shrink-0">
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <div className="min-w-0">
+            <h1 className="font-bold text-slate-100 truncate">Transfer-tagged items</h1>
+            <p className="text-xs text-slate-500">Decide which ones actually get tracked as Tools</p>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        <p className="text-xs text-slate-500 mb-4">
+          Every catalog item below is tagged Transfer, so all of them show up on a normal transfer
+          list — that never changes here. This only controls whether an item gets recognized as a
+          tool candidate when sending items over from a scanned receipt (for things like angle
+          wings or weld lead that need transfer tracking but are never individually engraved).
+        </p>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search Transfer-tagged items..."
+          className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+        />
+        {transferTagged.length === 0 ? (
+          <p className="text-sm text-slate-500 text-center py-12">
+            {catalog.some((c) => c.needsTransfer)
+              ? `Nothing matches "${search}".`
+              : "No catalog items are tagged Transfer yet."}
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {transferTagged.map((c) => (
+              <div
+                key={c.id}
+                className="bg-slate-900 border border-slate-800 rounded-lg p-3 flex items-center justify-between gap-3"
+              >
+                <p className="text-sm text-slate-100 min-w-0 truncate">{c.name}</p>
+                <button
+                  onClick={() => onToggleExclude(c.id)}
+                  className={`text-xs rounded-full px-3 py-1.5 border shrink-0 ${
+                    c.excludeFromTools
+                      ? "border-slate-700 text-slate-500 hover:text-slate-300"
+                      : "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
+                  }`}
+                >
+                  {c.excludeFromTools ? "Excluded from Tools" : "Tracked as a Tool"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
 function AddToolModal({ onSave, onClose, initialRows, existingReceipt, title = "Add tools" }) {
   const [rows, setRows] = useState(
     initialRows && initialRows.length > 0
