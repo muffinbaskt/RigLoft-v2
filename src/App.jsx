@@ -14070,7 +14070,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   );
 }
 
-function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onSelectKiosk, onSelectReceiving, onSelectBackorders, onSelectArchive, onSelectTools, pendingSuggestionCount = 0, onRequestLogin, onSignOut }) {
+function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onSelectKiosk, onSelectReceiving, onSelectBackorders, onSelectArchive, onSelectTools, pendingSuggestionCount = 0, toolsAlertCount = 0, onRequestLogin, onSignOut }) {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
@@ -14250,8 +14250,13 @@ function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onS
         {isEditor && (
           <button
             onClick={onSelectTools}
-            className="w-full mt-3 flex items-center justify-center gap-2 bg-slate-900 border-2 border-slate-800 hover:border-slate-600 rounded-xl p-4 text-center transition-colors"
+            className="relative w-full mt-3 flex items-center justify-center gap-2 bg-slate-900 border-2 border-slate-800 hover:border-slate-600 rounded-xl p-4 text-center transition-colors"
           >
+            {toolsAlertCount > 0 && (
+              <span className="absolute -top-2 -right-2 bg-rose-500 text-slate-950 text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center border-2 border-slate-950">
+                {toolsAlertCount > 9 ? "9+" : toolsAlertCount}
+              </span>
+            )}
             <Wrench className="w-5 h-5 text-slate-400" />
             <span className="text-sm font-semibold text-slate-300">Tools</span>
           </button>
@@ -25581,6 +25586,33 @@ export default function AuthGate() {
     };
   }, [isOwner, appSection]);
 
+  // Same idea as pendingSuggestionCount above, for tools flagged
+  // needs_transfer (shipped without ever going through Transfer) — the
+  // whole point of that status is to surface something that needs
+  // action, so it should be visible from the home screen, not just
+  // something you'd only notice by opening Tools and looking.
+  const [toolsAlertCount, setToolsAlertCount] = useState(0);
+  useEffect(() => {
+    if (!isOwner) return;
+    let cancelled = false;
+    const refresh = async () => {
+      const result = await getWithRetry(TOOLS_KEY);
+      if (cancelled || !result.ok || !result.value) return;
+      try {
+        const tools = JSON.parse(result.value);
+        setToolsAlertCount(tools.filter((t) => t.status === "needs_transfer").length);
+      } catch {
+        // Malformed tools data shouldn't crash the landing screen — the
+        // badge just stays at whatever it last was.
+      }
+    };
+    refresh();
+    if (appSection === null) refresh();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOwner, appSection]);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
@@ -25623,6 +25655,7 @@ export default function AuthGate() {
           onSelectArchive={() => navigateToSection("archive")}
           onSelectTools={() => navigateToSection("tools")}
           pendingSuggestionCount={pendingSuggestionCount}
+          toolsAlertCount={toolsAlertCount}
           onRequestLogin={() => setShowLogin(true)}
           onSignOut={() => supabase.auth.signOut()}
         />
