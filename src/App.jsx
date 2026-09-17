@@ -9398,7 +9398,6 @@ function JobInventory({
   onMarkToolsFromTransfer,
   onMarkToolsFromShipWithoutTransfer,
   onOpenCatalog,
-  onRenameJob,
 }) {
   // A sealed job behaves exactly like browse-only mode, regardless of
   // being actually logged in — reuses every existing disabled-editing
@@ -9498,7 +9497,6 @@ function JobInventory({
   const [suggestionSentConfirm, setSuggestionSentConfirm] = useState(false);
   const [suggestNewItemOpen, setSuggestNewItemOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [renameOpen, setRenameOpen] = useState(false);
   const [requisitionsOpen, setRequisitionsOpen] = useState(false);
 
   const logActivity = (message, extra = {}) => {
@@ -10609,31 +10607,52 @@ function JobInventory({
               <MoreVertical className="w-4 h-4" />
             </button>
             {menuOpen && (
-              <div className="absolute right-0 top-full mt-2 w-48 bg-slate-800 border border-slate-700 rounded-md shadow-lg z-40 overflow-hidden">
+              <div className="absolute right-0 top-full mt-2 w-52 bg-slate-800 border border-slate-700 rounded-md shadow-lg z-40 overflow-hidden">
                   {isEditor && (
-                    <button
-                      onClick={() => {
-                        setImportOpen(true);
-                        setMenuOpen(false);
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
-                    >
-                      <Upload className="w-4 h-4 text-slate-400" />
-                      Import items
-                    </button>
+                    <>
+                      <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                        Add items
+                      </p>
+                      <button
+                        onClick={() => {
+                          setImportOpen(true);
+                          setMenuOpen(false);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                      >
+                        <Upload className="w-4 h-4 text-slate-400" />
+                        Import items
+                      </button>
+                      <button
+                        onClick={() => {
+                          setJobSheetScanOpen(true);
+                          setMenuOpen(false);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                      >
+                        <ScanLine className="w-4 h-4 text-slate-400" />
+                        Scan a job sheet
+                      </button>
+                      <button
+                        onClick={() => {
+                          setPullFromReceivingOpen(true);
+                          setMenuOpen(false);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                      >
+                        <Inbox className="w-4 h-4 text-slate-400" />
+                        Pull from Receiving
+                      </button>
+                    </>
                   )}
-                  {isEditor && (
-                    <button
-                      onClick={() => {
-                        setJobSheetScanOpen(true);
-                        setMenuOpen(false);
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
-                    >
-                      <ScanLine className="w-4 h-4 text-slate-400" />
-                      Scan a job sheet
-                    </button>
-                  )}
+
+                  <p
+                    className={`px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500 ${
+                      isEditor ? "border-t border-slate-700 mt-1" : ""
+                    }`}
+                  >
+                    Print & export
+                  </p>
                   <button
                     onClick={() => {
                       setPickListOpen(true);
@@ -10674,25 +10693,16 @@ function JobInventory({
                     <Download className="w-4 h-4 text-slate-400" />
                     Export items
                   </button>
-                  {isEditor && (
-                    <button
-                      onClick={() => {
-                        setRenameOpen(true);
-                        setMenuOpen(false);
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
-                    >
-                      <Pencil className="w-4 h-4 text-slate-400" />
-                      Rename job
-                    </button>
-                  )}
 
+                  <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500 border-t border-slate-700 mt-1">
+                    Job tools
+                  </p>
                   <button
                     onClick={() => {
                       setContainersOpen(true);
                       setMenuOpen(false);
                     }}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left border-t border-slate-700"
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
                   >
                     <Archive className="w-4 h-4 text-slate-400" />
                     Containers
@@ -10726,16 +10736,6 @@ function JobInventory({
                   </button>
                   <button
                     onClick={() => {
-                      onOpenCatalog();
-                      setMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
-                  >
-                    <BookOpen className="w-4 h-4 text-slate-400" />
-                    Item catalog
-                  </button>
-                  <button
-                    onClick={() => {
                       setReferenceDocsOpen(true);
                       setMenuOpen(false);
                     }}
@@ -10749,18 +10749,20 @@ function JobInventory({
                       </span>
                     )}
                   </button>
-                  {isEditor && (
-                    <button
-                      onClick={() => {
-                        setPullFromReceivingOpen(true);
-                        setMenuOpen(false);
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
-                    >
-                      <Inbox className="w-4 h-4 text-slate-400" />
-                      Pull from Receiving
-                    </button>
-                  )}
+
+                  <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500 border-t border-slate-700 mt-1">
+                    Catalog
+                  </p>
+                  <button
+                    onClick={() => {
+                      onOpenCatalog();
+                      setMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                  >
+                    <BookOpen className="w-4 h-4 text-slate-400" />
+                    Item catalog
+                  </button>
                   {isEditor && (
                     <button
                       onClick={() => {
@@ -11978,19 +11980,6 @@ function JobInventory({
         <SuggestNewItemModal job={job} managerName={managerName} onClose={() => setSuggestNewItemOpen(false)} />
       )}
 
-      {renameOpen && (
-        <JobNameModal
-          initialName={job.name}
-          initialColor={job.color}
-          title="Rename job"
-          confirmLabel="Save"
-          onConfirm={(name, color) => {
-            onRenameJob(name, color);
-            setRenameOpen(false);
-          }}
-          onCancel={() => setRenameOpen(false)}
-        />
-      )}
     </div>
   );
 }
@@ -13920,7 +13909,6 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           onMarkToolsFromTransfer={markToolsFromTransfer}
           onMarkToolsFromShipWithoutTransfer={markToolsFromShipWithoutTransfer}
           onOpenCatalog={() => setCatalogModalOpen(true)}
-          onRenameJob={(name, color) => renameJob(activeJob.id, name, color)}
         />
       )}
 
