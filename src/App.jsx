@@ -211,6 +211,7 @@ import {
   logToolEvent,
   syncSmesIntoRegistry,
   markToolsTransferred,
+  markToolsNeedTransfer,
   toolStatusLabel,
   isToolCandidate,
   parseSmeSerialLines,
@@ -9395,6 +9396,7 @@ function JobInventory({
   onLearnCatalogAlias,
   onSyncToolsFromItem,
   onMarkToolsFromTransfer,
+  onMarkToolsFromShipWithoutTransfer,
   onOpenCatalog,
   onRenameJob,
 }) {
@@ -11467,6 +11469,12 @@ function JobInventory({
           confirmLabel="Ship anyway"
           onConfirm={() => {
             markContainerShipped(shipWarning.containerName, shipWarning.date);
+            if (onMarkToolsFromShipWithoutTransfer) {
+              const smeNumbers = shipWarning.untransferredItems.flatMap((i) => i.serials || []);
+              if (smeNumbers.length > 0) {
+                onMarkToolsFromShipWithoutTransfer(smeNumbers);
+              }
+            }
             setShipWarning(null);
           }}
           onCancel={() => setShipWarning(null)}
@@ -13269,6 +13277,20 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
     }
   };
 
+  // Fired from the Ship-anyway confirmation on a container that still has
+  // transfer-tagged items which never actually went through Transfer —
+  // flags the matching tools "needs_transfer" so it's visible in the
+  // registry, not just a one-time popup at the moment of shipping.
+  const markToolsFromShipWithoutTransfer = (smeNumbers) => {
+    if (!smeNumbers || smeNumbers.length === 0) return;
+    const next = markToolsNeedTransfer(toolsRef.current, smeNumbers);
+    if (next !== toolsRef.current) {
+      toolsRef.current = next;
+      setTools(next);
+      saveWithRetry(TOOLS_KEY, JSON.stringify(next)).catch(() => {});
+    }
+  };
+
   const bulkSaveCatalogItems = (items) => {
     setCatalog((prev) => [...prev, ...items]);
   };
@@ -13896,6 +13918,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           onLearnCatalogAlias={learnCatalogAliasForJobs}
           onSyncToolsFromItem={syncToolsFromJobItem}
           onMarkToolsFromTransfer={markToolsFromTransfer}
+          onMarkToolsFromShipWithoutTransfer={markToolsFromShipWithoutTransfer}
           onOpenCatalog={() => setCatalogModalOpen(true)}
           onRenameJob={(name, color) => renameJob(activeJob.id, name, color)}
         />

@@ -37,6 +37,12 @@ export const TOOL_STATUSES = {
   needs_engraving: { label: "Needs engraving", color: "bg-sky-500/15 border-sky-500/40 text-sky-300" },
   storage: { label: "Storage", color: "bg-slate-700/40 border-slate-600 text-slate-300" },
   staged: { label: "Staged", color: "bg-violet-500/15 border-violet-500/40 text-violet-300" },
+  // A branch off "staged", not a normal step in the lifecycle — lands
+  // here specifically when a container ships with this tool still in it
+  // but never actually run through Transfer (see markToolsNeedTransfer).
+  // Deliberately its own color, distinct from "retired", so it reads as
+  // urgent/actionable rather than terminal.
+  needs_transfer: { label: "Needs transfer", color: "bg-rose-500/15 border-rose-500/40 text-rose-300" },
   on_job: { label: "On a job", color: "bg-emerald-500/15 border-emerald-500/40 text-emerald-300" },
   retired: { label: "Retired", color: "bg-red-500/15 border-red-500/40 text-red-300" },
 };
@@ -213,6 +219,34 @@ export function markToolsTransferred(currentTools, smeNumbers, jobId, jobName) {
       { ...existing, status: "on_job", currentJobId: jobId || null, currentJobName: jobName || null },
       "transferred",
       jobName ? `Transfer confirmed — now on "${jobName}"` : "Transfer confirmed"
+    );
+  });
+
+  return tools;
+}
+
+// Fired specifically off the "Ship anyway" confirmation on a container
+// that still has transfer-tagged items which were never actually run
+// through Transfer (App.jsx's requestMarkContainerShipped). Flags each
+// matching tool as needing transfer so it surfaces in the registry
+// instead of silently staying "staged" with no indication anything's
+// wrong. Never touches a tool already "on_job" or already flagged — an
+// on_job tool means some other portion of it already went through a
+// real, confirmed transfer, and this event doesn't know anything that
+// should override that.
+export function markToolsNeedTransfer(currentTools, smeNumbers) {
+  let tools = [...currentTools];
+  const cleanNumbers = [...new Set(smeNumbers.map((s) => (s || "").trim()).filter(Boolean))];
+
+  cleanNumbers.forEach((sme) => {
+    const idx = tools.findIndex((t) => t.sme === sme);
+    if (idx === -1) return;
+    const existing = tools[idx];
+    if (existing.status === "on_job" || existing.status === "needs_transfer") return;
+    tools[idx] = logToolEvent(
+      { ...existing, status: "needs_transfer" },
+      "needs_transfer",
+      "Shipped without being transferred — flagged as needing transfer"
     );
   });
 
