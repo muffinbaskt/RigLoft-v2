@@ -2607,6 +2607,13 @@ function CatalogModal({
     setSyncing(true);
     let linked = 0;
     let checked = 0;
+    // Separate from `linked` — this counts items that already had a
+    // catalogId but whose needsTransfer had drifted out of sync with the
+    // catalog entry (e.g. someone toggled "Needs transfer" on the catalog
+    // item after other items were already linked to it). Without this
+    // pass those items stay invisible to Full Transfer forever, since the
+    // link-fixing loop below only ever touches items missing a catalogId.
+    let refreshed = 0;
     try {
       const [jResult, lResult, aResult] = await Promise.all([
         getWithRetry(JOBS_KEY),
@@ -2618,7 +2625,14 @@ function CatalogModal({
         const nextJobs = jobs.map((j) => ({
           ...j,
           items: (j.items || []).map((i) => {
-            if (i.catalogId) return i;
+            if (i.catalogId) {
+              const linkedCatalogItem = catalog.find((c) => c.id === i.catalogId);
+              if (linkedCatalogItem && !!linkedCatalogItem.needsTransfer !== !!i.needsTransfer) {
+                refreshed++;
+                return { ...i, needsTransfer: !!linkedCatalogItem.needsTransfer };
+              }
+              return i;
+            }
             checked++;
             const match = i.name && i.name.trim() ? findCatalogMatch(i.name, catalog) : null;
             if (match) {
@@ -2642,7 +2656,14 @@ function CatalogModal({
         const nextLists = lists.map((l) => ({
           ...l,
           items: (l.items || []).map((i) => {
-            if (i.catalogId) return i;
+            if (i.catalogId) {
+              const linkedCatalogItem = catalog.find((c) => c.id === i.catalogId);
+              if (linkedCatalogItem && !!linkedCatalogItem.needsTransfer !== !!i.needsTransfer) {
+                refreshed++;
+                return { ...i, needsTransfer: !!linkedCatalogItem.needsTransfer };
+              }
+              return i;
+            }
             checked++;
             const match = i.name && i.name.trim() ? findCatalogMatch(i.name, catalog) : null;
             if (match) {
@@ -2733,7 +2754,7 @@ function CatalogModal({
 
         await saveWithRetry(RECEIPT_ARCHIVE_KEY, JSON.stringify(nextEntries));
       }
-      setSyncResult({ linked, checked });
+      setSyncResult({ linked, checked, refreshed });
     } catch (err) {
       setSyncResult({ error: err && err.message ? err.message : String(err) });
     }
@@ -3274,8 +3295,9 @@ function CatalogModal({
             <p className="text-slate-400 text-sm mb-5">
               Checks every item across every job, Love List, and archived receipt. Any item whose
               name already matches a catalog entry, but doesn't have a real link saved yet, gets
-              linked automatically. Items that already have a link, or don't match anything, are
-              left untouched.
+              linked automatically. Items that already have a link also get their "Needs transfer"
+              flag refreshed to match the catalog entry, in case it changed after they were linked.
+              Anything that doesn't match anything is left untouched.
             </p>
             <div className="flex gap-3">
               <button
@@ -3315,9 +3337,11 @@ function CatalogModal({
                 ? syncResult.error
                 : `Checked ${syncResult.checked} unlinked item${
                     syncResult.checked === 1 ? "" : "s"
-                  } — linked ${syncResult.linked} to a matching catalog entry. Reload the page to
-                    see the update reflected wherever you currently have a job, Love List, or the
-                    Receipt Archive open.`}
+                  } — linked ${syncResult.linked} to a matching catalog entry, and refreshed the
+                    "Needs transfer" flag on ${syncResult.refreshed} already-linked item${
+                    syncResult.refreshed === 1 ? "" : "s"
+                  }. Reload the page to see the update reflected wherever you currently have a job,
+                    Love List, or the Receipt Archive open.`}
             </p>
             <button
               onClick={() => {
