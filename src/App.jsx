@@ -9478,6 +9478,12 @@ function JobInventory({
   const [jobSheetScanOpen, setJobSheetScanOpen] = useState(false);
   const [containersOpen, setContainersOpen] = useState(false);
   const [containerToOpen, setContainerToOpen] = useState(null);
+  // { containerName, date, untransferredItems } — set when Shipped is
+  // requested on a container that still has transfer-tagged items which
+  // haven't actually been transferred yet. Shipped and Transfer stay
+  // deliberately independent systems (see markContainerShipped below), so
+  // this is a warning to catch likely mistakes, not a hard block.
+  const [shipWarning, setShipWarning] = useState(null);
 
   const openContainerFromItem = (containerName) => {
     setContainerToOpen(containerName);
@@ -9691,6 +9697,25 @@ function JobInventory({
         ...prevJob.activityLog,
       ].slice(0, 50),
     }));
+  };
+
+  // Shipped and Transfer stay independent (see markContainerShipped), so
+  // this never blocks the Ship action — it just catches the likely
+  // mistake of shipping a container before its transfer-tagged items were
+  // actually run through Transfer, since that's an easy thing to miss
+  // given the two systems don't otherwise talk to each other at all.
+  const requestMarkContainerShipped = (containerName, date) => {
+    const untransferredItems = items.filter(
+      (i) =>
+        i.needsTransfer &&
+        (i.containers || []).some((c) => c.name === containerName) &&
+        !(i.transferredContainers || []).includes(containerName)
+    );
+    if (untransferredItems.length > 0) {
+      setShipWarning({ containerName, date, untransferredItems });
+      return;
+    }
+    markContainerShipped(containerName, date);
   };
 
   const unmarkContainerShipped = (containerName) => {
@@ -11421,8 +11446,30 @@ function JobInventory({
           onRename={renameContainer}
           onDelete={deleteContainer}
           onPull={pullItemsIntoContainer}
-          onMarkShipped={markContainerShipped}
+          onMarkShipped={requestMarkContainerShipped}
           onUnmarkShipped={unmarkContainerShipped}
+        />
+      )}
+
+      {shipWarning && (
+        <ConfirmDelete
+          title="Transfer-tagged items not transferred yet"
+          message={
+            <>
+              "{shipWarning.containerName}" still has{" "}
+              {shipWarning.untransferredItems.length} transfer-tagged item
+              {shipWarning.untransferredItems.length === 1 ? "" : "s"} that{" "}
+              {shipWarning.untransferredItems.length === 1 ? "hasn't" : "haven't"} been
+              transferred: {shipWarning.untransferredItems.map((i) => i.name).join(", ")}.
+              Ship anyway?
+            </>
+          }
+          confirmLabel="Ship anyway"
+          onConfirm={() => {
+            markContainerShipped(shipWarning.containerName, shipWarning.date);
+            setShipWarning(null);
+          }}
+          onCancel={() => setShipWarning(null)}
         />
       )}
 
