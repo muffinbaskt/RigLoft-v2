@@ -85,6 +85,7 @@ import {
   findCatalogMatch,
   getEffectiveCatalogMatch,
   getCachedCatalogMatch,
+  catalogFieldChanges,
   parseImportText,
   findOptionMatch,
   parseCatalogBulkText,
@@ -2609,11 +2610,13 @@ function CatalogModal({
     let linked = 0;
     let checked = 0;
     // Separate from `linked` — this counts items that already had a
-    // catalogId but whose needsTransfer had drifted out of sync with the
-    // catalog entry (e.g. someone toggled "Needs transfer" on the catalog
-    // item after other items were already linked to it). Without this
-    // pass those items stay invisible to Full Transfer forever, since the
-    // link-fixing loop below only ever touches items missing a catalogId.
+    // catalogId but whose gang/storage/category/needsTransfer had drifted
+    // out of sync with the catalog entry (e.g. someone edited the catalog
+    // entry after other items were already linked to it). Without this
+    // pass those items stay silently stale forever, since the link-fixing
+    // loop below only ever touches items missing a catalogId. Uses the
+    // same catalogFieldChanges the per-job "Sync from catalog" preview
+    // uses, so the two can't drift into checking different fields again.
     let refreshed = 0;
     try {
       const [jResult, lResult, aResult] = await Promise.all([
@@ -2623,14 +2626,21 @@ function CatalogModal({
       ]);
       if (jResult.ok && jResult.value) {
         const jobs = JSON.parse(jResult.value);
-        const nextJobs = jobs.map((j) => ({
-          ...j,
-          items: (j.items || []).map((i) => {
+        const nextJobs = jobs.map((j) => {
+          // Collected as we go — a newly-synced category has to land in
+          // this job's own categoryOptions too, or the item shows the
+          // right category but drops out of that filter tab until
+          // something else happens to add it (same thing the per-job
+          // "Sync from catalog" preview already does on apply).
+          const newCategoryNames = new Set();
+          const nextItems = (j.items || []).map((i) => {
             if (i.catalogId) {
               const linkedCatalogItem = catalog.find((c) => c.id === i.catalogId);
-              if (linkedCatalogItem && !!linkedCatalogItem.needsTransfer !== !!i.needsTransfer) {
+              const fieldChanges = catalogFieldChanges(i, linkedCatalogItem);
+              if (Object.keys(fieldChanges).length > 0) {
                 refreshed++;
-                return { ...i, needsTransfer: !!linkedCatalogItem.needsTransfer };
+                if (fieldChanges.category) newCategoryNames.add(fieldChanges.category);
+                return { ...i, ...fieldChanges };
               }
               return i;
             }
@@ -2638,18 +2648,28 @@ function CatalogModal({
             const match = i.name && i.name.trim() ? findCatalogMatch(i.name, catalog) : null;
             if (match) {
               linked++;
-              // A fresh link has to carry the catalog's own needsTransfer
-              // over onto the item — without this, an item created
-              // before it ever had a catalog link (Import, paste-text,
-              // an old job predating the link) gets its catalogId fixed
-              // here but silently stays invisible to Full Transfer
-              // forever, since Transfer reads the item's OWN
-              // needsTransfer field, not the catalog's, at transfer time.
-              return { ...i, catalogId: match.id, needsTransfer: !!match.needsTransfer };
+              // A fresh link has to carry the catalog's own fields over
+              // onto the item — without this, an item created before it
+              // ever had a catalog link (Import, paste-text, an old job
+              // predating the link) gets its catalogId fixed here but
+              // silently stays out of sync with its own catalog entry
+              // (needsTransfer especially — that's what leaves it
+              // invisible to Full Transfer forever, since Transfer reads
+              // the item's OWN needsTransfer field, not the catalog's).
+              const fieldChanges = catalogFieldChanges(i, match);
+              if (fieldChanges.category) newCategoryNames.add(fieldChanges.category);
+              return { ...i, catalogId: match.id, ...fieldChanges };
             }
             return i;
-          }),
-        }));
+          });
+          return newCategoryNames.size === 0
+            ? { ...j, items: nextItems }
+            : {
+                ...j,
+                items: nextItems,
+                categoryOptions: [...new Set([...(j.categoryOptions || []), ...newCategoryNames])],
+              };
+        });
         await saveWithRetry(JOBS_KEY, JSON.stringify(nextJobs));
       }
       if (lResult.ok && lResult.value) {
@@ -2657,11 +2677,17 @@ function CatalogModal({
         const nextLists = lists.map((l) => ({
           ...l,
           items: (l.items || []).map((i) => {
+            // Love List items have no gang/category concept at all (they're
+            // quick field requests, not full job inventory rows) — pull
+            // those two back out so a sync here never adds fields the Love
+            // Lists UI never reads, even though catalogFieldChanges would
+            // otherwise happily compute them from the catalog entry.
             if (i.catalogId) {
               const linkedCatalogItem = catalog.find((c) => c.id === i.catalogId);
-              if (linkedCatalogItem && !!linkedCatalogItem.needsTransfer !== !!i.needsTransfer) {
+              const { gang, category, ...fieldChanges } = catalogFieldChanges(i, linkedCatalogItem);
+              if (Object.keys(fieldChanges).length > 0) {
                 refreshed++;
-                return { ...i, needsTransfer: !!linkedCatalogItem.needsTransfer };
+                return { ...i, ...fieldChanges };
               }
               return i;
             }
@@ -2669,7 +2695,8 @@ function CatalogModal({
             const match = i.name && i.name.trim() ? findCatalogMatch(i.name, catalog) : null;
             if (match) {
               linked++;
-              return { ...i, catalogId: match.id, needsTransfer: !!match.needsTransfer };
+              const { gang, category, ...fieldChanges } = catalogFieldChanges(i, match);
+              return { ...i, catalogId: match.id, ...fieldChanges };
             }
             return i;
           }),
@@ -3296,9 +3323,10 @@ function CatalogModal({
             <p className="text-slate-400 text-sm mb-5">
               Checks every item across every job, Love List, and archived receipt. Any item whose
               name already matches a catalog entry, but doesn't have a real link saved yet, gets
-              linked automatically. Items that already have a link also get their "Needs transfer"
-              flag refreshed to match the catalog entry, in case it changed after they were linked.
-              Anything that doesn't match anything is left untouched.
+              linked automatically. Items that already have a link also get their gang, storage,
+              category, and "Needs transfer" flag refreshed to match the catalog entry, in case it
+              changed after they were linked (Love Lists only sync storage and transfer — gang and
+              category don't apply there). Anything that doesn't match anything is left untouched.
             </p>
             <div className="flex gap-3">
               <button
@@ -3338,8 +3366,8 @@ function CatalogModal({
                 ? syncResult.error
                 : `Checked ${syncResult.checked} unlinked item${
                     syncResult.checked === 1 ? "" : "s"
-                  } — linked ${syncResult.linked} to a matching catalog entry, and refreshed the
-                    "Needs transfer" flag on ${syncResult.refreshed} already-linked item${
+                  } — linked ${syncResult.linked} to a matching catalog entry, and refreshed
+                    gang/storage/category/transfer on ${syncResult.refreshed} already-linked item${
                     syncResult.refreshed === 1 ? "" : "s"
                   }. Reload the page to see the update reflected wherever you currently have a job,
                     Love List, or the Receipt Archive open.`}
@@ -9545,34 +9573,7 @@ function JobInventory({
         : findCatalogMatch(i.name, catalog);
       if (!match) return;
 
-      const fieldChanges = {};
-      if (match.gang && match.gang !== i.gang) fieldChanges.gang = match.gang;
-      if (match.storage && match.storage !== i.storage) {
-        fieldChanges.storage = match.storage;
-        // "Other" is meaningless without the actual detail text — carry
-        // that over too whenever the storage itself is changing, not just
-        // the "Other" label on its own.
-        if (match.storage === "Other") {
-          fieldChanges.storageDetail = match.storageDetail || "";
-        }
-      } else if (
-        match.storage === "Other" &&
-        (match.storageDetail || "") !== (i.storageDetail || "")
-      ) {
-        // Storage is already "Other" on both sides, but the actual detail
-        // text differs (or was never carried over in the first place) —
-        // sync it on its own even though the top-level storage value
-        // itself isn't changing.
-        fieldChanges.storageDetail = match.storageDetail || "";
-      }
-      // Category still only fills in if missing — never overwrites one you
-      // deliberately chose by hand, unlike gang/storage which should match
-      // the catalog template once something is actually linked to it.
-      if (!i.category && match.category) fieldChanges.category = match.category;
-      if (!!match.needsTransfer !== !!i.needsTransfer) {
-        fieldChanges.needsTransfer = !!match.needsTransfer;
-      }
-
+      const fieldChanges = catalogFieldChanges(i, match);
       if (Object.keys(fieldChanges).length > 0) {
         changes.push({ id: i.id, name: i.name, fieldChanges });
       }

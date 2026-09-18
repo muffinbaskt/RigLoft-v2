@@ -541,6 +541,43 @@ export function getEffectiveCatalogMatch(item, catalog) {
   return findCatalogMatch(item.name, catalog);
 }
 
+// The one place that decides what "sync this item from its catalog
+// entry" actually means — shared between Job Lists' per-job "Sync from
+// catalog" preview and the Catalog screen's global "Sync catalog links"
+// tool, so the two can't drift into checking different fields the way
+// the global tool used to (it only ever caught needsTransfer, leaving
+// gang/storage/category to silently go stale the same way needsTransfer
+// used to). Returns just the fields that actually differ, never the
+// item's other fields untouched, so callers can shallow-merge the result
+// onto the item.
+//
+// gang/storage overwrite outright once something's actually linked to a
+// catalog entry — that's the template it's supposed to follow. Category
+// only ever fills in if missing, never overwrites one chosen by hand,
+// since unlike gang/storage a category can legitimately be item-specific
+// even when linked to a shared catalog entry.
+export function catalogFieldChanges(item, catalogEntry) {
+  if (!catalogEntry) return {};
+  const fieldChanges = {};
+  if (catalogEntry.gang && catalogEntry.gang !== item.gang) fieldChanges.gang = catalogEntry.gang;
+  if (catalogEntry.storage && catalogEntry.storage !== item.storage) {
+    fieldChanges.storage = catalogEntry.storage;
+    if (catalogEntry.storage === "Other") {
+      fieldChanges.storageDetail = catalogEntry.storageDetail || "";
+    }
+  } else if (
+    catalogEntry.storage === "Other" &&
+    (catalogEntry.storageDetail || "") !== (item.storageDetail || "")
+  ) {
+    fieldChanges.storageDetail = catalogEntry.storageDetail || "";
+  }
+  if (!item.category && catalogEntry.category) fieldChanges.category = catalogEntry.category;
+  if (!!catalogEntry.needsTransfer !== !!item.needsTransfer) {
+    fieldChanges.needsTransfer = !!catalogEntry.needsTransfer;
+  }
+  return fieldChanges;
+}
+
 // Caches each item's catalog match keyed by the item object itself, not by
 // id — since untouched items keep the exact same object reference across
 // re-renders (React's normal immutable-update pattern), this means editing
