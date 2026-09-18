@@ -86,6 +86,9 @@ import {
   getEffectiveCatalogMatch,
   getCachedCatalogMatch,
   catalogFieldChanges,
+  catalogSyncedFieldsChanged,
+  applyCatalogEntryToJobs,
+  applyCatalogEntryToLoveLists,
   parseImportText,
   findOptionMatch,
   parseCatalogBulkText,
@@ -13190,6 +13193,49 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
     });
   };
 
+  // Catalog-screen edits only (not the item form's "add to catalog", which
+  // only ever creates new entries). The edit itself always saves right
+  // away; if it changed a field that linked items carry (gang/storage/
+  // category/transfer) and some of them are now out of step, offer to
+  // bring them along instead of leaving drift for a manual Sync later.
+  const [catalogPropagation, setCatalogPropagation] = useState(null); // { entry, jobCount, loveCount }
+  const requestSaveCatalogItem = async (item) => {
+    const old = catalog.find((c) => c.id === item.id);
+    saveCatalogItem(item);
+    if (!old || !catalogSyncedFieldsChanged(old, item)) return;
+    const jobCount = applyCatalogEntryToJobs(jobs, item).count;
+    let loveCount = 0;
+    const lResult = await getWithRetry(LOVE_LISTS_KEY);
+    if (lResult.ok && lResult.value) {
+      try {
+        loveCount = applyCatalogEntryToLoveLists(JSON.parse(lResult.value), item).count;
+      } catch {
+        // Unreadable Love Lists data just means we don't offer to touch them.
+      }
+    }
+    if (jobCount + loveCount > 0) setCatalogPropagation({ entry: item, jobCount, loveCount });
+  };
+  const confirmCatalogPropagation = async () => {
+    const { entry } = catalogPropagation;
+    setCatalogPropagation(null);
+    // Jobs go through normal state so the usual debounced, conflict-aware
+    // save handles them; Love Lists aren't mounted here, so they're a
+    // fresh read-modify-write (and never written back if the read failed).
+    setJobs((prev) => applyCatalogEntryToJobs(prev, entry).jobs);
+    const lResult = await getWithRetry(LOVE_LISTS_KEY);
+    if (lResult.ok && lResult.value) {
+      try {
+        const { lists, count } = applyCatalogEntryToLoveLists(JSON.parse(lResult.value), entry);
+        if (count > 0) {
+          const saved = await saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(lists));
+          if (!saved.ok) setSaveError(saved.error);
+        }
+      } catch {
+        // Unreadable Love Lists data — leave it alone rather than risk overwriting it.
+      }
+    }
+  };
+
   // Mirrors Love Lists' own learnCatalogAlias — teaches the catalog that
   // some raw text (an AI-scanned description, say) means a specific
   // catalog item, so future scans of similarly-worded lines auto-match
@@ -13917,12 +13963,28 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
         <CatalogModal
           catalog={catalog}
           isEditor={isEditor}
-          onSave={saveCatalogItem}
+          onSave={requestSaveCatalogItem}
           onBulkSave={bulkSaveCatalogItems}
           onDelete={deleteCatalogItem}
           onBulkSetCategory={bulkSetCatalogCategory}
           onBulkSetVendor={bulkSetCatalogVendor}
           onClose={() => setCatalogModalOpen(false)}
+        />
+      )}
+
+      {catalogPropagation && (
+        <ConfirmDelete
+          title="Update linked items?"
+          message={`You changed "${catalogPropagation.entry.name}". ${
+            catalogPropagation.jobCount
+          } linked item${catalogPropagation.jobCount === 1 ? "" : "s"} across your jobs${
+            catalogPropagation.loveCount > 0
+              ? ` and ${catalogPropagation.loveCount} in Love Lists`
+              : ""
+          } no longer match its gang, storage, category, or transfer setting. Update them to match? Cancel leaves them as they are (Sync catalog links can still fix them later). Sealed jobs are never changed.`}
+          confirmLabel="Update items"
+          onConfirm={confirmCatalogPropagation}
+          onCancel={() => setCatalogPropagation(null)}
         />
       )}
 

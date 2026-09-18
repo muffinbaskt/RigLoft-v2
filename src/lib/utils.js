@@ -578,6 +578,80 @@ export function catalogFieldChanges(item, catalogEntry) {
   return fieldChanges;
 }
 
+// True only when an edit touched a field that catalogFieldChanges actually
+// carries onto linked items — editing a vendor or name shouldn't prompt
+// anyone about syncing anything.
+export function catalogSyncedFieldsChanged(oldEntry, newEntry) {
+  return (
+    (oldEntry.gang || "") !== (newEntry.gang || "") ||
+    (oldEntry.storage || "") !== (newEntry.storage || "") ||
+    (oldEntry.storageDetail || "") !== (newEntry.storageDetail || "") ||
+    (oldEntry.category || "") !== (newEntry.category || "") ||
+    !!oldEntry.needsTransfer !== !!newEntry.needsTransfer
+  );
+}
+
+// Pure — used both to count what a catalog edit would touch (result
+// discarded) and to actually apply it. Skips sealed jobs, which are
+// read-only historical records. Returns the same jobs array untouched
+// when nothing changed, so callers can hand it straight to setState
+// without triggering a pointless save.
+export function applyCatalogEntryToJobs(jobs, entry) {
+  let count = 0;
+  const next = jobs.map((j) => {
+    if (j.sealed) return j;
+    const newCategories = new Set();
+    let jobCount = 0;
+    const items = (j.items || []).map((i) => {
+      if (i.catalogId !== entry.id) return i;
+      const changes = catalogFieldChanges(i, entry);
+      if (Object.keys(changes).length === 0) return i;
+      jobCount++;
+      if (changes.category) newCategories.add(changes.category);
+      return { ...i, ...changes };
+    });
+    if (jobCount === 0) return j;
+    count += jobCount;
+    return {
+      ...j,
+      items,
+      ...(newCategories.size > 0
+        ? { categoryOptions: [...new Set([...(j.categoryOptions || []), ...newCategories])] }
+        : {}),
+      activityLog: [
+        {
+          id: uniqueId(),
+          time: timeStamp(),
+          message: `Catalog change to "${entry.name}" synced to ${jobCount} item${jobCount === 1 ? "" : "s"}`,
+        },
+        ...(j.activityLog || []),
+      ].slice(0, 50),
+    };
+  });
+  return { jobs: count > 0 ? next : jobs, count };
+}
+
+// Love List items have no gang/category concept, so those two are dropped
+// from the diff rather than added as fields nothing reads.
+export function applyCatalogEntryToLoveLists(lists, entry) {
+  let count = 0;
+  const next = lists.map((l) => {
+    let listCount = 0;
+    const items = (l.items || []).map((i) => {
+      if (i.catalogId !== entry.id) return i;
+      // eslint-disable-next-line no-unused-vars
+      const { gang, category, ...changes } = catalogFieldChanges(i, entry);
+      if (Object.keys(changes).length === 0) return i;
+      listCount++;
+      return { ...i, ...changes };
+    });
+    if (listCount === 0) return l;
+    count += listCount;
+    return { ...l, items };
+  });
+  return { lists: count > 0 ? next : lists, count };
+}
+
 // Caches each item's catalog match keyed by the item object itself, not by
 // id — since untouched items keep the exact same object reference across
 // re-renders (React's normal immutable-update pattern), this means editing
