@@ -87,6 +87,7 @@ import {
   getCachedCatalogMatch,
   catalogFieldChanges,
   catalogSyncedFieldsChanged,
+  unlinkCatalogEntry,
   applyCatalogEntryToJobs,
   applyCatalogEntryToLoveLists,
   parseImportText,
@@ -216,6 +217,7 @@ import {
   syncSmesIntoRegistry,
   markToolsTransferred,
   markToolsNeedTransfer,
+  clearToolsNeedTransfer,
   toolStatusLabel,
   isToolCandidate,
   parseSmeSerialLines,
@@ -2608,6 +2610,12 @@ function CatalogModal({
   // despite a clean name-match gets linked here in one pass, across every
   // job and every Love List at once — instead of reopening each one by
   // hand just to hit Save.
+  // A catalogId pointing at an entry that's since been deleted isn't a
+  // real link — treat it as unlinked so the passes below re-match it by name
+  // instead of skipping it forever.
+  const catalogIdSet = new Set(catalog.map((c) => c.id));
+  const hasLiveLink = (i) => !!i.catalogId && catalogIdSet.has(i.catalogId);
+
   const syncCatalogLinks = async () => {
     setSyncing(true);
     let linked = 0;
@@ -2637,7 +2645,7 @@ function CatalogModal({
           // "Sync from catalog" preview already does on apply).
           const newCategoryNames = new Set();
           const nextItems = (j.items || []).map((i) => {
-            if (i.catalogId) {
+            if (hasLiveLink(i)) {
               const linkedCatalogItem = catalog.find((c) => c.id === i.catalogId);
               const fieldChanges = catalogFieldChanges(i, linkedCatalogItem);
               if (Object.keys(fieldChanges).length > 0) {
@@ -2685,7 +2693,7 @@ function CatalogModal({
             // those two back out so a sync here never adds fields the Love
             // Lists UI never reads, even though catalogFieldChanges would
             // otherwise happily compute them from the catalog entry.
-            if (i.catalogId) {
+            if (hasLiveLink(i)) {
               const linkedCatalogItem = catalog.find((c) => c.id === i.catalogId);
               const { gang, category, ...fieldChanges } = catalogFieldChanges(i, linkedCatalogItem);
               if (Object.keys(fieldChanges).length > 0) {
@@ -2717,7 +2725,7 @@ function CatalogModal({
         const nextEntries = archiveEntries.map((e) => ({
           ...e,
           items: (e.items || []).map((i) => {
-            if (i.catalogId) return i;
+            if (hasLiveLink(i)) return i;
             checked++;
             const match = i.name && i.name.trim() ? findCatalogMatch(i.name, catalog) : null;
             if (match) {
@@ -2810,7 +2818,7 @@ function CatalogModal({
       if (jResult.ok && jResult.value) {
         JSON.parse(jResult.value).forEach((j) => {
           (j.items || []).forEach((i) => {
-            if (!i.catalogId && i.name && i.name.trim()) {
+            if (!hasLiveLink(i) && i.name && i.name.trim()) {
               rows.push({ source: "job", targetId: j.id, targetLabel: j.name, itemId: i.id, itemName: i.name });
             }
           });
@@ -2819,7 +2827,7 @@ function CatalogModal({
       if (lResult.ok && lResult.value) {
         JSON.parse(lResult.value).forEach((l) => {
           (l.items || []).forEach((i) => {
-            if (!i.catalogId && i.name && i.name.trim()) {
+            if (!hasLiveLink(i) && i.name && i.name.trim()) {
               rows.push({
                 source: "love_list",
                 targetId: l.id,
@@ -2834,7 +2842,7 @@ function CatalogModal({
       if (aResult.ok && aResult.value) {
         JSON.parse(aResult.value).forEach((e) => {
           (e.items || []).forEach((i) => {
-            if (!i.catalogId && i.name && i.name.trim()) {
+            if (!hasLiveLink(i) && i.name && i.name.trim()) {
               rows.push({
                 source: "archive",
                 targetId: e.id,
@@ -3310,7 +3318,7 @@ function CatalogModal({
       {deleteTarget && (
         <ConfirmDelete
           title="Remove catalog item?"
-          message={`"${deleteTarget.name}" will be removed from your catalog. Items already added to jobs are unaffected.`}
+          message={`"${deleteTarget.name}" will be removed from your catalog. Items already added to jobs or Love Lists stay, but are unlinked from it (their other details are unchanged).`}
           onConfirm={() => {
             onDelete(deleteTarget.id);
             setDeleteTarget(null);
@@ -9428,6 +9436,7 @@ function JobInventory({
   onSyncToolsFromItem,
   onMarkToolsFromTransfer,
   onMarkToolsFromShipWithoutTransfer,
+  onClearToolsNeedTransfer,
   onOpenCatalog,
 }) {
   // A sealed job behaves exactly like browse-only mode, regardless of
@@ -9571,9 +9580,7 @@ function JobInventory({
       // Respects a manual catalog link first (from the item form's "Choose
       // catalog item"), falling back to automatic name-matching otherwise —
       // same priority the item edit form itself uses.
-      const match = i.catalogId
-        ? catalog.find((c) => c.id === i.catalogId)
-        : findCatalogMatch(i.name, catalog);
+      const match = getEffectiveCatalogMatch(i, catalog);
       if (!match) return;
 
       const fieldChanges = catalogFieldChanges(i, match);
@@ -9739,6 +9746,23 @@ function JobInventory({
         ...prevJob.activityLog,
       ].slice(0, 50),
     }));
+    // Take the needs_transfer flag back off tools this shipment flagged —
+    // unless another still-shipped container holds an un-transferred portion
+    // of the same item, in which case that shipment is still why it's flagged.
+    if (onClearToolsNeedTransfer) {
+      const smeNumbers = items
+        .filter((i) => {
+          if (!i.needsTransfer) return false;
+          if (!(i.containers || []).some((c) => c.name === containerName)) return false;
+          if ((i.transferredContainers || []).includes(containerName)) return false;
+          const stillShippedUntransferred = (i.shippedContainers || []).filter(
+            (n) => n !== containerName && !(i.transferredContainers || []).includes(n)
+          );
+          return stillShippedUntransferred.length === 0;
+        })
+        .flatMap((i) => i.serials || []);
+      if (smeNumbers.length > 0) onClearToolsNeedTransfer(smeNumbers);
+    }
   };
 
   const matchesProcFilter = (item) => {
@@ -13327,12 +13351,41 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
     }
   };
 
+  // Undo of markToolsFromShipWithoutTransfer — un-shipping a container
+  // takes the needs_transfer flag back off the tools it had flagged.
+  const clearToolsFromUnship = (smeNumbers) => {
+    if (!smeNumbers || smeNumbers.length === 0) return;
+    const next = clearToolsNeedTransfer(toolsRef.current, smeNumbers);
+    if (next !== toolsRef.current) {
+      toolsRef.current = next;
+      setTools(next);
+      saveWithRetry(TOOLS_KEY, JSON.stringify(next)).catch(() => {});
+    }
+  };
+
   const bulkSaveCatalogItems = (items) => {
     setCatalog((prev) => [...prev, ...items]);
   };
 
-  const deleteCatalogItem = (id) => {
+  const deleteCatalogItem = async (id) => {
     setCatalog((prev) => prev.filter((c) => c.id !== id));
+    // Items linked to the deleted entry are unlinked rather than left
+    // pointing at a dead id. Jobs go through normal state (conflict-aware
+    // save); Love Lists aren't mounted here, so a fresh read-modify-write
+    // that's skipped if the read fails.
+    setJobs((prev) => unlinkCatalogEntry(prev, id).groups);
+    const lResult = await getWithRetry(LOVE_LISTS_KEY);
+    if (lResult.ok && lResult.value) {
+      try {
+        const { groups, count } = unlinkCatalogEntry(JSON.parse(lResult.value), id);
+        if (count > 0) {
+          const saved = await saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(groups));
+          if (!saved.ok) setSaveError(saved.error);
+        }
+      } catch {
+        // Unreadable Love Lists data — leave it alone rather than risk overwriting it.
+      }
+    }
   };
 
   const bulkSetCatalogCategory = (ids, category) => {
@@ -13955,6 +14008,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           onSyncToolsFromItem={syncToolsFromJobItem}
           onMarkToolsFromTransfer={markToolsFromTransfer}
           onMarkToolsFromShipWithoutTransfer={markToolsFromShipWithoutTransfer}
+          onClearToolsNeedTransfer={clearToolsFromUnship}
           onOpenCatalog={() => setCatalogModalOpen(true)}
         />
       )}

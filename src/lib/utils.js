@@ -536,9 +536,35 @@ export function findCatalogMatch(name, catalog) {
 // always wins over automatic name-matching.
 export function getEffectiveCatalogMatch(item, catalog) {
   if (item.catalogId) {
-    return catalog.find((c) => c.id === item.catalogId) || null;
+    const linked = catalog.find((c) => c.id === item.catalogId);
+    if (linked) return linked;
+    // A catalogId pointing at an entry that no longer exists (deleted)
+    // isn't a link — fall through to name matching instead of leaving the
+    // item permanently matchless.
   }
   return findCatalogMatch(item.name, catalog);
+}
+
+// Clears catalogId from every item (in jobs or Love Lists — both are
+// { items: [] } groups) linked to a catalog entry that's being deleted, so
+// nothing is left pointing at a dead id. Skips sealed jobs (read-only
+// records; a dead link there is harmless now that getEffectiveCatalogMatch
+// ignores it). Returns the same array untouched when nothing matched.
+export function unlinkCatalogEntry(groups, catalogId) {
+  let count = 0;
+  const next = groups.map((g) => {
+    if (g.sealed) return g;
+    let groupCount = 0;
+    const items = (g.items || []).map((i) => {
+      if (i.catalogId !== catalogId) return i;
+      groupCount++;
+      return { ...i, catalogId: null };
+    });
+    if (groupCount === 0) return g;
+    count += groupCount;
+    return { ...g, items };
+  });
+  return { groups: count > 0 ? next : groups, count };
 }
 
 // The one place that decides what "sync this item from its catalog

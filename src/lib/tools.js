@@ -244,9 +244,34 @@ export function markToolsNeedTransfer(currentTools, smeNumbers) {
     const existing = tools[idx];
     if (existing.status === "on_job" || existing.status === "needs_transfer") return;
     tools[idx] = logToolEvent(
-      { ...existing, status: "needs_transfer" },
+      { ...existing, status: "needs_transfer", preTransferStatus: existing.status },
       "needs_transfer",
       "Shipped without being transferred — flagged as needing transfer"
+    );
+  });
+
+  return tools;
+}
+
+// The undo for markToolsNeedTransfer — when a container is un-shipped, the
+// tools it flagged go back to whatever they were before (remembered in
+// preTransferStatus; "staged" if that's missing, e.g. flagged before that
+// field existed). Only touches tools still sitting in needs_transfer, so a
+// tool that's since been transferred, retired, or edited by hand is left alone.
+export function clearToolsNeedTransfer(currentTools, smeNumbers) {
+  let tools = [...currentTools];
+  const cleanNumbers = [...new Set(smeNumbers.map((s) => (s || "").trim()).filter(Boolean))];
+
+  cleanNumbers.forEach((sme) => {
+    const idx = tools.findIndex((t) => t.sme === sme);
+    if (idx === -1) return;
+    const existing = tools[idx];
+    if (existing.status !== "needs_transfer") return;
+    const { preTransferStatus, ...rest } = existing;
+    tools[idx] = logToolEvent(
+      { ...rest, status: preTransferStatus || "staged" },
+      "unshipped",
+      "Container un-shipped — no longer flagged as needing transfer"
     );
   });
 
