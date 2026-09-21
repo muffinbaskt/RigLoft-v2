@@ -86,6 +86,8 @@ import {
   findCatalogMatch,
   getEffectiveCatalogMatch,
   getCachedCatalogMatch,
+  findScannedLineMatch,
+  withLearnedAlias,
   catalogFieldChanges,
   catalogSyncedFieldsChanged,
   unlinkCatalogEntry,
@@ -13424,16 +13426,9 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   // defeat the entire point of teaching it in the first place.
   const learnCatalogAliasForJobs = (catalogId, aliasText) => {
     if (!catalogId || !aliasText || !aliasText.trim()) return;
-    const normAlias = normalizeText(aliasText.trim());
     setCatalog((prev) => {
-      const next = prev.map((c) => {
-        if (c.id !== catalogId) return c;
-        if (normalizeText(c.name) === normAlias) return c; // matches the real name already
-        const existing = c.aliases || [];
-        if (existing.some((a) => normalizeText(a) === normAlias)) return c; // already known
-        return { ...c, aliases: [...existing, aliasText.trim()] };
-      });
-      saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
+      const next = withLearnedAlias(prev, catalogId, aliasText);
+      if (next !== prev) saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
       return next;
     });
   };
@@ -19836,16 +19831,9 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   // right item with real confidence instead of guessing from scratch.
   const learnCatalogAlias = (catalogId, aliasText) => {
     if (!isEditor || !catalogId || !aliasText || !aliasText.trim()) return;
-    const normAlias = normalizeText(aliasText.trim());
     setCatalog((prev) => {
-      const next = prev.map((c) => {
-        if (c.id !== catalogId) return c;
-        if (normalizeText(c.name) === normAlias) return c; // matches the real name already
-        const existing = c.aliases || [];
-        if (existing.some((a) => normalizeText(a) === normAlias)) return c; // already known
-        return { ...c, aliases: [...existing, aliasText.trim()] };
-      });
-      saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
+      const next = withLearnedAlias(prev, catalogId, aliasText);
+      if (next !== prev) saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
       return next;
     });
   };
@@ -20809,16 +20797,9 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
 
   const learnAlias = (catalogId, aliasText) => {
     if (!catalogId || !aliasText || !aliasText.trim()) return;
-    const normAlias = normalizeText(aliasText.trim());
     setCatalog((prev) => {
-      const next = prev.map((c) => {
-        if (c.id !== catalogId) return c;
-        if (normalizeText(c.name) === normAlias) return c;
-        const existing = c.aliases || [];
-        if (existing.some((a) => normalizeText(a) === normAlias)) return c;
-        return { ...c, aliases: [...existing, aliasText.trim()] };
-      });
-      saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
+      const next = withLearnedAlias(prev, catalogId, aliasText);
+      if (next !== prev) saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
       return next;
     });
   };
@@ -22047,15 +22028,8 @@ function ReceiptArchive({ onGoHome }) {
   // instead of needing a manual link again.
   const learnAlias = (catalogId, aliasText) => {
     if (!catalogId || !aliasText || !aliasText.trim()) return;
-    const normAlias = normalizeText(aliasText.trim());
-    const next = catalogRef.current.map((c) => {
-      if (c.id !== catalogId) return c;
-      if (normalizeText(c.name) === normAlias) return c;
-      const existing = c.aliases || [];
-      if (existing.some((a) => normalizeText(a) === normAlias)) return c;
-      return { ...c, aliases: [...existing, aliasText.trim()] };
-    });
-    saveCatalog(next);
+    const next = withLearnedAlias(catalogRef.current, catalogId, aliasText);
+    if (next !== catalogRef.current) saveCatalog(next);
   };
 
   const scanOneToArchive = async (file) => {
@@ -22126,7 +22100,7 @@ function ReceiptArchive({ onGoHome }) {
       // always "fixed" it.
       const remembered = nameMemory[normalizeText(rawName)];
       const effectiveName = remembered || rawName;
-      const match = effectiveName.trim() ? findCatalogMatch(effectiveName, matchCatalog) : null;
+      const match = findScannedLineMatch(rawName, effectiveName, matchCatalog);
       return {
         id: uniqueId(),
         rawName,
@@ -24376,7 +24350,7 @@ function ReceivingApp({ onGoHome }) {
       // match.
       const remembered = nameMemory[normalizeText(rawName)];
       const suggestedName = remembered || rawName;
-      const match = findCatalogMatch(suggestedName, catalog);
+      const match = findScannedLineMatch(rawName, suggestedName, catalog);
       // The catalog match drives storage/gang/category defaults, but
       // never the display name itself — plenty of catalog entries are
       // shared across multiple real variants (different sizes sharing
@@ -24533,16 +24507,9 @@ function ReceivingApp({ onGoHome }) {
   // a manual link again.
   const learnAlias = (catalogId, aliasText) => {
     if (!catalogId || !aliasText || !aliasText.trim()) return;
-    const normAlias = normalizeText(aliasText.trim());
     setCatalog((prev) => {
-      const next = prev.map((c) => {
-        if (c.id !== catalogId) return c;
-        if (normalizeText(c.name) === normAlias) return c;
-        const existing = c.aliases || [];
-        if (existing.some((a) => normalizeText(a) === normAlias)) return c;
-        return { ...c, aliases: [...existing, aliasText.trim()] };
-      });
-      saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
+      const next = withLearnedAlias(prev, catalogId, aliasText);
+      if (next !== prev) saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
       return next;
     });
   };

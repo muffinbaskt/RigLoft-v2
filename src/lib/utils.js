@@ -567,6 +567,49 @@ export function unlinkCatalogEntry(groups, catalogId) {
   return { groups: count > 0 ? next : groups, count };
 }
 
+// Matching for a freshly scanned receipt line. A learned alias is the exact
+// scan text ("MARKER PAINTSTIKMARKAL") someone once linked by hand, so it has
+// to be looked up by that raw text: checking it against the corrected name
+// ("Black Paint Stick") can never hit it, which is why a link you made by
+// hand kept coming back as "No catalog match" on the next receipt. Falls
+// back to matching the corrected name, which is what catches a part with no
+// learned alias yet.
+export function findScannedLineMatch(rawName, effectiveName, catalog) {
+  const normRaw = normalizeText(rawName || "");
+  if (normRaw) {
+    const learned = catalog.find((c) => (c.aliases || []).some((a) => normalizeText(a) === normRaw));
+    if (learned) return learned;
+  }
+  return effectiveName && effectiveName.trim() ? findCatalogMatch(effectiveName, catalog) : null;
+}
+
+// Teaches the catalog that some text means a specific entry. An alias
+// belongs to exactly ONE entry, so it is taken off any other entry that
+// held it: lookup returns the first entry in catalog order that has it, so
+// leaving the old one in place meant re-linking to the right entry still
+// lost to the wrong one on every later scan. Returns the same array when
+// nothing changed, so callers can skip saving.
+export function withLearnedAlias(catalog, catalogId, aliasText) {
+  const alias = (aliasText || "").trim();
+  if (!catalogId || !alias) return catalog;
+  const normAlias = normalizeText(alias);
+  if (!normAlias) return catalog;
+  let changed = false;
+  const next = catalog.map((c) => {
+    const existing = c.aliases || [];
+    const holds = existing.some((a) => normalizeText(a) === normAlias);
+    if (c.id === catalogId) {
+      if (holds || normalizeText(c.name) === normAlias) return c; // already covered
+      changed = true;
+      return { ...c, aliases: [...existing, alias] };
+    }
+    if (!holds) return c;
+    changed = true;
+    return { ...c, aliases: existing.filter((a) => normalizeText(a) !== normAlias) };
+  });
+  return changed ? next : catalog;
+}
+
 // The one place that decides what "sync this item from its catalog
 // entry" actually means — shared between Job Lists' per-job "Sync from
 // catalog" preview and the Catalog screen's global "Sync catalog links"
