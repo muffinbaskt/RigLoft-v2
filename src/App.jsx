@@ -186,6 +186,9 @@ import {
   maybeAutoBackup,
   downloadLoveListsBackupFile,
   maybeAutoBackupLoveLists,
+  downloadArchiveBackupFile,
+  maybeAutoBackupArchive,
+  parseArchiveBackup,
 } from "./lib/backup";
 import {
   JOBS_KEY,
@@ -21858,40 +21861,106 @@ function ReceiptArchive({ onGoHome }) {
   const fileInputRef = useRef(null);
   const nameDebounceTimers = useRef({});
 
+  // Load failure must never look like "nothing archived yet": the next scan
+  // or edit would save that empty list over every real receipt. Same guard
+  // Job Lists and Love Lists have — nothing is written until a load succeeds.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const loadFailedRef = useRef(false);
+  const [restoreError, setRestoreError] = useState(null);
+  const [restorePending, setRestorePending] = useState(null); // { entries, exportedAt }
+  const [backupNotice, setBackupNotice] = useState(null);
+  const backupNoticeTimer = useRef(null);
+  const restoreInputRef = useRef(null);
+
+  const loadAll = async () => {
+    setLoading(true);
+    setLoadFailed(false);
+    loadFailedRef.current = false;
+    try {
+      const [eResult, cResult, nResult, tResult] = await Promise.all([
+        getWithRetry(RECEIPT_ARCHIVE_KEY),
+        getWithRetry(CATALOG_KEY),
+        getWithRetry(RECEIVING_NAME_MEMORY_KEY),
+        getWithRetry(TOOLS_KEY),
+      ]);
+      if (!eResult.ok) {
+        loadFailedRef.current = true;
+        setLoadFailed(true);
+        setLoading(false);
+        return;
+      }
+      if (eResult.value) {
+        const loaded = JSON.parse(eResult.value);
+        setEntries(loaded);
+        entriesRef.current = loaded;
+        maybeAutoBackupArchive(loaded);
+      }
+      if (cResult.ok && cResult.value) {
+        const loadedCatalog = JSON.parse(cResult.value);
+        setCatalog(loadedCatalog);
+        catalogRef.current = loadedCatalog;
+      }
+      if (nResult.ok && nResult.value) setNameMemory(JSON.parse(nResult.value));
+      if (tResult.ok && tResult.value) {
+        const loadedTools = JSON.parse(tResult.value);
+        setTools(loadedTools);
+        toolsRef.current = loadedTools;
+      }
+    } catch {}
+    setLoading(false);
+  };
+
   useEffect(() => {
-    (async () => {
-      try {
-        const [eResult, cResult, nResult, tResult] = await Promise.all([
-          getWithRetry(RECEIPT_ARCHIVE_KEY),
-          getWithRetry(CATALOG_KEY),
-          getWithRetry(RECEIVING_NAME_MEMORY_KEY),
-          getWithRetry(TOOLS_KEY),
-        ]);
-        if (eResult.ok && eResult.value) {
-          const loaded = JSON.parse(eResult.value);
-          setEntries(loaded);
-          entriesRef.current = loaded;
-        }
-        if (cResult.ok && cResult.value) {
-          const loadedCatalog = JSON.parse(cResult.value);
-          setCatalog(loadedCatalog);
-          catalogRef.current = loadedCatalog;
-        }
-        if (nResult.ok && nResult.value) setNameMemory(JSON.parse(nResult.value));
-        if (tResult.ok && tResult.value) {
-          const loadedTools = JSON.parse(tResult.value);
-          setTools(loadedTools);
-          toolsRef.current = loadedTools;
-        }
-      } catch {}
-      setLoading(false);
-    })();
+    loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const saveEntries = (next) => {
+    if (loadFailedRef.current) return;
     entriesRef.current = next;
     setEntries(next);
     saveWithRetry(RECEIPT_ARCHIVE_KEY, JSON.stringify(next)).catch(() => {});
+    maybeAutoBackupArchive(next);
+  };
+
+  const showBackupNotice = (message) => {
+    setBackupNotice(message);
+    if (backupNoticeTimer.current) clearTimeout(backupNoticeTimer.current);
+    backupNoticeTimer.current = setTimeout(() => setBackupNotice(null), 4000);
+  };
+
+  const backUpNow = async () => {
+    const ok = await downloadArchiveBackupFile(entriesRef.current, { force: true });
+    const n = entriesRef.current.length;
+    showBackupNotice(ok ? `✅ Backup saved (${n} receipt${n === 1 ? "" : "s"})` : "Couldn't create the backup file");
+  };
+
+  const handleRestoreFileChosen = (file) => {
+    setRestoreError(null);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = parseArchiveBackup(e.target.result);
+      if (!result.ok) {
+        setRestoreError(result.error);
+        return;
+      }
+      setRestorePending({ entries: result.entries, exportedAt: result.exportedAt });
+    };
+    reader.onerror = () => setRestoreError("Couldn't read that file off the device.");
+    reader.readAsText(file);
+  };
+
+  // Restoring replaces the whole archive, so the current one is saved to a
+  // file first — a restore can then always be undone.
+  const confirmRestore = async () => {
+    if (!restorePending) return;
+    const incoming = restorePending.entries;
+    setRestorePending(null);
+    if (entriesRef.current.length > 0) {
+      await downloadArchiveBackupFile(entriesRef.current, { force: true, label: "receipt-archive-before-restore" });
+    }
+    saveEntries(incoming);
+    showBackupNotice(`✅ Restored ${incoming.length} receipt${incoming.length === 1 ? "" : "s"}`);
   };
 
   const saveTools = (next) => {
@@ -22301,7 +22370,36 @@ function ReceiptArchive({ onGoHome }) {
   };
 
   if (loading) {
+    if (loadFailed) {
     return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center px-4">
+        <div className="max-w-sm text-center">
+          <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-700/40 flex items-center justify-center mx-auto mb-4">
+            <X className="w-6 h-6 text-red-400" />
+          </div>
+          <h2 className="font-semibold text-slate-100 mb-2">Couldn't load your Receipt Archive</h2>
+          <p className="text-sm text-slate-500 mb-5">
+            To protect what's already saved, nothing will be changed or saved until this loads
+            successfully. This is usually a temporary connection issue.
+          </p>
+          <button
+            onClick={loadAll}
+            className="inline-flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-4 py-2 hover:bg-amber-400"
+          >
+            Try again
+          </button>
+          <button
+            onClick={onGoHome}
+            className="block mx-auto mt-3 text-xs text-slate-600 hover:text-slate-400 underline underline-offset-2"
+          >
+            Back to home
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
         <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
       </div>
@@ -22393,7 +22491,84 @@ function ReceiptArchive({ onGoHome }) {
               Delete all {filtered.length} shown
             </button>
           )}
+          <div className="ml-auto flex items-center gap-3">
+            <button
+              onClick={backUpNow}
+              disabled={entries.length === 0}
+              title="Saves a file with every receipt's text, line items, and photo links (not the photos themselves)"
+              className="text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2 disabled:opacity-40 disabled:no-underline"
+            >
+              Back up
+            </button>
+            <button
+              onClick={() => restoreInputRef.current?.click()}
+              className="text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2"
+            >
+              Restore
+            </button>
+            <input
+              ref={restoreInputRef}
+              type="file"
+              accept="application/json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files && e.target.files[0];
+                e.target.value = "";
+                if (file) handleRestoreFileChosen(file);
+              }}
+            />
+          </div>
         </div>
+        {backupNotice && <p className="text-xs text-emerald-400 mb-3">{backupNotice}</p>}
+        {restoreError && (
+          <p className="text-xs text-red-400 mb-3">
+            {restoreError}{" "}
+            <button onClick={() => setRestoreError(null)} className="underline text-red-300">
+              Dismiss
+            </button>
+          </p>
+        )}
+        {restorePending && (
+          <div
+            className="fixed inset-0 z-[95] flex items-center justify-center bg-black/70 px-4"
+            onClick={() => setRestorePending(null)}
+          >
+            <div
+              className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg p-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 className="text-slate-100 font-semibold text-base mb-2">Restore from backup?</h2>
+              <p className="text-sm text-slate-400 mb-1">
+                This file has {restorePending.entries.length} receipt
+                {restorePending.entries.length === 1 ? "" : "s"}
+                {restorePending.exportedAt
+                  ? `, backed up ${new Date(restorePending.exportedAt).toLocaleString()}`
+                  : ""}
+                .
+              </p>
+              <p className="text-sm text-slate-400 mb-4">
+                This replaces everything currently in the archive ({entries.length} receipt
+                {entries.length === 1 ? "" : "s"} right now). Your current archive is saved to a
+                file first, so you can undo this. Photos aren't part of the backup — they stay
+                wherever they're stored.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setRestorePending(null)}
+                  className="flex-1 text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmRestore}
+                  className="flex-1 text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+                >
+                  Restore
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {selectMode && (
           <div className="flex items-center justify-between mb-3 text-xs">
             <button

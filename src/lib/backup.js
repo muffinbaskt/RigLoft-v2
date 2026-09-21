@@ -266,3 +266,107 @@ export async function maybeAutoBackupLoveLists(loveLists) {
     loveListsAutoBackupInFlight = false;
   }
 }
+
+// Receipt Archive backup — same idea, same chosen folder as the others. The
+// archive keeps only a LINK to each receipt photo (the photos themselves live
+// in Supabase storage), so this file is just text and links: every receipt's
+// full transcription, line items, vendor/PO/date, and catalog links. It does
+// not contain the photo files, so it can't bring back a photo that's been
+// deleted from storage.
+export const AUTO_BACKUP_ARCHIVE_KEY = "warehub-last-auto-backup-archive";
+let lastArchiveBackupDownloadAt = 0;
+let archiveAutoBackupInFlight = false;
+
+// Writes to the chosen backup folder when it's set up and still permitted,
+// otherwise falls back to a normal download.
+async function writeBackupJson(filename, jsonText) {
+  if (FS_ACCESS_SUPPORTED) {
+    try {
+      const dirHandle = await loadBackupDirectoryHandle();
+      if (dirHandle) {
+        const permission = await dirHandle.queryPermission({ mode: "readwrite" });
+        if (permission === "granted") {
+          const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
+          const writable = await fileHandle.createWritable();
+          await writable.write(jsonText);
+          await writable.close();
+          return true;
+        }
+      }
+    } catch {
+      // Folder no longer accessible — fall back below rather than losing it
+    }
+  }
+  try {
+    const blob = new Blob([jsonText], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    // Revoking immediately can cancel the download in some browsers.
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function downloadArchiveBackupFile(entries, { force = false, label = "receipt-archive" } = {}) {
+  if (!force && Date.now() - lastArchiveBackupDownloadAt < 10000) return false;
+  const now = new Date();
+  const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `riggy-${label}-${stamp}.json`;
+  const payload = {
+    exportedFrom: "Riggy (Receipt Archive)",
+    exportedAt: now.toISOString(),
+    receiptArchive: entries,
+  };
+  lastArchiveBackupDownloadAt = Date.now();
+  return writeBackupJson(filename, JSON.stringify(payload, null, 2));
+}
+
+export async function maybeAutoBackupArchive(entries) {
+  if (!entries || entries.length === 0) return;
+  if (archiveAutoBackupInFlight) return;
+  try {
+    const last = localStorage.getItem(AUTO_BACKUP_ARCHIVE_KEY);
+    const lastTime = last ? new Date(last).getTime() : 0;
+    if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
+    archiveAutoBackupInFlight = true;
+    localStorage.setItem(AUTO_BACKUP_ARCHIVE_KEY, new Date().toISOString());
+    await downloadArchiveBackupFile(entries);
+  } catch {
+    // best effort only
+  } finally {
+    archiveAutoBackupInFlight = false;
+  }
+}
+
+// Validates a chosen backup file before anything is replaced. Refuses an
+// empty one, since restoring it would wipe the archive.
+export function parseArchiveBackup(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, error: "Couldn't read that file — make sure it's an unmodified Riggy backup." };
+  }
+  if (!parsed || !Array.isArray(parsed.receiptArchive)) {
+    return {
+      ok: false,
+      error:
+        'That file doesn\'t look like a Riggy Receipt Archive backup — make sure it\'s a "riggy-receipt-archive-...json" file, not a different export.',
+    };
+  }
+  const entries = parsed.receiptArchive;
+  if (entries.length === 0) {
+    return { ok: false, error: "That backup has no receipts in it, so restoring it would empty your archive. Nothing was changed." };
+  }
+  if (!entries.every((e) => e && typeof e === "object" && e.id != null)) {
+    return { ok: false, error: "That backup has entries that don't look like receipts, so it wasn't loaded." };
+  }
+  return { ok: true, entries, exportedAt: parsed.exportedAt || null };
+}
