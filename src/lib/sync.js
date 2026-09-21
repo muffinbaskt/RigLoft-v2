@@ -230,3 +230,140 @@ export function threeWayMergeJobs(baseJobs, mineJobs, theirJobs) {
 
   return { jobs: finalJobs, jobConflicts, itemConflicts };
 }
+
+// Love Lists version of the merge above. A Love List is a record with its
+// own fields (labels, archived flag, ...) plus `items`, `referenceImages`
+// and `referenceDocuments`, so it can't reuse threeWayMergeJobs (which
+// assumes a job's specific fields). Same rules: only one side touched
+// something → take it; both touched it the same → fine; both touched it
+// differently → a real conflict for a person to decide.
+//
+//  - items: item-level three-way merge (threeWayMergeList).
+//  - referenceImages / referenceDocuments: attachments. Kept if either side
+//    added them; dropped if either side deleted them, so a photo removed on
+//    one device doesn't reappear from the other's stale copy.
+//  - every other field: merged one field at a time, so one device
+//    archiving a list while the other edits its label isn't a conflict —
+//    only the same field changed to different values is.
+//  - a whole list deleted on one side but changed on the other is a conflict.
+const LOVE_LIST_ATTACHMENT_KEYS = ["referenceImages", "referenceDocuments"];
+const LOVE_LIST_NON_META_KEYS = ["items", ...LOVE_LIST_ATTACHMENT_KEYS];
+
+function attachmentKey(x) {
+  return x && typeof x === "object" ? `id:${String(x.id)}` : `v:${String(x)}`;
+}
+
+export function mergeAttachmentList(baseArr, mineArr, theirArr) {
+  const keyed = (arr) => new Map((arr || []).map((x) => [attachmentKey(x), x]));
+  const base = keyed(baseArr);
+  const mine = keyed(mineArr);
+  const theirs = keyed(theirArr);
+  const out = [];
+  const seen = new Set();
+  const consider = (k, x) => {
+    if (seen.has(k)) return;
+    seen.add(k);
+    const inBase = base.has(k);
+    const inMine = mine.has(k);
+    const inTheirs = theirs.has(k);
+    if (inMine && inTheirs) out.push(mine.get(k));
+    else if (!inBase) out.push(x); // added on one side only
+    // else: existed at base and one side removed it → removal wins
+  };
+  mine.forEach((x, k) => consider(k, x));
+  theirs.forEach((x, k) => consider(k, x));
+  return out;
+}
+
+export function threeWayMergeLoveLists(baseLists, mineLists, theirLists) {
+  const baseById = new Map((baseLists || []).map((l) => [String(l.id), l]));
+  const mineById = new Map((mineLists || []).map((l) => [String(l.id), l]));
+  const theirById = new Map((theirLists || []).map((l) => [String(l.id), l]));
+  // My order first (keeps the screen stable), then lists only they have.
+  const ids = [...new Set([...mineById.keys(), ...theirById.keys(), ...baseById.keys()])];
+
+  const lists = [];
+  const listConflicts = [];
+  const itemConflicts = [];
+
+  for (const id of ids) {
+    const base = baseById.get(id) || null;
+    const mine = mineById.get(id) || null;
+    const theirs = theirById.get(id) || null;
+    if (!mine && !theirs) continue;
+
+    if (!mine || !theirs) {
+      const present = mine || theirs;
+      if (!base) {
+        lists.push(present); // added on one side only
+        continue;
+      }
+      const presentChanged = !deepEqual(base, present);
+      if (!presentChanged) continue; // the other side deleted it and this side never touched it
+      lists.push(present); // deleted on one side but changed on the other — keep it, ask
+      listConflicts.push({
+        id,
+        kind: "list",
+        subtype: "deletion",
+        mine,
+        theirs,
+        base,
+      });
+      continue;
+    }
+
+    const itemMerge = threeWayMergeList(base ? base.items : [], mine.items, theirs.items);
+    itemMerge.conflicts.forEach((c) =>
+      itemConflicts.push({ listId: id, listName: loveListName(mine), ...c })
+    );
+
+    const merged = { ...mine };
+    const metaKeys = new Set([
+      ...Object.keys(base || {}),
+      ...Object.keys(mine),
+      ...Object.keys(theirs),
+    ]);
+    LOVE_LIST_NON_META_KEYS.forEach((k) => metaKeys.delete(k));
+    const conflictKeys = [];
+    for (const k of metaKeys) {
+      const b = base ? base[k] : undefined;
+      const m = mine[k];
+      const t = theirs[k];
+      const mineChanged = !deepEqual(b, m);
+      const theirsChanged = !deepEqual(b, t);
+      if (!theirsChanged) continue; // keep mine (already in `merged`)
+      if (!mineChanged || deepEqual(m, t)) {
+        if (t === undefined) delete merged[k];
+        else merged[k] = t;
+        continue;
+      }
+      conflictKeys.push(k); // both changed it, differently — mine stays tentatively
+    }
+    if (conflictKeys.length > 0) {
+      listConflicts.push({
+        id,
+        kind: "list",
+        subtype: "metadata",
+        keys: conflictKeys,
+        base: pickKeys(base, conflictKeys),
+        mine: pickKeys(mine, conflictKeys),
+        theirs: pickKeys(theirs, conflictKeys),
+        listName: loveListName(mine),
+      });
+    }
+
+    merged.items = itemMerge.merged;
+    LOVE_LIST_ATTACHMENT_KEYS.forEach((k) => {
+      const out = mergeAttachmentList(base && base[k], mine[k], theirs[k]);
+      if (out.length > 0 || mine[k] !== undefined || theirs[k] !== undefined) merged[k] = out;
+    });
+    lists.push(merged);
+  }
+
+  return { lists, listConflicts, itemConflicts };
+}
+
+function loveListName(list) {
+  if (!list) return "list";
+  return list.subJobLabel ? `${list.jobLabel} — ${list.subJobLabel}` : list.jobLabel || "list";
+}

@@ -133,7 +133,9 @@ import {
   pickKeys,
   unionById,
   threeWayMergeJobs,
+  threeWayMergeLoveLists,
 } from "./lib/sync";
+import { createSyncEngine, applyLoveListResolutions } from "./lib/syncEngine";
 import {
   LOVE_STATUSES,
   nextLoveStatus,
@@ -19585,14 +19587,16 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   const [showWorkerTasks, setShowWorkerTasks] = useState(false);
   const [tools, setTools] = useState([]);
   const toolsRef = useRef([]);
-  // Love Lists writes the whole list straight to the server on every edit
-  // (no conflict check, unlike Job Lists) — so a screen that's gone stale
-  // can silently overwrite another device's newer changes. These let the
-  // background check below notice a newer copy and pull it in, but only when
-  // nothing here is mid-save or was just edited.
-  const loveUpdatedAtRef = useRef(null);
-  const loveSavesInFlightRef = useRef(0);
-  const loveLastEditAtRef = useRef(0);
+  // Saving works like Job Lists: every save says "I last saw the server at
+  // time T", the server refuses if it has since changed, and the two
+  // versions are merged item by item instead of one overwriting the other;
+  // only a real collision asks a person. All of that lives in syncEngine
+  // (tested on its own with simulated devices) — this screen just feeds it
+  // edits. listsRef always holds the latest lists, since state alone lags
+  // behind rapid edits.
+  const listsRef = useRef([]);
+  const loveEngineRef = useRef(null);
+  const [loveMerge, setLoveMerge] = useState(null); // { lists, conflicts, theirsUpdatedAt, error? }
   const [remoteNotice, setRemoteNotice] = useState(null);
   const remoteNoticeTimer = useRef(null);
 
@@ -19614,8 +19618,9 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
         setLoading(false);
         return;
       }
-      loveUpdatedAtRef.current = result.updatedAt || null;
       if (result.value) loadedLists = JSON.parse(result.value);
+      listsRef.current = loadedLists;
+      loveEngineRef.current.seed(loadedLists, result.updatedAt);
       setLists(loadedLists);
     } catch {
       // corrupted stored data (not a read failure) — safe to start empty
@@ -19702,51 +19707,53 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
     } catch {}
   };
 
+  const showLoveNotice = (message) => {
+    setRemoteNotice(message);
+    if (remoteNoticeTimer.current) clearTimeout(remoteNoticeTimer.current);
+    remoteNoticeTimer.current = setTimeout(() => setRemoteNotice(null), 4000);
+  };
+
+  if (!loveEngineRef.current) {
+    loveEngineRef.current = createSyncEngine({
+      read: () => getWithRetry(LOVE_LISTS_KEY),
+      write: (json, expectedUpdatedAt) => saveWithRetry(LOVE_LISTS_KEY, json, expectedUpdatedAt),
+      peek: async () => {
+        const probe = await peekUpdatedAt([LOVE_LISTS_KEY]);
+        return { ok: probe.ok, updatedAt: probe.ok ? probe.map[LOVE_LISTS_KEY] || null : null };
+      },
+      merge: (base, mine, theirs) => {
+        const result = threeWayMergeLoveLists(base, mine, theirs);
+        return {
+          lists: result.lists,
+          conflicts: [
+            ...result.itemConflicts.map((c) => ({ ...c, kind: "item" })),
+            ...result.listConflicts,
+          ],
+        };
+      },
+      applyResolutions: applyLoveListResolutions,
+      getLocal: () => listsRef.current,
+      setLocal: (next) => {
+        listsRef.current = next;
+        setLists(next);
+      },
+      onPrompt: setLoveMerge,
+      onNotice: showLoveNotice,
+    });
+  }
+
   const updateLists = (updater) => {
     if (!isEditor || loadFailed) return;
-    setLists((prev) => {
-      const next = updater(prev);
-      loveSavesInFlightRef.current += 1;
-      loveLastEditAtRef.current = Date.now();
-      saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(next))
-        .then((saved) => {
-          if (saved && saved.ok) loveUpdatedAtRef.current = saved.updatedAt;
-        })
-        .catch(() => {})
-        .finally(() => {
-          loveSavesInFlightRef.current -= 1;
-        });
-      maybeAutoBackupLoveLists(next);
-      return next;
-    });
+    const next = updater(listsRef.current);
+    listsRef.current = next;
+    setLists(next);
+    maybeAutoBackupLoveLists(next);
+    loveEngineRef.current.edited();
   };
 
   const checkLoveListsForRemoteChanges = async () => {
     if (loading || loadFailed || (typeof navigator !== "undefined" && !navigator.onLine)) return;
-    const isBusy = () =>
-      loveSavesInFlightRef.current > 0 || Date.now() - loveLastEditAtRef.current < 8000;
-    if (isBusy()) return;
-    const peek = await peekUpdatedAt([LOVE_LISTS_KEY]);
-    if (!peek.ok || !peek.map[LOVE_LISTS_KEY]) return;
-    if (sameInstant(peek.map[LOVE_LISTS_KEY], loveUpdatedAtRef.current)) return;
-    const result = await getWithRetry(LOVE_LISTS_KEY, 2);
-    if (!result.ok || !result.value) return;
-    // Edited (or started saving) while that request was in flight — leave it.
-    if (isBusy()) return;
-    let parsed;
-    try {
-      parsed = JSON.parse(result.value);
-    } catch {
-      return;
-    }
-    // Same guard as a normal load: an unreadable/empty result is never
-    // swapped in over lists that are already on screen.
-    if (!Array.isArray(parsed) || parsed.length === 0) return;
-    loveUpdatedAtRef.current = result.updatedAt || null;
-    setLists(parsed);
-    setRemoteNotice("Updated from another device");
-    if (remoteNoticeTimer.current) clearTimeout(remoteNoticeTimer.current);
-    remoteNoticeTimer.current = setTimeout(() => setRemoteNotice(null), 4000);
+    await loveEngineRef.current.checkRemote();
   };
 
   useRemoteRefresh(checkLoveListsForRemoteChanges, { intervalMs: 30000 });
@@ -19936,6 +19943,80 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
     setActiveListId(null);
   };
 
+  const describeLoveItem = (item) =>
+    `${item.qty ?? "—"}${item.qtyUnit ? ` ${item.qtyUnit}` : ""} · ${loveStatusMeta(item.status).label}${
+      item.archived ? " · archived" : ""
+    }${item.notes ? ` · "${item.notes}"` : ""}`;
+  const describeLoveConflict = (c, side) => {
+    const v = c[side];
+    const who = side === "mine" ? "you" : "elsewhere";
+    if (c.kind === "item") return v === null ? `Deleted (by ${who})` : describeLoveItem(v);
+    if (c.subtype === "deletion") {
+      return v === null ? `Deleted (by ${who})` : `Keep this list${side === "mine" ? " (with your changes)" : ""}`;
+    }
+    return (c.keys || [])
+      .map((k) => `${k}: ${v[k] === undefined || v[k] === "" ? "(empty)" : JSON.stringify(v[k])}`)
+      .join(" · ");
+  };
+  const describeLoveConflictTitle = (c) => {
+    if (c.kind === "item") return `${c.listName} — ${(c.mine || c.theirs || c.base)?.name || "item"}`;
+    if (c.subtype === "deletion") return `List: ${listDisplayLabel(c.mine || c.theirs || c.base)}`;
+    return `List: ${c.listName}`;
+  };
+
+  const loveMergeModal = loveMerge && (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4 pt-8 pb-40">
+      <div className="bg-slate-900 border border-amber-600/50 rounded-lg w-full max-w-lg max-h-full flex flex-col">
+        <div className="px-5 py-4 border-b border-slate-800 shrink-0">
+          <h3 className="text-slate-100 font-semibold mb-1">A few things changed on both sides</h3>
+          <p className="text-xs text-slate-400">
+            Someone changed these Love Lists on another device while you were editing. Everything
+            else merged automatically. Only these {loveMerge.conflicts.length} need a decision:
+          </p>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+          {loveMerge.conflicts.map((c, idx) => (
+            <div key={idx} className="border border-slate-800 rounded-md p-3">
+              <p className="text-sm text-slate-100 font-semibold mb-2">{describeLoveConflictTitle(c)}</p>
+              <div className="space-y-1.5">
+                {["mine", "theirs"].map((side) => (
+                  <label key={side} className="flex items-start gap-2 text-xs cursor-pointer">
+                    <input
+                      type="radio"
+                      checked={c.resolution === side}
+                      onChange={() =>
+                        setLoveMerge((prev) => ({
+                          ...prev,
+                          conflicts: prev.conflicts.map((x, i) => (i === idx ? { ...x, resolution: side } : x)),
+                        }))
+                      }
+                      className="mt-0.5 accent-amber-500"
+                    />
+                    <span className="text-slate-300">
+                      <span className={`${side === "mine" ? "text-amber-400" : "text-sky-400"} font-medium`}>
+                        {side === "mine" ? "Your version: " : "Their version: "}
+                      </span>
+                      {describeLoveConflict(c, side)}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+          {loveMerge.error && <p className="text-xs text-red-400 mb-2">{loveMerge.error}</p>}
+          <button
+            onClick={() => loveEngineRef.current.submitResolutions(loveMerge.conflicts)}
+            className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+          >
+            Apply and sync
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -19981,6 +20062,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
           🔄 {remoteNotice}
         </div>
       )}
+      {loveMergeModal}
       <LoveListDetailPage
         list={activeList}
         catalog={catalog}
@@ -20010,6 +20092,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
           🔄 {remoteNotice}
         </div>
       )}
+      {loveMergeModal}
       <LoveListsDashboard
         lists={lists}
         isEditor={isEditor}
