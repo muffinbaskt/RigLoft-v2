@@ -173,6 +173,57 @@ export function buildSourceReceiptSnapshot(batch) {
   };
 }
 
+// An item can be backed by more than one receipt (a second delivery of the
+// same item, or two items merged together), so the full set lives in
+// `sourceReceipts`; `sourceReceipt` stays as the most recent one. Items
+// saved before this only have `sourceReceipt`, so reads go through
+// itemReceipts, which handles both.
+export function receiptKey(r) {
+  return r.photoPath || r.photoUrl || `${r.vendor || ""}|${r.receiptDate || ""}|${r.poNumber || ""}|${r.label || ""}`;
+}
+
+export function itemReceipts(item) {
+  if (item && Array.isArray(item.sourceReceipts) && item.sourceReceipts.length > 0) {
+    return item.sourceReceipts;
+  }
+  return item && item.sourceReceipt ? [item.sourceReceipt] : [];
+}
+
+// Combines receipt lists, keeping first-seen order and skipping true
+// duplicates (the same receipt photo carried over twice).
+export function unionReceipts(...lists) {
+  const seen = new Set();
+  const out = [];
+  lists.forEach((list) =>
+    (list || []).forEach((r) => {
+      if (!r) return;
+      const k = receiptKey(r);
+      if (seen.has(k)) return;
+      seen.add(k);
+      out.push(r);
+    })
+  );
+  return out;
+}
+
+// Fields to spread onto an item that just had another receipt applied to
+// it. Adds to what's already there instead of replacing it.
+export function withAddedReceipt(item, snapshot) {
+  if (!snapshot) return {};
+  return { sourceReceipt: snapshot, sourceReceipts: unionReceipts(itemReceipts(item), [snapshot]) };
+}
+
+// Fields for the item that survives a merge: every receipt from both
+// sides, not just one of them.
+export function mergedReceiptFields(target, source) {
+  const all = unionReceipts(itemReceipts(target), itemReceipts(source));
+  if (all.length === 0) return {};
+  return {
+    sourceReceipt: source.sourceReceipt || target.sourceReceipt || all[all.length - 1],
+    sourceReceipts: all,
+  };
+}
+
 export function applyReceiptLineToJob(job, line, catalog, batch) {
   const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
   const items = job.items || [];
@@ -231,7 +282,7 @@ export function applyReceiptLineToJob(job, line, catalog, batch) {
       // record just logged there would have nothing on this item pointing
       // back to find it.
       catalogId: line.catalogId || existing.catalogId,
-      sourceReceipt: buildSourceReceiptSnapshot(batch) || existing.sourceReceipt,
+      ...withAddedReceipt(existing, buildSourceReceiptSnapshot(batch)),
     };
     const nextItems = [...items];
     nextItems[idx] = updated;
@@ -314,7 +365,7 @@ export function applyReceiptLineToLoveList(list, line, catalog, batch) {
       // entry would have nothing on this item pointing back to find it,
       // even though the history itself is correctly logged.
       catalogId: line.catalogId || existing.catalogId,
-      sourceReceipt: buildSourceReceiptSnapshot(batch) || existing.sourceReceipt,
+      ...withAddedReceipt(existing, buildSourceReceiptSnapshot(batch)),
     };
     const nextItems = [...items];
     nextItems[idx] = updated;
@@ -432,7 +483,7 @@ export function mergeJobItems(items, sourceId, targetId) {
         // would otherwise vanish the moment the source item (which is
         // often deleted outright once fully merged) disappears, even
         // though some of its actual quantity is now sitting right here.
-        sourceReceipt: source.sourceReceipt || target.sourceReceipt,
+        ...mergedReceiptFields(target, source),
       };
     if (idx === sourceIdx)
       return {
@@ -475,7 +526,7 @@ export function mergeLoveListItems(items, sourceId, targetId) {
         // Same carry-over as the Job version — otherwise this reference
         // vanishes the moment the source item gets deleted outright,
         // even though some of its quantity now lives here.
-        sourceReceipt: source.sourceReceipt || target.sourceReceipt,
+        ...mergedReceiptFields(target, source),
       };
     if (idx === sourceIdx)
       return {

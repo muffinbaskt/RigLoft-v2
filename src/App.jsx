@@ -118,6 +118,7 @@ import {
   attachReceiptPhotoToJob,
   attachReceiptPhotoToLoveList,
   buildSourceReceiptSnapshot,
+  itemReceipts,
   applyReceiptLineToJob,
   applyReceiptLineToLoveList,
   mergeJobItems,
@@ -7753,7 +7754,7 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
             🏷️ Vendor
           </button>
         )}
-        {item.sourceReceipt && onViewReceipt && (
+        {itemReceipts(item).length > 0 && onViewReceipt && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -7761,7 +7762,7 @@ function ItemCard({ item, catalog = [], selectMode, selected, isEditor, workerTa
             }}
             className="text-xs rounded-full px-2.5 py-1 border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-600 flex items-center gap-1"
           >
-            🧾 Receipt
+            🧾 {itemReceipts(item).length > 1 ? `Receipts (${itemReceipts(item).length})` : "Receipt"}
           </button>
         )}
         {(() => {
@@ -9198,55 +9199,52 @@ function MergeItemModal({ item, items, onConfirm, onClose }) {
 // specific item — a self-contained snapshot rather than a live lookup,
 // so it still works even if the original Receiving history entry (or
 // archived receipt) it came from was since deleted or cleared.
-function SourceReceiptModal({ sourceReceipt, onClose }) {
+// One receipt's details and photos. Split out so each receipt on an item
+// can open its own photo viewer.
+function SourceReceiptBlock({ receipt, heading }) {
   const [viewingIndex, setViewingIndex] = useState(null);
-  const allPhotos = [sourceReceipt.photoUrl, ...(sourceReceipt.extraPhotoUrls || [])].filter(Boolean);
+  const allPhotos = [receipt.photoUrl, ...(receipt.extraPhotoUrls || [])].filter(Boolean);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5 max-h-[80vh] overflow-y-auto">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-slate-100 font-semibold text-base">
-            {sourceReceipt.label || sourceReceipt.vendor || "Receipt"}
-          </h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-200 shrink-0 ml-2">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <p className="text-xs text-slate-500 mb-4">
-          {[
-            sourceReceipt.vendor && sourceReceipt.label && `Vendor: ${sourceReceipt.vendor}`,
-            sourceReceipt.receiptDate && `Date: ${sourceReceipt.receiptDate}`,
-            sourceReceipt.poNumber && `PO: ${sourceReceipt.poNumber}`,
-          ]
-            .filter(Boolean)
-            .join(" · ") || "No further details recorded"}
+    <div>
+      {heading && (
+        <p className="text-sm text-slate-100 font-semibold mb-1">
+          {receipt.label || receipt.vendor || "Receipt"}
         </p>
-        {sourceReceipt.photoUrl ? (
-          <>
-            <button
-              onClick={() => setViewingIndex(0)}
-              className="w-full rounded-lg overflow-hidden border border-slate-800"
-            >
-              <img src={sourceReceipt.photoUrl} alt="Receipt" className="w-full max-h-64 object-cover" />
-            </button>
-            {(sourceReceipt.extraPhotoUrls || []).length > 0 && (
-              <div className="grid grid-cols-4 gap-1.5 mt-1.5">
-                {sourceReceipt.extraPhotoUrls.map((url, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setViewingIndex(i + 1)}
-                    className="rounded-md overflow-hidden border border-slate-800"
-                  >
-                    <img src={url} alt={`Page ${i + 2}`} className="w-full h-14 object-cover" />
-                  </button>
-                ))}
-              </div>
-            )}
-          </>
-        ) : (
-          <p className="text-sm text-slate-500 text-center py-6">No photo saved with this receipt.</p>
-        )}
-      </div>
+      )}
+      <p className="text-xs text-slate-500 mb-3">
+        {[
+          receipt.vendor && (receipt.label || !heading) && `Vendor: ${receipt.vendor}`,
+          receipt.receiptDate && `Date: ${receipt.receiptDate}`,
+          receipt.poNumber && `PO: ${receipt.poNumber}`,
+        ]
+          .filter(Boolean)
+          .join(" · ") || "No further details recorded"}
+      </p>
+      {receipt.photoUrl ? (
+        <>
+          <button
+            onClick={() => setViewingIndex(0)}
+            className="w-full rounded-lg overflow-hidden border border-slate-800"
+          >
+            <img src={receipt.photoUrl} alt="Receipt" className="w-full max-h-64 object-cover" />
+          </button>
+          {(receipt.extraPhotoUrls || []).length > 0 && (
+            <div className="grid grid-cols-4 gap-1.5 mt-1.5">
+              {receipt.extraPhotoUrls.map((url, i) => (
+                <button
+                  key={i}
+                  onClick={() => setViewingIndex(i + 1)}
+                  className="rounded-md overflow-hidden border border-slate-800"
+                >
+                  <img src={url} alt={`Page ${i + 2}`} className="w-full h-14 object-cover" />
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="text-sm text-slate-500 text-center py-6">No photo saved with this receipt.</p>
+      )}
       {viewingIndex !== null && (
         <PhotoLightbox
           photos={allPhotos.map((url) => ({ url, alt: "Receipt" }))}
@@ -9255,6 +9253,33 @@ function SourceReceiptModal({ sourceReceipt, onClose }) {
           onClose={() => setViewingIndex(null)}
         />
       )}
+    </div>
+  );
+}
+
+// `receipts` is everything backing one item (see itemReceipts) — an item can
+// carry several once deliveries or duplicate items have been merged together.
+function SourceReceiptModal({ receipts, onClose }) {
+  const many = receipts.length > 1;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5 max-h-[80vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-slate-100 font-semibold text-base">
+            {many ? `${receipts.length} receipts` : receipts[0].label || receipts[0].vendor || "Receipt"}
+          </h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200 shrink-0 ml-2">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="space-y-5">
+          {receipts.map((r, i) => (
+            <div key={i} className={many && i > 0 ? "pt-5 border-t border-slate-800" : ""}>
+              <SourceReceiptBlock receipt={r} heading={many} />
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -10210,8 +10235,9 @@ function JobInventory({
   };
 
   const handleViewReceipt = (item) => {
-    if (!item.sourceReceipt) return;
-    setViewingReceiptFor(item.sourceReceipt);
+    const receipts = itemReceipts(item);
+    if (receipts.length === 0) return;
+    setViewingReceiptFor(receipts);
   };
 
   const linkSubstitute = (item, targetItem, mode = "pooled") => {
@@ -11840,7 +11866,7 @@ function JobInventory({
         })()}
 
       {viewingReceiptFor && (
-        <SourceReceiptModal sourceReceipt={viewingReceiptFor} onClose={() => setViewingReceiptFor(null)} />
+        <SourceReceiptModal receipts={viewingReceiptFor} onClose={() => setViewingReceiptFor(null)} />
       )}
 
       {linkingSubstituteItem && (
@@ -16878,12 +16904,12 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                     🏷️ Vendor
                   </button>
                 )}
-                {item.sourceReceipt && (
+                {itemReceipts(item).length > 0 && (
                   <button
-                    onClick={() => setViewingReceiptFor(item.sourceReceipt)}
+                    onClick={() => setViewingReceiptFor(itemReceipts(item))}
                     className="text-xs rounded-full px-2 py-0.5 border border-slate-700 text-slate-500 hover:text-slate-300 hover:border-slate-600 mb-2 inline-flex items-center gap-1"
                   >
-                    🧾 Receipt
+                    🧾 {itemReceipts(item).length > 1 ? `Receipts (${itemReceipts(item).length})` : "Receipt"}
                   </button>
                 )}
                 {isEditor ? (
@@ -17501,7 +17527,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         })()}
 
       {viewingReceiptFor && (
-        <SourceReceiptModal sourceReceipt={viewingReceiptFor} onClose={() => setViewingReceiptFor(null)} />
+        <SourceReceiptModal receipts={viewingReceiptFor} onClose={() => setViewingReceiptFor(null)} />
       )}
     </div>
   );
