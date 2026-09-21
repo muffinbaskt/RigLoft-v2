@@ -12704,7 +12704,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
       setActiveJobId((prev) => (finalJobs.some((j) => j.id === prev) ? prev : finalJobs[0].id));
       changed = true;
     }
-    if (changed) showRemoteNotice("Updated from another device");
+    if (changed) showRemoteNotice("🔄 Updated from another device");
   };
 
   useRemoteRefresh(checkForRemoteChanges, { intervalMs: 30000 });
@@ -13671,6 +13671,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   const exportAllData = async () => {
     const ok = await downloadBackupFile(jobs, catalog, "manual-export", { force: true });
     if (!ok) setSaveError("Couldn't create the backup file");
+    else showRemoteNotice("✅ Backup saved");
   };
 
   const importAllData = (file) => {
@@ -13819,7 +13820,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
 
       {remoteNotice && (
         <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[60] bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-full px-3 py-2 shadow-lg">
-          🔄 {remoteNotice}
+          {remoteNotice}
         </div>
       )}
 
