@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useRemoteRefresh } from "./lib/useRemoteRefresh";
+import { useAppUpdate } from "./lib/useAppUpdate";
 import QRCode from "qrcode";
 import { supabase } from "./supabaseClient";
 import {
@@ -8437,7 +8438,6 @@ function JobPicker({
   onOpenWorkerTasks,
   onCheckForUpdate,
   onGoToLanding,
-  updateCheckMessage,
 }) {
   const [collapsed, setCollapsed] = useState({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -8552,11 +8552,6 @@ function JobPicker({
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      {updateCheckMessage && (
-        <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[90] bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-full px-4 py-2 shadow-lg">
-          {updateCheckMessage}
-        </div>
-      )}
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
         <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between flex-wrap gap-y-2">
           <div className="flex items-center gap-2.5">
@@ -12116,7 +12111,7 @@ function migrateCatalogFromStorage(catalog) {
   return catalog.map((c) => ({ ...c, gang: normalizeGangName(c.gang) }));
 }
 
-function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, onGoToLanding, initialAction }) {
+function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, onGoToLanding, onCheckForUpdate, initialAction }) {
   const [jobs, setJobs] = useState([]);
   const [activeJobId, setActiveJobId] = useState(null);
   const [showPicker, setShowPicker] = useState(true);
@@ -12128,9 +12123,6 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   const [importAllError, setImportAllError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadingSlow, setLoadingSlow] = useState(false);
-  const [updateAvailable, setUpdateAvailable] = useState(false);
-  const [applyingUpdate, setApplyingUpdate] = useState(false);
-  const waitingWorkerRef = useRef(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [retryTick, setRetryTick] = useState(0);
@@ -12368,111 +12360,6 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [isEditor]);
-
-  // Detects when a new version of the app has finished downloading in the
-  // background and is sitting ready — instead of silently waiting for every
-  // tab to close before it takes over, this surfaces a button so you can
-  // apply it on demand.
-  const swRegistrationRef = useRef(null);
-  const [updateCheckMessage, setUpdateCheckMessage] = useState(null);
-
-  useEffect(() => {
-    if (!("serviceWorker" in navigator)) return;
-
-    let reloadedOnce = false;
-    const onControllerChange = () => {
-      if (reloadedOnce) return;
-      reloadedOnce = true;
-      window.location.reload();
-    };
-    navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
-
-    navigator.serviceWorker.getRegistration().then((registration) => {
-      if (!registration) return;
-      swRegistrationRef.current = registration;
-
-      // An update may already be sitting there waiting from before this
-      // page load even happened.
-      if (registration.waiting && navigator.serviceWorker.controller) {
-        waitingWorkerRef.current = registration.waiting;
-        setUpdateAvailable(true);
-      }
-
-      registration.addEventListener("updatefound", () => {
-        const newWorker = registration.installing;
-        if (!newWorker) return;
-        newWorker.addEventListener("statechange", () => {
-          if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
-            waitingWorkerRef.current = newWorker;
-            setUpdateAvailable(true);
-          }
-        });
-      });
-
-      // Check right away, then keep checking — otherwise this only ever
-      // runs once at initial load, and a version deployed later would sit
-      // unnoticed until the next full page reload.
-      registration.update().catch(() => {});
-    });
-
-    const recheck = () => {
-      if (swRegistrationRef.current) swRegistrationRef.current.update().catch(() => {});
-    };
-    const onVisible = () => {
-      if (document.visibilityState === "visible") recheck();
-    };
-    const interval = setInterval(recheck, 30 * 60 * 1000); // every 30 minutes
-    document.addEventListener("visibilitychange", onVisible);
-
-    return () => {
-      navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange);
-      document.removeEventListener("visibilitychange", onVisible);
-      clearInterval(interval);
-    };
-  }, []);
-
-  const applyUpdate = () => {
-    setApplyingUpdate(true);
-    if (waitingWorkerRef.current) {
-      waitingWorkerRef.current.postMessage({ type: "SKIP_WAITING" });
-      // Normally this triggers a "controllerchange" event, which reloads
-      // the page (see the listener above). But if the worker this was
-      // sent to had already stopped being the genuine waiting one by the
-      // time of the click (superseded, or the message just didn't land),
-      // that event never fires — and from the button's point of view,
-      // that looks exactly like "nothing happens." This is the safety
-      // net: force the reload anyway if that hasn't already happened
-      // shortly after asking.
-      setTimeout(() => {
-        window.location.reload();
-      }, 3000);
-    } else {
-      window.location.reload();
-    }
-  };
-
-  const checkForUpdateNow = async () => {
-    if (!("serviceWorker" in navigator)) {
-      setUpdateCheckMessage("Not available in this browser");
-      setTimeout(() => setUpdateCheckMessage(null), 3000);
-      return;
-    }
-    setUpdateCheckMessage("Checking...");
-    const registration = await navigator.serviceWorker.getRegistration();
-    if (registration) swRegistrationRef.current = registration;
-    if (!registration) {
-      setUpdateCheckMessage("Still setting up — try again in a moment");
-    } else {
-      await registration.update().catch(() => {});
-      // Give the "updatefound" listener a moment to fire before reporting
-      setTimeout(() => {
-        setUpdateCheckMessage(
-          waitingWorkerRef.current ? "Update found!" : "You're on the latest version"
-        );
-      }, 600);
-    }
-    setTimeout(() => setUpdateCheckMessage(null), 3000);
-  };
 
   // Fix for a known iOS/Safari quirk: elements with :hover styles can require
   // an extra "warm-up" tap on the very first touch of the page before clicks
@@ -13001,10 +12888,6 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   useEffect(() => {
     if (loading || !initialAction || initialActionDone.current) return;
     initialActionDone.current = true;
-    if (initialAction === "checkUpdate") {
-      checkForUpdateNow();
-      return;
-    }
     if (!isEditor) return;
     switch (initialAction) {
       case "suggestions":
@@ -13801,26 +13684,6 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
         )
       )}
 
-      {updateAvailable && (
-        <button
-          onClick={applyUpdate}
-          disabled={applyingUpdate}
-          className="fixed top-0 inset-x-0 z-[80] w-full bg-amber-500 text-slate-950 text-sm font-medium shadow-lg text-left disabled:opacity-80"
-        >
-          <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
-            <span>
-              {applyingUpdate ? "Updating..." : "A new version of Riggy is ready"}
-            </span>
-            <span className="bg-slate-950 text-amber-400 text-xs font-semibold rounded-md px-4 py-2.5 shrink-0 flex items-center gap-1.5">
-              {applyingUpdate && (
-                <span className="w-3 h-3 border-2 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
-              )}
-              {applyingUpdate ? "Applying" : "Update now"}
-            </span>
-          </div>
-        </button>
-      )}
-
       {remoteNotice && (
         <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[60] bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-full px-3 py-2 shadow-lg">
           {remoteNotice}
@@ -14144,9 +14007,8 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           returnsCount={returns.length}
           onOpenGeneralTodo={() => setShowGeneralTodo(true)}
           onOpenWorkerTasks={() => setShowWorkerTasks(true)}
-          onCheckForUpdate={checkForUpdateNow}
+          onCheckForUpdate={onCheckForUpdate}
           onGoToLanding={onGoToLanding}
-          updateCheckMessage={updateCheckMessage}
         />
       ) : (
         <JobInventory
@@ -14335,14 +14197,14 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   );
 }
 
-function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onSelectKiosk, onSelectReceiving, onSelectBackorders, onSelectArchive, onSelectTools, pendingSuggestionCount = 0, toolsAlertCount = 0, onRequestLogin, onSignOut }) {
+function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onSelectKiosk, onSelectReceiving, onSelectBackorders, onSelectArchive, onSelectTools, onCheckForUpdate, pendingSuggestionCount = 0, toolsAlertCount = 0, onRequestLogin, onSignOut }) {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
         <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-2.5">
             <button
-              onClick={() => onSelectJobs("checkUpdate")}
+              onClick={onCheckForUpdate}
               title="Check for updates"
               className="w-8 h-8 rounded-md bg-amber-500 flex items-center justify-center active:scale-90 transition-transform"
             >
@@ -26076,6 +25938,8 @@ export default function AuthGate() {
   const [showLogin, setShowLogin] = useState(false);
   const [appSection, setAppSection] = useState(null); // null = landing, "jobs" | "love"
   const [pendingJobAction, setPendingJobAction] = useState(null);
+  const { updateAvailable, applyingUpdate, updateCheckMessage, checkForUpdateNow, applyUpdate } =
+    useAppUpdate();
 
   // The app doesn't use real URL routing between sections — moving
   // between Love Lists, Job Lists, Receiving, etc. is all just internal
@@ -26185,6 +26049,28 @@ export default function AuthGate() {
 
   return (
     <>
+      {updateAvailable && appSection !== "kiosk" && (
+        <button
+          onClick={applyUpdate}
+          disabled={applyingUpdate}
+          className="fixed top-0 inset-x-0 z-[80] w-full bg-amber-500 text-slate-950 text-sm font-medium shadow-lg text-left disabled:opacity-80"
+        >
+          <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+            <span>{applyingUpdate ? "Updating..." : "A new version of Riggy is ready"}</span>
+            <span className="bg-slate-950 text-amber-400 text-xs font-semibold rounded-md px-4 py-2.5 shrink-0 flex items-center gap-1.5">
+              {applyingUpdate && (
+                <span className="w-3 h-3 border-2 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
+              )}
+              {applyingUpdate ? "Applying" : "Update now"}
+            </span>
+          </div>
+        </button>
+      )}
+      {updateCheckMessage && (
+        <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[90] bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-full px-4 py-2 shadow-lg">
+          {updateCheckMessage}
+        </div>
+      )}
       {appSection === null ? (
         <AppLandingScreen
           isEditor={isOwner}
@@ -26206,6 +26092,7 @@ export default function AuthGate() {
           onSelectBackorders={() => navigateToSection("backorders")}
           onSelectArchive={() => navigateToSection("archive")}
           onSelectTools={() => navigateToSection("tools")}
+          onCheckForUpdate={checkForUpdateNow}
           pendingSuggestionCount={pendingSuggestionCount}
           toolsAlertCount={toolsAlertCount}
           onRequestLogin={() => setShowLogin(true)}
@@ -26235,6 +26122,7 @@ export default function AuthGate() {
           onSignOut={() => supabase.auth.signOut()}
           onRequestLogin={() => setShowLogin(true)}
           onGoToLanding={goToLanding}
+          onCheckForUpdate={checkForUpdateNow}
           initialAction={pendingJobAction}
         />
       )}
