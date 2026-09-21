@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { useRemoteRefresh } from "./lib/useRemoteRefresh";
 import QRCode from "qrcode";
 import { supabase } from "./supabaseClient";
 import {
@@ -189,6 +190,7 @@ import {
   GENERAL_TODOS_KEY,
   saveWithRetry,
   getWithRetry,
+  peekUpdatedAt,
   submitSuggestion,
   fetchFieldRequests,
   updateFieldRequestStatus,
@@ -12015,6 +12017,72 @@ function JobInventory({
 
 
 
+// Cleanup applied to jobs/catalog every time they're read from storage — a
+// normal load and a background refresh from another device both go through
+// exactly this, so they can never disagree about what "loaded" data looks like.
+function normalizeGangName(g) {
+  if (g === "Welders") return "Welding";
+  if (g === "Bolt-up") return "Bolt Up";
+  return g;
+}
+
+// Items created before the collision-proof id generator existed could
+// genuinely share the same id (e.g. two items saved in the same
+// millisecond) — this shows up as selecting one item in things like
+// the transfer screen also selecting an unrelated item that happens
+// to share its id. Give any duplicate a fresh, real unique id.
+function dedupeItemIds(jobItems) {
+  const seenIds = new Set();
+  return jobItems.map((i) => {
+    if (seenIds.has(i.id)) {
+      const freshId = uniqueId();
+      seenIds.add(freshId);
+      return { ...i, id: freshId };
+    }
+    seenIds.add(i.id);
+    return i;
+  });
+}
+
+function migrateJobFromStorage(job, catalog) {
+  return {
+    ...job,
+    items: dedupeItemIds(
+      (job.items || []).map((i) => {
+        let needsTransfer = i.needsTransfer;
+        if (job.isQuickTransfer) {
+          const match = getCachedCatalogMatch(i, catalog);
+          needsTransfer = !!(match && match.needsTransfer);
+        }
+        // Old whole-item transferLocked boolean → new per-container
+        // tracking. Locks every container this item currently sits in
+        // (or the implicit "no container" slot), preserving the fact
+        // that it was already marked transferred rather than silently
+        // reverting it to active.
+        let transferredContainers = i.transferredContainers;
+        if (transferredContainers === undefined && i.transferLocked) {
+          transferredContainers =
+            i.containers && i.containers.length > 0
+              ? i.containers.map((c) => c.name)
+              : ["__unassigned__"];
+        }
+        // eslint-disable-next-line no-unused-vars
+        const { transferLocked, ...rest } = i;
+        return migrateItemContainers({
+          ...rest,
+          gang: normalizeGangName(i.gang),
+          needsTransfer,
+          transferredContainers,
+        });
+      })
+    ),
+  };
+}
+
+function migrateCatalogFromStorage(catalog) {
+  return catalog.map((c) => ({ ...c, gang: normalizeGangName(c.gang) }));
+}
+
 function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, onGoToLanding, initialAction }) {
   const [jobs, setJobs] = useState([]);
   const [activeJobId, setActiveJobId] = useState(null);
@@ -12481,67 +12549,16 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
       // corrupted stored data, not a read failure — safe to fall back to empty
     }
 
-    const normalizeGangName = (g) => {
-      if (g === "Welders") return "Welding";
-      if (g === "Bolt-up") return "Bolt Up";
-      return g;
-    };
-    // Items created before the collision-proof id generator existed could
-    // genuinely share the same id (e.g. two items saved in the same
-    // millisecond) — this shows up as selecting one item in things like
-    // the transfer screen also selecting an unrelated item that happens
-    // to share its id. Give any duplicate a fresh, real unique id.
-    const dedupeItemIds = (jobItems) => {
-      const seenIds = new Set();
-      return jobItems.map((i) => {
-        if (seenIds.has(i.id)) {
-          const freshId = uniqueId();
-          seenIds.add(freshId);
-          return { ...i, id: freshId };
-        }
-        seenIds.add(i.id);
-        return i;
-      });
-    };
-    const migrateGang = (job) => ({
-      ...job,
-      items: dedupeItemIds(
-        (job.items || []).map((i) => {
-          let needsTransfer = i.needsTransfer;
-          if (job.isQuickTransfer) {
-            const match = getCachedCatalogMatch(i, loadedCatalog);
-            needsTransfer = !!(match && match.needsTransfer);
-          }
-          // Old whole-item transferLocked boolean → new per-container
-          // tracking. Locks every container this item currently sits in
-          // (or the implicit "no container" slot), preserving the fact
-          // that it was already marked transferred rather than silently
-          // reverting it to active.
-          let transferredContainers = i.transferredContainers;
-          if (transferredContainers === undefined && i.transferLocked) {
-            transferredContainers =
-              i.containers && i.containers.length > 0
-                ? i.containers.map((c) => c.name)
-                : ["__unassigned__"];
-          }
-          const { transferLocked, ...rest } = i;
-          return migrateItemContainers({
-            ...rest,
-            gang: normalizeGangName(i.gang),
-            needsTransfer,
-            transferredContainers,
-          });
-        })
-      ),
-    });
     const finalJobs =
-      loadedJobs && loadedJobs.length > 0 ? loadedJobs.map(migrateGang) : [seedJob()];
+      loadedJobs && loadedJobs.length > 0
+        ? loadedJobs.map((j) => migrateJobFromStorage(j, loadedCatalog))
+        : [seedJob()];
     setJobs(finalJobs);
     const validActiveId = finalJobs.some((j) => j.id === loadedActiveId)
       ? loadedActiveId
       : finalJobs[0].id;
     setActiveJobId(validActiveId);
-    const finalCatalog = loadedCatalog.map((c) => ({ ...c, gang: normalizeGangName(c.gang) }));
+    const finalCatalog = migrateCatalogFromStorage(loadedCatalog);
     setCatalog(finalCatalog);
     jobsUpdatedAtRef.current = jobsResult.updatedAt || null;
     catalogUpdatedAtRef.current = catalogResult.updatedAt || null;
@@ -12562,6 +12579,105 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   useEffect(() => {
     loadAllData();
   }, []);
+
+  // ---- Picking up changes made on another device ----
+  // Job Lists already merges safely when YOU save over someone else's
+  // change, but nothing used to notice their change until you edited
+  // something or reloaded — a phone left open just kept showing stale data.
+  // Every so often (and the moment the app comes back into view) this asks
+  // the server whether jobs/catalog have a newer timestamp than what we last
+  // saw, and if this device has nothing unsaved of its own, quietly swaps in
+  // the newer copy. If there IS unsaved local work, it does nothing — the
+  // normal save path already merges that case, and this must never
+  // overwrite an edit in progress.
+  const skipJobsSaveRef = useRef(null);
+  const skipCatalogSaveRef = useRef(null);
+  const [remoteNotice, setRemoteNotice] = useState(null);
+  const remoteNoticeTimer = useRef(null);
+  const showRemoteNotice = (message) => {
+    setRemoteNotice(message);
+    if (remoteNoticeTimer.current) clearTimeout(remoteNoticeTimer.current);
+    remoteNoticeTimer.current = setTimeout(() => setRemoteNotice(null), 4000);
+  };
+
+  const checkForRemoteChanges = async () => {
+    if (
+      loading || loadFailed || !isOnline || conflictWarning || mergeState ||
+      syncing || reconciling || offlineQueued || pendingSync
+    ) {
+      return;
+    }
+    const hasLocalWork = () =>
+      !!jobsSaveTimer.current ||
+      !!catalogSaveTimer.current ||
+      jobsRef.current !== jobsBaseRef.current ||
+      catalogRef.current !== catalogBaseRef.current;
+    if (hasLocalWork()) return;
+
+    const peek = await peekUpdatedAt([JOBS_KEY, CATALOG_KEY]);
+    if (!peek.ok) return;
+    const jobsStale =
+      !!peek.map[JOBS_KEY] && !sameInstant(peek.map[JOBS_KEY], jobsUpdatedAtRef.current);
+    const catalogStale =
+      !!peek.map[CATALOG_KEY] && !sameInstant(peek.map[CATALOG_KEY], catalogUpdatedAtRef.current);
+    if (!jobsStale && !catalogStale) return;
+
+    const [jobsResult, catalogResult] = await Promise.all([
+      jobsStale ? getWithRetry(JOBS_KEY, 2) : null,
+      catalogStale ? getWithRetry(CATALOG_KEY, 2) : null,
+    ]);
+    // The user may have started editing while those requests were in flight.
+    if (hasLocalWork()) return;
+
+    let parsedCatalog = null;
+    if (catalogResult && catalogResult.ok && catalogResult.value) {
+      try {
+        const parsed = JSON.parse(catalogResult.value);
+        if (Array.isArray(parsed)) parsedCatalog = parsed;
+      } catch {
+        // unreadable — leave the catalog as-is this round
+      }
+    }
+    const catalogForMatching = parsedCatalog || catalogRef.current;
+
+    let parsedJobs = null;
+    if (jobsResult && jobsResult.ok && jobsResult.value) {
+      try {
+        const parsed = JSON.parse(jobsResult.value);
+        // An empty/invalid list from the server is never trusted here — a
+        // normal load would fall back to a starter job, and swapping that in
+        // over real data mid-session is exactly the kind of wipe to avoid.
+        if (Array.isArray(parsed) && parsed.length > 0) parsedJobs = parsed;
+      } catch {
+        // unreadable — leave jobs as-is this round
+      }
+    }
+
+    let changed = false;
+    if (parsedCatalog) {
+      const finalCatalog = migrateCatalogFromStorage(parsedCatalog);
+      skipCatalogSaveRef.current = finalCatalog;
+      catalogBaseRef.current = finalCatalog;
+      catalogRef.current = finalCatalog;
+      catalogUpdatedAtRef.current = catalogResult.updatedAt || null;
+      setCatalog(finalCatalog);
+      changed = true;
+    }
+    if (parsedJobs) {
+      const finalJobs = parsedJobs.map((j) => migrateJobFromStorage(j, catalogForMatching));
+      skipJobsSaveRef.current = finalJobs;
+      jobsBaseRef.current = finalJobs;
+      jobsRef.current = finalJobs;
+      jobsUpdatedAtRef.current = jobsResult.updatedAt || null;
+      setJobs(finalJobs);
+      // If the job being viewed was deleted elsewhere, fall back to the first.
+      setActiveJobId((prev) => (finalJobs.some((j) => j.id === prev) ? prev : finalJobs[0].id));
+      changed = true;
+    }
+    if (changed) showRemoteNotice("Updated from another device");
+  };
+
+  useRemoteRefresh(checkForRemoteChanges, { intervalMs: 30000 });
 
   // Called from the jobs/catalog persist effects while offline — captures
   // a snapshot of "what we last knew the server looked like" the first
@@ -12647,6 +12763,13 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   // so several quick edits in a row don't each trigger their own blocking save
   useEffect(() => {
     if (loading || loadFailed || conflictWarning || !isEditor) return;
+    // This exact state just arrived from another device (see
+    // checkForRemoteChanges) — writing it straight back would only bump the
+    // timestamp and make every other open device think something changed.
+    if (skipJobsSaveRef.current === jobs) {
+      skipJobsSaveRef.current = null;
+      return;
+    }
     if (!isOnline) {
       setPendingSync(true);
       persistOfflineQueue();
@@ -12698,6 +12821,10 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   // Persist catalog whenever it changes, debounced like jobs
   useEffect(() => {
     if (loading || loadFailed || conflictWarning || !isEditor) return;
+    if (skipCatalogSaveRef.current === catalog) {
+      skipCatalogSaveRef.current = null;
+      return;
+    }
     if (!isOnline) {
       persistOfflineQueue();
       return;
@@ -13665,6 +13792,12 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
             </span>
           </div>
         </button>
+      )}
+
+      {remoteNotice && (
+        <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[60] bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-full px-3 py-2 shadow-lg">
+          🔄 {remoteNotice}
+        </div>
       )}
 
       {syncing && (
@@ -19452,6 +19585,16 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   const [showWorkerTasks, setShowWorkerTasks] = useState(false);
   const [tools, setTools] = useState([]);
   const toolsRef = useRef([]);
+  // Love Lists writes the whole list straight to the server on every edit
+  // (no conflict check, unlike Job Lists) — so a screen that's gone stale
+  // can silently overwrite another device's newer changes. These let the
+  // background check below notice a newer copy and pull it in, but only when
+  // nothing here is mid-save or was just edited.
+  const loveUpdatedAtRef = useRef(null);
+  const loveSavesInFlightRef = useRef(0);
+  const loveLastEditAtRef = useRef(0);
+  const [remoteNotice, setRemoteNotice] = useState(null);
+  const remoteNoticeTimer = useRef(null);
 
   // The one load that's allowed to block the whole screen: if this
   // specifically fails (a flaky connection is the common case in the
@@ -19471,6 +19614,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
         setLoading(false);
         return;
       }
+      loveUpdatedAtRef.current = result.updatedAt || null;
       if (result.value) loadedLists = JSON.parse(result.value);
       setLists(loadedLists);
     } catch {
@@ -19562,11 +19706,50 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
     if (!isEditor || loadFailed) return;
     setLists((prev) => {
       const next = updater(prev);
-      saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(next)).catch(() => {});
+      loveSavesInFlightRef.current += 1;
+      loveLastEditAtRef.current = Date.now();
+      saveWithRetry(LOVE_LISTS_KEY, JSON.stringify(next))
+        .then((saved) => {
+          if (saved && saved.ok) loveUpdatedAtRef.current = saved.updatedAt;
+        })
+        .catch(() => {})
+        .finally(() => {
+          loveSavesInFlightRef.current -= 1;
+        });
       maybeAutoBackupLoveLists(next);
       return next;
     });
   };
+
+  const checkLoveListsForRemoteChanges = async () => {
+    if (loading || loadFailed || (typeof navigator !== "undefined" && !navigator.onLine)) return;
+    const isBusy = () =>
+      loveSavesInFlightRef.current > 0 || Date.now() - loveLastEditAtRef.current < 8000;
+    if (isBusy()) return;
+    const peek = await peekUpdatedAt([LOVE_LISTS_KEY]);
+    if (!peek.ok || !peek.map[LOVE_LISTS_KEY]) return;
+    if (sameInstant(peek.map[LOVE_LISTS_KEY], loveUpdatedAtRef.current)) return;
+    const result = await getWithRetry(LOVE_LISTS_KEY, 2);
+    if (!result.ok || !result.value) return;
+    // Edited (or started saving) while that request was in flight — leave it.
+    if (isBusy()) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(result.value);
+    } catch {
+      return;
+    }
+    // Same guard as a normal load: an unreadable/empty result is never
+    // swapped in over lists that are already on screen.
+    if (!Array.isArray(parsed) || parsed.length === 0) return;
+    loveUpdatedAtRef.current = result.updatedAt || null;
+    setLists(parsed);
+    setRemoteNotice("Updated from another device");
+    if (remoteNoticeTimer.current) clearTimeout(remoteNoticeTimer.current);
+    remoteNoticeTimer.current = setTimeout(() => setRemoteNotice(null), 4000);
+  };
+
+  useRemoteRefresh(checkLoveListsForRemoteChanges, { intervalMs: 30000 });
 
   // Job Lists already has an "Import all data (restore backup)" path —
   // Love Lists never got the equivalent, which is exactly the gap that
@@ -19792,6 +19975,12 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
 
   if (activeList) {
     return (
+      <>
+      {remoteNotice && (
+        <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[60] bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-full px-3 py-2 shadow-lg">
+          🔄 {remoteNotice}
+        </div>
+      )}
       <LoveListDetailPage
         list={activeList}
         catalog={catalog}
@@ -19810,11 +19999,17 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
         onBack={() => setActiveListId(null)}
         onGoHome={onGoHome}
       />
+      </>
     );
   }
 
   return (
     <>
+      {remoteNotice && (
+        <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[60] bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-full px-3 py-2 shadow-lg">
+          🔄 {remoteNotice}
+        </div>
+      )}
       <LoveListsDashboard
         lists={lists}
         isEditor={isEditor}

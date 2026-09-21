@@ -63,6 +63,27 @@ export async function saveWithRetry(key, value, expectedUpdatedAt, attempts = 2)
   return { ok: false, error: lastError };
 }
 
+// A cheap "has anything changed?" probe — fetches only each key's
+// updated_at timestamp, never the (potentially large) stored value.
+// Best-effort with no retries: a failed probe just means "try again at the
+// next check", never an error worth surfacing.
+export async function peekUpdatedAt(keys) {
+  try {
+    const { data, error } = await supabase
+      .from("app_storage")
+      .select("key, updated_at")
+      .in("key", keys);
+    if (error) return { ok: false };
+    const map = {};
+    (data || []).forEach((row) => {
+      map[row.key] = row.updated_at;
+    });
+    return { ok: true, map };
+  } catch {
+    return { ok: false };
+  }
+}
+
 export async function getWithRetry(key, attempts = 6) {
   let lastError = null;
   for (let i = 0; i < attempts; i++) {
