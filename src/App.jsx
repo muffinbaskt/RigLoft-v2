@@ -2593,7 +2593,8 @@ function CatalogModal({
   const [newVendorText, setNewVendorText] = useState("");
   const [syncConfirmOpen, setSyncConfirmOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState(null); // { linked, checked } after a run completes
+  const [syncResult, setSyncResult] = useState(null); // { linked, checked, refreshed, changes } after a run completes
+  const [syncChangesOpen, setSyncChangesOpen] = useState(false);
   const [unlinkedOpen, setUnlinkedOpen] = useState(false);
   const [unlinkedLoading, setUnlinkedLoading] = useState(false);
   const [unlinkedItems, setUnlinkedItems] = useState([]);
@@ -2627,8 +2628,22 @@ function CatalogModal({
   const catalogIdSet = new Set(catalog.map((c) => c.id));
   const hasLiveLink = (i) => !!i.catalogId && catalogIdSet.has(i.catalogId);
 
+  // Turns one item's fieldChanges into a short readable summary for the
+  // "View changed items" list — e.g. "storage: Shop · needs transfer: Yes".
+  // storageDetail is deliberately left out: it's only meaningful alongside
+  // "storage: Other", which already says enough on its own here.
+  const describeCatalogFieldChanges = (fc) => {
+    const parts = [];
+    if (fc.gang) parts.push(`gang: ${fc.gang}`);
+    if (fc.storage) parts.push(`storage: ${fc.storage}`);
+    if (fc.category) parts.push(`category: ${fc.category}`);
+    if (fc.needsTransfer !== undefined) parts.push(`needs transfer: ${fc.needsTransfer ? "Yes" : "No"}`);
+    return parts.join(" · ");
+  };
+
   const syncCatalogLinks = async () => {
     setSyncing(true);
+    setSyncChangesOpen(false);
     let linked = 0;
     let checked = 0;
     // Separate from `linked` — this counts items that already had a
@@ -2640,6 +2655,9 @@ function CatalogModal({
     // same catalogFieldChanges the per-job "Sync from catalog" preview
     // uses, so the two can't drift into checking different fields again.
     let refreshed = 0;
+    // One row per item actually touched, across all three sources — this
+    // is what "View changed items" shows, so the sync isn't a black box.
+    const changes = [];
     try {
       const [jResult, lResult, aResult] = await Promise.all([
         getWithRetry(JOBS_KEY),
@@ -2662,6 +2680,14 @@ function CatalogModal({
               if (Object.keys(fieldChanges).length > 0) {
                 refreshed++;
                 if (fieldChanges.category) newCategoryNames.add(fieldChanges.category);
+                changes.push({
+                  source: "job",
+                  targetLabel: j.name,
+                  itemName: i.name,
+                  kind: "refreshed",
+                  catalogName: linkedCatalogItem.name,
+                  fieldChanges,
+                });
                 return { ...i, ...fieldChanges };
               }
               return i;
@@ -2680,6 +2706,14 @@ function CatalogModal({
               // the item's OWN needsTransfer field, not the catalog's).
               const fieldChanges = catalogFieldChanges(i, match);
               if (fieldChanges.category) newCategoryNames.add(fieldChanges.category);
+              changes.push({
+                source: "job",
+                targetLabel: j.name,
+                itemName: i.name,
+                kind: "linked",
+                catalogName: match.name,
+                fieldChanges,
+              });
               return { ...i, catalogId: match.id, ...fieldChanges };
             }
             return i;
@@ -2709,6 +2743,14 @@ function CatalogModal({
               const { gang, category, ...fieldChanges } = catalogFieldChanges(i, linkedCatalogItem);
               if (Object.keys(fieldChanges).length > 0) {
                 refreshed++;
+                changes.push({
+                  source: "love_list",
+                  targetLabel: `${l.jobLabel}${l.subJobLabel ? ` — ${l.subJobLabel}` : ""}`,
+                  itemName: i.name,
+                  kind: "refreshed",
+                  catalogName: linkedCatalogItem.name,
+                  fieldChanges,
+                });
                 return { ...i, ...fieldChanges };
               }
               return i;
@@ -2718,6 +2760,14 @@ function CatalogModal({
             if (match) {
               linked++;
               const { gang, category, ...fieldChanges } = catalogFieldChanges(i, match);
+              changes.push({
+                source: "love_list",
+                targetLabel: `${l.jobLabel}${l.subJobLabel ? ` — ${l.subJobLabel}` : ""}`,
+                itemName: i.name,
+                kind: "linked",
+                catalogName: match.name,
+                fieldChanges,
+              });
               return { ...i, catalogId: match.id, ...fieldChanges };
             }
             return i;
@@ -2741,6 +2791,14 @@ function CatalogModal({
             const match = i.name && i.name.trim() ? findCatalogMatch(i.name, catalog) : null;
             if (match) {
               linked++;
+              changes.push({
+                source: "archive",
+                targetLabel: `${e.vendor || "Unknown vendor"}${e.receiptDate ? ` · ${e.receiptDate}` : ""}`,
+                itemName: i.name,
+                kind: "linked",
+                catalogName: match.name,
+                fieldChanges: {},
+              });
               if (i.shippedQty > 0 && e.vendor) {
                 newlyEligible.push({
                   catalogId: match.id,
@@ -2804,7 +2862,7 @@ function CatalogModal({
 
         await saveWithRetry(RECEIPT_ARCHIVE_KEY, JSON.stringify(nextEntries));
       }
-      setSyncResult({ linked, checked, refreshed });
+      setSyncResult({ linked, checked, refreshed, changes });
     } catch (err) {
       setSyncResult({ error: err && err.message ? err.message : String(err) });
     }
@@ -3394,15 +3452,60 @@ function CatalogModal({
                   }. Reload the page to see the update reflected wherever you currently have a job,
                     Love List, or the Receipt Archive open.`}
             </p>
+            {!syncResult.error && syncResult.changes.length > 0 && (
+              <button
+                onClick={() => setSyncChangesOpen(true)}
+                className="w-full text-sm rounded-md py-2 mb-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                View changed items ({syncResult.changes.length})
+              </button>
+            )}
             <button
               onClick={() => {
                 setSyncResult(null);
+                setSyncChangesOpen(false);
                 setSyncConfirmOpen(false);
               }}
               className="w-full text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
             >
               Done
             </button>
+          </div>
+        </div>
+      )}
+
+      {syncChangesOpen && syncResult && !syncResult.error && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-4 py-8">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-md max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold text-sm">
+                Changed items ({syncResult.changes.length})
+              </h3>
+              <button onClick={() => setSyncChangesOpen(false)} className="text-slate-400 hover:text-slate-200">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-1.5">
+              {syncResult.changes.map((c, idx) => (
+                <div key={idx} className="border border-slate-800 rounded-lg p-2.5 bg-slate-900/60">
+                  <p className="text-sm text-slate-100">{c.itemName}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {c.source === "job" ? "Job" : c.source === "love_list" ? "Love List" : "Archived receipt"}{" "}
+                    · {c.targetLabel}
+                  </p>
+                  <p className="text-xs mt-1">
+                    {c.kind === "linked" ? (
+                      <span className="text-emerald-400">🔗 Linked to "{c.catalogName}"</span>
+                    ) : (
+                      <span className="text-amber-400">🔄 Refreshed from "{c.catalogName}"</span>
+                    )}
+                    {describeCatalogFieldChanges(c.fieldChanges) && (
+                      <span className="text-slate-400"> · {describeCatalogFieldChanges(c.fieldChanges)}</span>
+                    )}
+                  </p>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
