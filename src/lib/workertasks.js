@@ -42,6 +42,7 @@ export function newWorkerTask(workerId, workerName, title, jobLabel, source = nu
     startedAt: null,
     resolvedAt: null, // set when it becomes Completed or Failed
     completionPhotoUrl: null,
+    titleEs: null, // cached Spanish translation of title, filled in async after save
     // When assigned from an item card, links back so the item can show
     // live status and so re-assigning doesn't create duplicate tasks.
     source, // { type: "job_item" | "love_list_item", itemId, containerId? }
@@ -74,6 +75,7 @@ export function newSharedWorkerTask({ title, jobLabel, capacity, assignedWorkers
     createdAt: new Date().toISOString().slice(0, 10),
     resolvedAt: null,
     completionPhotoUrl: null,
+    titleEs: null, // cached Spanish translation of title, filled in async after save
     source: null,
     archived: false,
   };
@@ -91,7 +93,29 @@ export function migrateWorkerTask(task) {
     urgency: withCapacity.urgency || "normal",
     dueDate: withCapacity.dueDate || null,
     completionPhotoUrl: withCapacity.completionPhotoUrl || null,
+    titleEs: withCapacity.titleEs || null,
   };
+}
+
+// A worker with no language set is treated as English — every worker
+// created before this feature existed has no `language` field at all, and
+// defaulting anything else would mean old data silently starts showing
+// Spanish nobody asked for.
+export function workerSpeaksSpanish(worker) {
+  return !!worker && worker.language === "es";
+}
+
+// What to actually show for a task title, given who's looking at it.
+// Bilingual by design (not a language switch) — a Spanish-speaking worker
+// sees both languages, English speakers never see a Spanish line at all.
+// Falls back to English-only if the translation hasn't come back yet (or
+// failed), since a task should never be unreadable while waiting on an
+// API call.
+export function taskTitleDisplay(task, worker) {
+  if (workerSpeaksSpanish(worker) && task.titleEs) {
+    return `${task.title} / ${task.titleEs}`;
+  }
+  return task.title;
 }
 
 // "In Progress · Started 2:14 PM" — the actual display format the

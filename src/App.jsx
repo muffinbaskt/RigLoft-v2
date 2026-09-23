@@ -170,6 +170,8 @@ import {
   WORKER_ACTIVITY_KEY,
   WORKER_ACTIVITY_LAST_SEEN_KEY,
   logWorkerActivity,
+  taskTitleDisplay,
+  workerSpeaksSpanish,
 } from "./lib/workertasks";
 import {
   OFFLINE_QUEUE_KEY,
@@ -18188,7 +18190,7 @@ function TaskMetaBadges({ task }) {
   );
 }
 
-function WorkerRosterModal({ workers, onAddWorker, onRemoveWorker, onUpdatePin, onClose }) {
+function WorkerRosterModal({ workers, onAddWorker, onRemoveWorker, onUpdatePin, onUpdateLanguage, onClose }) {
   const [name, setName] = useState("");
   const [editingPinFor, setEditingPinFor] = useState(null);
   const [pinDraft, setPinDraft] = useState("");
@@ -18245,6 +18247,17 @@ function WorkerRosterModal({ workers, onAddWorker, onRemoveWorker, onUpdatePin, 
                 >
                   <p className="text-sm text-slate-100">{w.name}</p>
                   <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => onUpdateLanguage(w.id, workerSpeaksSpanish(w) ? "en" : "es")}
+                      title="Tasks show bilingual (English / Spanish) for this person on the Kiosk and printed lists"
+                      className={`text-xs rounded-full px-2 py-0.5 border ${
+                        workerSpeaksSpanish(w)
+                          ? "bg-amber-500/15 border-amber-500/40 text-amber-300"
+                          : "border-slate-700 text-slate-500 hover:text-slate-300"
+                      }`}
+                    >
+                      {workerSpeaksSpanish(w) ? "Español" : "English"}
+                    </button>
                     <button
                       onClick={() => {
                         setEditingPinFor(w);
@@ -19475,19 +19488,22 @@ function PrintableTaskListModal({ workers, tasks, spec, onClose }) {
   // onto its own page too when it isn't the very first section printed.
   const sections = [
     ...selectedWorkers
-      .map((w) => ({ key: w.id, heading: w.name, items: tasksFor(w.id) }))
+      // worker carried through per section (not just id/name) so each
+      // person's own page can print bilingually if they're marked Español
+      // — the Open section has no single worker, so it stays English-only.
+      .map((w) => ({ key: w.id, heading: w.name, items: tasksFor(w.id), worker: w }))
       .filter((sec) => sec.items.length > 0),
     ...(openTasks.length > 0
-      ? [{ key: "__open__", heading: "Open — anyone can take these", items: openTasks }]
+      ? [{ key: "__open__", heading: "Open — anyone can take these", items: openTasks, worker: null }]
       : []),
   ];
 
-  const TaskLine = ({ task }) => (
+  const TaskLine = ({ task, worker }) => (
     <div className="flex items-start gap-2 py-1.5 border-b border-slate-200 last:border-0">
       <span className="inline-block w-4 h-4 border border-slate-500 shrink-0 mt-0.5" />
       <div className="min-w-0">
         <p className="text-sm">
-          {task.title}
+          {taskTitleDisplay(task, worker)}
           {task.urgency === "urgent" && <span className="text-red-600 font-semibold"> · Urgent</span>}
         </p>
         <p className="text-xs text-slate-600">
@@ -19562,7 +19578,7 @@ function PrintableTaskListModal({ workers, tasks, spec, onClose }) {
                 >
                   <h3 className="text-base font-bold border-b-2 border-slate-900 pb-1 mb-1">{sec.heading}</h3>
                   {sec.items.map((t) => (
-                    <TaskLine key={t.id} task={t} />
+                    <TaskLine key={t.id} task={t} worker={sec.worker} />
                   ))}
                 </div>
               ))}
@@ -19766,13 +19782,57 @@ function WorkerTasksSection({ onClose }) {
     playSaveChime();
     saveWorkers(workers.map((w) => (w.id === id ? { ...w, pin } : w)));
   };
+  const updateLanguage = (id, language) => {
+    saveWorkers(workers.map((w) => (w.id === id ? { ...w, language } : w)));
+  };
+
+  // Fire-and-forget: a task saves and shows immediately in English, then
+  // this patches in the cached Spanish translation once it comes back —
+  // translation should never block or delay creating/editing a task. The
+  // `t.title === title` guard means a translation that arrives after the
+  // title's already been edited AGAIN doesn't overwrite the newer title's
+  // (still-pending) slot with a translation of the stale one.
+  const translateAndPatchTitle = async (taskId, title) => {
+    if (!title.trim()) return;
+    let translated = null;
+    try {
+      const res = await fetch(
+        "https://vwvppivdpxjvmaazcmmg.supabase.co/functions/v1/translate-task",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: title }),
+        }
+      );
+      const data = await res.json();
+      if (data.ok && data.translated) translated = data.translated;
+    } catch {
+      // Offline, or the function isn't deployed yet — the task just stays
+      // English-only until a later edit tries again.
+    }
+    if (!translated) return;
+    setTasks((prev) => {
+      const next = prev.map((t) => (t.id === taskId && t.title === title ? { ...t, titleEs: translated } : t));
+      saveWithRetry(WORKER_TASKS_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
   const addTask = (newTasks) => {
     playSaveChime();
     saveTasks([...tasks, ...newTasks]);
     setShowAddTask(false);
+    newTasks.forEach((t) => translateAndPatchTitle(t.id, t.title));
   };
   const updateTask = (updated) => {
-    saveTasks(tasks.map((t) => (t.id === updated.id ? updated : t)));
+    const previous = tasks.find((t) => t.id === updated.id);
+    const titleChanged = !previous || previous.title !== updated.title;
+    // Clear the old Spanish text immediately on a title change — showing a
+    // stale translation of the PREVIOUS title while the new one is still
+    // being translated would be actively misleading, not just incomplete.
+    const next = titleChanged ? { ...updated, titleEs: null } : updated;
+    saveTasks(tasks.map((t) => (t.id === next.id ? next : t)));
+    if (titleChanged) translateAndPatchTitle(next.id, next.title);
   };
   // For updating several tasks at once (e.g. "archive all resolved") —
   // calling updateTask repeatedly in a loop would have each call read the
@@ -19868,6 +19928,7 @@ function WorkerTasksSection({ onClose }) {
           onAddWorker={addWorker}
           onRemoveWorker={removeWorker}
           onUpdatePin={updatePin}
+          onUpdateLanguage={updateLanguage}
           onClose={() => setShowRoster(false)}
         />
       )}
@@ -20840,7 +20901,7 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
     return (
       <div className="border border-slate-800 rounded-lg p-3 bg-slate-900">
         <div className="flex items-center justify-between gap-2 mb-1">
-          <p className="text-sm text-slate-100">{task.title}</p>
+          <p className="text-sm text-slate-100">{taskTitleDisplay(task, selectedWorker)}</p>
           <span className={`text-xs rounded-full px-2 py-0.5 border shrink-0 ${meta.color}`}>
             {meta.label}
           </span>
