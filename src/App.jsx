@@ -5993,6 +5993,7 @@ function ContainersModal({
   onPull,
   onMarkShipped,
   onUnmarkShipped,
+  onMarkAllShipped,
 }) {
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -6000,9 +6001,17 @@ function ContainersModal({
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [openContainer, setOpenContainer] = useState(initialContainer);
+  const [confirmingMarkAll, setConfirmingMarkAll] = useState(false);
 
   const countFor = (name) =>
     items.filter((i) => (i.containers || []).some((c) => c.name === name)).length;
+
+  // Empty containers and ones already fully shipped are left alone —
+  // nothing to do for the first, and re-shipping the second would just
+  // bump its date for no reason.
+  const unshippedWithItems = containerOptions.filter(
+    (name) => countFor(name) > 0 && !isContainerShipped(name, items)
+  );
 
   const submitAdd = () => {
     const trimmed = newName.trim();
@@ -6041,14 +6050,23 @@ function ContainersModal({
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40" onClick={onClose}>
         <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-lg rounded-lg max-h-full flex flex-col" onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
-            <div>
+          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0 gap-3">
+            <div className="min-w-0">
               <h2 className="text-slate-100 font-semibold text-base">Containers</h2>
               <p className="text-xs text-slate-500">
                 {containerOptions.length} container{containerOptions.length === 1 ? "" : "s"}
               </p>
             </div>
-            <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            {isEditor && onMarkAllShipped && unshippedWithItems.length > 0 && (
+              <button
+                onClick={() => setConfirmingMarkAll(true)}
+                className="shrink-0 flex items-center gap-1.5 text-xs rounded-md px-2.5 py-1.5 border border-sky-500/40 text-sky-300 hover:bg-sky-500/10"
+              >
+                <Truck className="w-3.5 h-3.5" />
+                Mark all shipped
+              </button>
+            )}
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-200 shrink-0">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -6213,6 +6231,21 @@ function ContainersModal({
             setDeleteTarget(null);
           }}
           onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+
+      {confirmingMarkAll && (
+        <ConfirmDelete
+          title="Mark all containers as shipped?"
+          message={`This marks ${unshippedWithItems.length} container${
+            unshippedWithItems.length === 1 ? "" : "s"
+          } as shipped today: ${unshippedWithItems.join(", ")}. Empty and already-shipped containers are left alone.`}
+          confirmLabel="Mark all shipped"
+          onConfirm={() => {
+            onMarkAllShipped(unshippedWithItems);
+            setConfirmingMarkAll(false);
+          }}
+          onCancel={() => setConfirmingMarkAll(false)}
         />
       )}
     </>
@@ -9826,43 +9859,61 @@ function JobInventory({
   // in it at all) can still be marked as having gone out. today's date
   // is recorded per item the same way transferredDate is, so "when did
   // this ship" stays answerable later.
-  const markContainerShipped = (containerName, date) => {
+  // Takes one or several container names so a bulk "mark all as shipped"
+  // action lands as a single activity-log entry and a single job update,
+  // rather than one entry per container.
+  const markContainersShipped = (containerNames, date) => {
+    const nameSet = new Set(containerNames);
     onUpdateJob((prevJob) => ({
       ...prevJob,
       items: prevJob.items.map((i) => {
-        if (!(i.containers || []).some((c) => c.name === containerName)) return i;
-        const merged = [...new Set([...(i.shippedContainers || []), containerName])];
+        const matchingNames = (i.containers || [])
+          .map((c) => c.name)
+          .filter((n) => nameSet.has(n));
+        if (matchingNames.length === 0) return i;
+        const merged = [...new Set([...(i.shippedContainers || []), ...matchingNames])];
         return { ...i, shippedContainers: merged, shippedDate: date };
       }),
       activityLog: [
         {
           id: uniqueId(),
           time: timeStamp(),
-          message: `Marked container "${containerName}" as shipped (${date})`,
+          message:
+            containerNames.length === 1
+              ? `Marked container "${containerNames[0]}" as shipped (${date})`
+              : `Marked ${containerNames.length} containers as shipped (${date}): ${containerNames.join(", ")}`,
         },
         ...prevJob.activityLog,
       ].slice(0, 50),
     }));
   };
+  const markContainerShipped = (containerName, date) => markContainersShipped([containerName], date);
 
-  // Shipped and Transfer stay independent (see markContainerShipped), so
+  // Shipped and Transfer stay independent (see markContainersShipped), so
   // this never blocks the Ship action — it just catches the likely
   // mistake of shipping a container before its transfer-tagged items were
   // actually run through Transfer, since that's an easy thing to miss
-  // given the two systems don't otherwise talk to each other at all.
-  const requestMarkContainerShipped = (containerName, date) => {
+  // given the two systems don't otherwise talk to each other at all. Works
+  // the same for one container or several at once — the warning simply
+  // lists everything un-transferred across all of them together.
+  const requestMarkContainersShipped = (containerNames, date) => {
+    const nameSet = new Set(containerNames);
     const untransferredItems = items.filter(
       (i) =>
         i.needsTransfer &&
-        (i.containers || []).some((c) => c.name === containerName) &&
-        !(i.transferredContainers || []).includes(containerName)
+        (i.containers || []).some((c) => nameSet.has(c.name)) &&
+        (i.containers || [])
+          .filter((c) => nameSet.has(c.name))
+          .some((c) => !(i.transferredContainers || []).includes(c.name))
     );
     if (untransferredItems.length > 0) {
-      setShipWarning({ containerName, date, untransferredItems });
+      setShipWarning({ containerNames, date, untransferredItems });
       return;
     }
-    markContainerShipped(containerName, date);
+    markContainersShipped(containerNames, date);
   };
+  const requestMarkContainerShipped = (containerName, date) =>
+    requestMarkContainersShipped([containerName], date);
 
   const unmarkContainerShipped = (containerName) => {
     onUpdateJob((prevJob) => ({
@@ -11616,6 +11667,9 @@ function JobInventory({
           onPull={pullItemsIntoContainer}
           onMarkShipped={requestMarkContainerShipped}
           onUnmarkShipped={unmarkContainerShipped}
+          onMarkAllShipped={(names) =>
+            requestMarkContainersShipped(names, new Date().toISOString().slice(0, 10))
+          }
         />
       )}
 
@@ -11624,7 +11678,14 @@ function JobInventory({
           title="Transfer-tagged items not transferred yet"
           message={
             <>
-              "{shipWarning.containerName}" still has{" "}
+              {shipWarning.containerNames.length === 1 ? (
+                <>"{shipWarning.containerNames[0]}" still has</>
+              ) : (
+                <>
+                  {shipWarning.containerNames.length} containers ({shipWarning.containerNames.join(", ")}) still
+                  have
+                </>
+              )}{" "}
               {shipWarning.untransferredItems.length} transfer-tagged item
               {shipWarning.untransferredItems.length === 1 ? "" : "s"} that{" "}
               {shipWarning.untransferredItems.length === 1 ? "hasn't" : "haven't"} been
@@ -11634,7 +11695,7 @@ function JobInventory({
           }
           confirmLabel="Ship anyway"
           onConfirm={() => {
-            markContainerShipped(shipWarning.containerName, shipWarning.date);
+            markContainersShipped(shipWarning.containerNames, shipWarning.date);
             if (onMarkToolsFromShipWithoutTransfer) {
               const smeNumbers = shipWarning.untransferredItems.flatMap((i) => i.serials || []);
               if (smeNumbers.length > 0) {
