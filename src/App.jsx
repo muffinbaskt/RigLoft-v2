@@ -19489,12 +19489,21 @@ function PrintableTaskListModal({ workers, tasks, spec, onClose }) {
   const sections = [
     ...selectedWorkers
       // worker carried through per section (not just id/name) so each
-      // person's own page can print bilingually if they're marked Español
-      // — the Open section has no single worker, so it stays English-only.
+      // person's own page can print bilingually if they're marked Español.
       .map((w) => ({ key: w.id, heading: w.name, items: tasksFor(w.id), worker: w }))
       .filter((sec) => sec.items.length > 0),
     ...(openTasks.length > 0
-      ? [{ key: "__open__", heading: "Open — anyone can take these", items: openTasks, worker: null }]
+      ? // Open has no single worker to key off, and anyone on the crew —
+        // English or Spanish speaking — might be the one who picks this
+        // page up, so it defaults to bilingual rather than English-only.
+        [
+          {
+            key: "__open__",
+            heading: "Open — anyone can take these",
+            items: openTasks,
+            worker: { language: "es" },
+          },
+        ]
       : []),
   ];
 
@@ -19827,12 +19836,19 @@ function WorkerTasksSection({ onClose }) {
   const updateTask = (updated) => {
     const previous = tasks.find((t) => t.id === updated.id);
     const titleChanged = !previous || previous.title !== updated.title;
+    // Also retries whenever there's no cached translation yet, even if the
+    // title itself didn't change — otherwise a task that never got
+    // translated (created offline, the function briefly failed, or any
+    // task saved from before this feature existed) only ever picks one up
+    // by being edited into something different and back, which is exactly
+    // the workaround this replaces: a plain re-save now retries it too.
+    const needsTranslation = titleChanged || !updated.titleEs;
     // Clear the old Spanish text immediately on a title change — showing a
     // stale translation of the PREVIOUS title while the new one is still
     // being translated would be actively misleading, not just incomplete.
     const next = titleChanged ? { ...updated, titleEs: null } : updated;
     saveTasks(tasks.map((t) => (t.id === next.id ? next : t)));
-    if (titleChanged) translateAndPatchTitle(next.id, next.title);
+    if (needsTranslation) translateAndPatchTitle(next.id, next.title);
   };
   // For updating several tasks at once (e.g. "archive all resolved") —
   // calling updateTask repeatedly in a loop would have each call read the
