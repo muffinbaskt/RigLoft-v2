@@ -19099,7 +19099,15 @@ function WorkerTasksDashboard({ workers, tasks, hasUnreadActivity, onOpenWorker,
   };
 
   return (
-    <div className="fixed inset-0 z-40 bg-slate-950 text-slate-100 overflow-y-auto">
+    // print:static matters even though this whole screen is hidden at print
+    // time — a "fixed" ancestor becomes the containing block for the print
+    // modal's position:absolute print area (nested inside it below), and
+    // the print stylesheet forces every element to height:0/overflow:hidden.
+    // Left as "fixed", that turns THIS div into a zero-height clipping box
+    // around the print area, which is exactly what printed as a blank page.
+    // "static" removes it as a containing block, so the print area's
+    // position:absolute resolves against the page itself instead.
+    <div className="fixed inset-0 z-40 bg-slate-950 text-slate-100 overflow-y-auto print:static">
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
         <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -19449,6 +19457,21 @@ function PrintableTaskListModal({ workers, tasks, spec, onClose }) {
     { today: "Today", this_week: "This Week", whenever: "Whenever", all: "All open tasks" }[spec.timeframe] ||
     "Tasks";
 
+  // Each person's section defaults to starting on its own page — a printed
+  // sheet like this is meant to be torn apart and handed to individuals,
+  // not read as one continuous list. Built as one ordered array (rather
+  // than rendering workers and Open separately) so "first" can mean
+  // whichever section actually has something in it, and Open only breaks
+  // onto its own page too when it isn't the very first section printed.
+  const sections = [
+    ...selectedWorkers
+      .map((w) => ({ key: w.id, heading: w.name, items: tasksFor(w.id) }))
+      .filter((sec) => sec.items.length > 0),
+    ...(openTasks.length > 0
+      ? [{ key: "__open__", heading: "Open — anyone can take these", items: openTasks }]
+      : []),
+  ];
+
   const TaskLine = ({ task }) => (
     <div className="flex items-start gap-2 py-1.5 border-b border-slate-200 last:border-0">
       <span className="inline-block w-4 h-4 border border-slate-500 shrink-0 mt-0.5" />
@@ -19490,6 +19513,9 @@ function PrintableTaskListModal({ workers, tasks, spec, onClose }) {
           .worker-task-print-section {
             break-inside: avoid;
           }
+          .worker-task-print-pagebreak {
+            break-before: page;
+          }
         }
       `}</style>
       <div className="bg-white text-slate-900 w-full max-w-2xl rounded-lg max-h-full flex flex-col print:static print:block print:max-w-none print:rounded-none print:max-h-none">
@@ -19513,32 +19539,21 @@ function PrintableTaskListModal({ workers, tasks, spec, onClose }) {
           <p className="text-sm text-slate-600 mb-5">
             Printed {new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}
           </p>
-          {!selectedWorkers.some((w) => tasksFor(w.id).length > 0) && openTasks.length === 0 ? (
+          {sections.length === 0 ? (
             <p className="text-sm text-slate-500">Nothing matches these filters.</p>
           ) : (
             <div className="space-y-5">
-              {selectedWorkers.map((w) => {
-                const wTasks = tasksFor(w.id);
-                if (wTasks.length === 0) return null;
-                return (
-                  <div key={w.id} className="worker-task-print-section">
-                    <h3 className="text-base font-bold border-b-2 border-slate-900 pb-1 mb-1">{w.name}</h3>
-                    {wTasks.map((t) => (
-                      <TaskLine key={t.id} task={t} />
-                    ))}
-                  </div>
-                );
-              })}
-              {openTasks.length > 0 && (
-                <div className="worker-task-print-section">
-                  <h3 className="text-base font-bold border-b-2 border-slate-900 pb-1 mb-1">
-                    Open — anyone can take these
-                  </h3>
-                  {openTasks.map((t) => (
+              {sections.map((sec, idx) => (
+                <div
+                  key={sec.key}
+                  className={`worker-task-print-section${idx > 0 ? " worker-task-print-pagebreak" : ""}`}
+                >
+                  <h3 className="text-base font-bold border-b-2 border-slate-900 pb-1 mb-1">{sec.heading}</h3>
+                  {sec.items.map((t) => (
                     <TaskLine key={t.id} task={t} />
                   ))}
                 </div>
-              )}
+              ))}
             </div>
           )}
         </div>
