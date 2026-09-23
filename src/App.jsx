@@ -19309,6 +19309,7 @@ function PrepareTaskListModal({ workers, tasks, onClose, onConfirm }) {
   const [timeframe, setTimeframe] = useState("today");
   const [workerIds, setWorkerIds] = useState(() => new Set(workers.map((w) => w.id)));
   const [includeOpen, setIncludeOpen] = useState(true);
+  const [onePagePerPerson, setOnePagePerPerson] = useState(true);
 
   const activeTasks = tasks.filter((t) => !t.archived && t.status !== "completed" && t.status !== "failed");
   const inTimeframe = activeTasks.filter((t) => taskMatchesTimeframe(t, timeframe));
@@ -19417,10 +19418,19 @@ function PrepareTaskListModal({ workers, tasks, onClose, onConfirm }) {
             />
             Include open tasks nobody's claimed yet
           </label>
+          <label className="flex items-center gap-2 text-sm text-slate-200 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={onePagePerPerson}
+              onChange={(e) => setOnePagePerPerson(e.target.checked)}
+              className="accent-amber-500"
+            />
+            One page per person (uncheck to print everyone on the same page)
+          </label>
         </div>
         <div className="px-5 py-4 border-t border-slate-800 shrink-0">
           <button
-            onClick={() => onConfirm({ timeframe, workerIds, includeOpen })}
+            onClick={() => onConfirm({ timeframe, workerIds, includeOpen, onePagePerPerson })}
             disabled={matchCount === 0}
             className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
           >
@@ -19546,7 +19556,9 @@ function PrintableTaskListModal({ workers, tasks, spec, onClose }) {
               {sections.map((sec, idx) => (
                 <div
                   key={sec.key}
-                  className={`worker-task-print-section${idx > 0 ? " worker-task-print-pagebreak" : ""}`}
+                  className={`worker-task-print-section${
+                    idx > 0 && spec.onePagePerPerson ? " worker-task-print-pagebreak" : ""
+                  }`}
                 >
                   <h3 className="text-base font-bold border-b-2 border-slate-900 pb-1 mb-1">{sec.heading}</h3>
                   {sec.items.map((t) => (
