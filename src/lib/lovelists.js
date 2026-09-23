@@ -40,6 +40,12 @@ export const loveStatusMeta = (key) => LOVE_STATUSES.find((s) => s.key === key) 
 // something that tells the truth about what's actually outstanding.
 export function loveItemDisplayMeta(item) {
   const base = loveStatusMeta(item.status);
+  // Checked before the Sent case below since they can never both apply —
+  // qtyOrdered only matters while still sitting at Ordered, and totalSent
+  // only ever accumulates once the item's moved well past that.
+  if (item.status === "ordered" && item.qtyOrdered != null && item.qtyOrdered < item.qty) {
+    return { ...base, label: `Partially Ordered (${item.qtyOrdered}/${item.qty})` };
+  }
   const totalSent = (item.sentBatches || []).reduce((sum, b) => sum + (b.sentQty || 0), 0);
   if (item.status !== "sent" && totalSent > 0) {
     return { ...base, label: `Partially Sent (${totalSent}/${item.qty})` };

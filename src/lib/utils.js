@@ -851,6 +851,12 @@ export function newLoveListItem(name, qty, extra = {}) {
     stagedBatches: [],
     backorderQty: extra.backorderQty || 0, // still outstanding from a supplier, set/updated via Receiving
     backorderReceiptDate: extra.backorderReceiptDate || null,
+    // Null means "assume the full qty was ordered" — only set to a lower
+    // number when the actual supplier order came in short of the full
+    // request. Separate from backorderQty, which is a Receiving-side
+    // concept (what showed up short on delivery); this is about what was
+    // actually placed on order in the first place.
+    qtyOrdered: extra.qtyOrdered != null ? extra.qtyOrdered : null,
   };
 }
 

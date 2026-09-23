@@ -15893,6 +15893,8 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [renameDraft, setRenameDraft] = useState("");
   const [editingNoteFor, setEditingNoteFor] = useState(null); // item, while editing its note
   const [noteDraft, setNoteDraft] = useState("");
+  const [editingOrderedQtyFor, setEditingOrderedQtyFor] = useState(null); // item, while editing qtyOrdered
+  const [orderedQtyDraft, setOrderedQtyDraft] = useState("");
   const [catalogSearch, setCatalogSearch] = useState("");
   const [smeDraft, setSmeDraft] = useState("");
   const [showArchived, setShowArchived] = useState(false);
@@ -16071,6 +16073,19 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     playSaveChime();
     onUpdateList({ ...list, subJobLabel: nicknameDraft.trim() });
     setEditingNickname(false);
+  };
+
+  const saveOrderedQty = () => {
+    if (!editingOrderedQtyFor) return;
+    const clamped = Math.max(0, Math.min(editingOrderedQtyFor.qty, Number(orderedQtyDraft) || 0));
+    playSaveChime();
+    onUpdateList({
+      ...list,
+      items: list.items.map((i) =>
+        i.id === editingOrderedQtyFor.id ? { ...i, qtyOrdered: clamped } : i
+      ),
+    });
+    setEditingOrderedQtyFor(null);
   };
 
   const saveNote = () => {
@@ -16268,6 +16283,22 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         const newStatus = direction === "forward" ? nextLoveStatus(i) : prevLoveStatus(i);
         if (!newStatus) return i;
         const today = new Date().toISOString().slice(0, 10);
+
+        if (newStatus === "ordered" && direction === "forward") {
+          // Defaults to the full requested amount — if only part of it
+          // actually got ordered, that's set afterward via the "Ordered:
+          // X of Y" tap-to-edit control rather than asked for right here,
+          // so tapping forward for the common full-order case still Just
+          // Works with no extra step. A value already set beforehand
+          // (edited before ever advancing) is respected as-is, same idea
+          // as Received's effectiveHave below.
+          return {
+            ...i,
+            status: newStatus,
+            statusDates: { ...i.statusDates, ordered: today },
+            qtyOrdered: i.qtyOrdered != null ? i.qtyOrdered : i.qty,
+          };
+        }
 
         if (newStatus === "sent" && direction === "forward") {
           // Every prior batch is a locked, historical record — figure out
@@ -17052,6 +17083,33 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                     </div>
                   );
                 })()}
+                {item.status !== "requested" &&
+                  (isEditor ? (
+                    <button
+                      onClick={() => {
+                        setEditingOrderedQtyFor(item);
+                        setOrderedQtyDraft(String(item.qtyOrdered ?? item.qty));
+                      }}
+                      className="text-xs mb-2 block text-left"
+                    >
+                      {item.qtyOrdered != null && item.qtyOrdered < item.qty ? (
+                        <span className="text-amber-300">
+                          📦 Ordered {item.qtyOrdered} of {item.qty} (partial)
+                        </span>
+                      ) : (
+                        <span className="text-slate-600 hover:text-slate-400">
+                          📦 Ordered {item.qtyOrdered ?? item.qty} of {item.qty}
+                        </span>
+                      )}
+                    </button>
+                  ) : (
+                    item.qtyOrdered != null &&
+                    item.qtyOrdered < item.qty && (
+                      <p className="text-xs text-amber-300 mb-2">
+                        📦 Ordered {item.qtyOrdered} of {item.qty} (partial)
+                      </p>
+                    )
+                  ))}
                 {isEditor ? (
                   <button
                     onClick={() => {
@@ -17318,6 +17376,45 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
               </button>
               <button
                 onClick={saveNickname}
+                className="flex-1 text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingOrderedQtyFor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-1">
+              Qty ordered for "{editingOrderedQtyFor.name}"
+            </h3>
+            <p className="text-xs text-slate-500 mb-3">
+              Defaults to the full {editingOrderedQtyFor.qty} requested — lower this if the
+              supplier order only covered part of it.
+            </p>
+            <input
+              type="number"
+              autoFocus
+              min="0"
+              max={editingOrderedQtyFor.qty}
+              value={orderedQtyDraft}
+              onChange={(e) => setOrderedQtyDraft(e.target.value)}
+              onFocus={selectOnFocus}
+              onClick={selectOnFocus}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => setEditingOrderedQtyFor(null)}
+                className="flex-1 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveOrderedQty}
                 className="flex-1 text-sm rounded-md py-2.5 bg-rose-500 text-slate-950 font-semibold hover:bg-rose-400"
               >
                 Save
