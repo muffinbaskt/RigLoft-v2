@@ -164,6 +164,7 @@ import {
   formatTaskTimestamp,
   isTaskOverdue,
   formatDueDate,
+  taskMatchesTimeframe,
   WORKER_TASKS_KEY,
   WORKERS_KEY,
   WORKER_ACTIVITY_KEY,
@@ -19022,6 +19023,8 @@ function WorkerDetailPage({ worker, tasks, allWorkers = [], onUpdateTask, onBulk
 
 function WorkerTasksDashboard({ workers, tasks, hasUnreadActivity, onOpenWorker, onAddTask, onManageRoster, onOpenActivity, onRequestEdit, onClose }) {
   const [tab, setTab] = useState("workers"); // "workers" | "today" | "jobs"
+  const [preparingPrintList, setPreparingPrintList] = useState(false);
+  const [printSpec, setPrintSpec] = useState(null); // { timeframe, workerIds, includeOpen } once confirmed
 
   const statsFor = (workerId) => {
     const wTasks = tasks.filter((t) => (t.assignedWorkerIds || []).includes(workerId));
@@ -19124,6 +19127,13 @@ function WorkerTasksDashboard({ workers, tasks, hasUnreadActivity, onOpenWorker,
               className="text-xs flex items-center gap-1 bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-3 py-2 hover:bg-slate-700"
             >
               Roster
+            </button>
+            <button
+              onClick={() => setPreparingPrintList(true)}
+              title="Prepare a printable task list"
+              className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+            >
+              <Printer className="w-4 h-4" />
             </button>
             <button
               onClick={onAddTask}
@@ -19257,6 +19267,282 @@ function WorkerTasksDashboard({ workers, tasks, hasUnreadActivity, onOpenWorker,
             </div>
           ))}
       </main>
+
+      {preparingPrintList && (
+        <PrepareTaskListModal
+          workers={workers}
+          tasks={tasks}
+          onClose={() => setPreparingPrintList(false)}
+          onConfirm={(spec) => {
+            setPrintSpec(spec);
+            setPreparingPrintList(false);
+          }}
+        />
+      )}
+
+      {printSpec && (
+        <PrintableTaskListModal
+          workers={workers}
+          tasks={tasks}
+          spec={printSpec}
+          onClose={() => setPrintSpec(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Options step — timeframe, which workers to include, and whether to
+// include still-open (unclaimed) tasks — before the actual printable
+// sheet gets built. Split from the print preview itself so the controls
+// never end up in the printed output (window.print() prints whatever's
+// on screen at the time).
+function PrepareTaskListModal({ workers, tasks, onClose, onConfirm }) {
+  const [timeframe, setTimeframe] = useState("today");
+  const [workerIds, setWorkerIds] = useState(() => new Set(workers.map((w) => w.id)));
+  const [includeOpen, setIncludeOpen] = useState(true);
+
+  const activeTasks = tasks.filter((t) => !t.archived && t.status !== "completed" && t.status !== "failed");
+  const inTimeframe = activeTasks.filter((t) => taskMatchesTimeframe(t, timeframe));
+  const matchCount = inTimeframe.filter(
+    (t) =>
+      (t.assignedWorkerIds || []).some((id) => workerIds.has(id)) ||
+      (includeOpen && (t.assignedWorkerIds || []).length === 0)
+  ).length;
+
+  const toggleWorker = (id) =>
+    setWorkerIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const TIMEFRAMES = [
+    { key: "today", label: "Today" },
+    { key: "this_week", label: "This Week" },
+    { key: "whenever", label: "Whenever" },
+    { key: "all", label: "All" },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" onClick={onClose}>
+      <div
+        className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <h3 className="text-slate-100 font-semibold text-sm">Prepare task list</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+          <div>
+            <p className="text-xs font-medium text-slate-400 mb-2">Timeframe</p>
+            <div className="flex flex-wrap gap-1.5">
+              {TIMEFRAMES.map((t) => (
+                <button
+                  key={t.key}
+                  onClick={() => setTimeframe(t.key)}
+                  className={`text-xs rounded-full px-3 py-1.5 border ${
+                    timeframe === t.key
+                      ? "bg-amber-500/15 border-amber-500/40 text-amber-300"
+                      : "border-slate-700 text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-slate-600 mt-1.5">
+              {timeframe === "today"
+                ? "Due today, plus anything already overdue."
+                : timeframe === "this_week"
+                ? "Due in the next 7 days (not counting today or overdue)."
+                : timeframe === "whenever"
+                ? "No due date set at all."
+                : "Every open task, regardless of due date."}
+            </p>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-medium text-slate-400">Workers</p>
+              <button
+                onClick={() =>
+                  setWorkerIds((prev) =>
+                    prev.size === workers.length ? new Set() : new Set(workers.map((w) => w.id))
+                  )
+                }
+                className="text-[11px] text-amber-400 hover:underline"
+              >
+                {workerIds.size === workers.length ? "Deselect all" : "Select all"}
+              </button>
+            </div>
+            {workers.length === 0 ? (
+              <p className="text-sm text-slate-500">No one on the roster yet.</p>
+            ) : (
+              <div className="space-y-1 max-h-40 overflow-y-auto">
+                {workers.map((w) => (
+                  <label
+                    key={w.id}
+                    className="flex items-center gap-2 text-sm text-slate-200 cursor-pointer py-1"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={workerIds.has(w.id)}
+                      onChange={() => toggleWorker(w.id)}
+                      className="accent-amber-500"
+                    />
+                    {w.name}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+          <label className="flex items-center gap-2 text-sm text-slate-200 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={includeOpen}
+              onChange={(e) => setIncludeOpen(e.target.checked)}
+              className="accent-amber-500"
+            />
+            Include open tasks nobody's claimed yet
+          </label>
+        </div>
+        <div className="px-5 py-4 border-t border-slate-800 shrink-0">
+          <button
+            onClick={() => onConfirm({ timeframe, workerIds, includeOpen })}
+            disabled={matchCount === 0}
+            className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+          >
+            {matchCount === 0
+              ? "Nothing matches these filters"
+              : `Preview & print (${matchCount} task${matchCount === 1 ? "" : "s"})`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// The actual printable sheet — grouped by worker (each gets every task
+// they're on, so two people sharing a task both see it on their own
+// section), with a separate "Open" section for anything nobody's claimed,
+// same print-preview pattern as the Love List and Receipt print modals.
+function PrintableTaskListModal({ workers, tasks, spec, onClose }) {
+  const activeTasks = tasks.filter((t) => !t.archived && t.status !== "completed" && t.status !== "failed");
+  const inTimeframe = activeTasks.filter((t) => taskMatchesTimeframe(t, spec.timeframe));
+
+  const selectedWorkers = workers.filter((w) => spec.workerIds.has(w.id));
+  const tasksFor = (workerId) =>
+    inTimeframe
+      .filter((t) => (t.assignedWorkerIds || []).includes(workerId))
+      .sort((a, b) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999"));
+  const openTasks = spec.includeOpen
+    ? inTimeframe
+        .filter((t) => (t.assignedWorkerIds || []).length === 0)
+        .sort((a, b) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999"))
+    : [];
+
+  const timeframeLabel =
+    { today: "Today", this_week: "This Week", whenever: "Whenever", all: "All open tasks" }[spec.timeframe] ||
+    "Tasks";
+
+  const TaskLine = ({ task }) => (
+    <div className="flex items-start gap-2 py-1.5 border-b border-slate-200 last:border-0">
+      <span className="inline-block w-4 h-4 border border-slate-500 shrink-0 mt-0.5" />
+      <div className="min-w-0">
+        <p className="text-sm">
+          {task.title}
+          {task.urgency === "urgent" && <span className="text-red-600 font-semibold"> · Urgent</span>}
+        </p>
+        <p className="text-xs text-slate-600">
+          {[task.jobLabel, task.dueDate ? `Due ${formatDueDate(task.dueDate)}` : null]
+            .filter(Boolean)
+            .join(" · ") || " "}
+        </p>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/70 flex items-center justify-center px-4 py-8 print:static print:block print:bg-white print:p-0">
+      <style>{`
+        @media print {
+          body * {
+            visibility: hidden;
+            height: 0 !important;
+            overflow: hidden !important;
+          }
+          #worker-task-print-area, #worker-task-print-area * {
+            visibility: visible;
+            height: auto !important;
+            overflow: visible !important;
+          }
+          #worker-task-print-area {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 0.5in;
+          }
+          .worker-task-print-section {
+            break-inside: avoid;
+          }
+        }
+      `}</style>
+      <div className="bg-white text-slate-900 w-full max-w-2xl rounded-lg max-h-full flex flex-col print:static print:block print:max-w-none print:rounded-none print:max-h-none">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 shrink-0 print:hidden">
+          <h3 className="font-semibold text-base">Print preview</h3>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => window.print()}
+              className="text-sm rounded-md px-3 py-1.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 flex items-center gap-1.5"
+            >
+              <Printer className="w-4 h-4" />
+              Print
+            </button>
+            <button onClick={onClose} className="text-slate-500 hover:text-slate-800">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+        <div id="worker-task-print-area" className="p-6 overflow-y-auto print:overflow-visible">
+          <h2 className="text-xl font-bold mb-1">Task List — {timeframeLabel}</h2>
+          <p className="text-sm text-slate-600 mb-5">
+            Printed {new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}
+          </p>
+          {!selectedWorkers.some((w) => tasksFor(w.id).length > 0) && openTasks.length === 0 ? (
+            <p className="text-sm text-slate-500">Nothing matches these filters.</p>
+          ) : (
+            <div className="space-y-5">
+              {selectedWorkers.map((w) => {
+                const wTasks = tasksFor(w.id);
+                if (wTasks.length === 0) return null;
+                return (
+                  <div key={w.id} className="worker-task-print-section">
+                    <h3 className="text-base font-bold border-b-2 border-slate-900 pb-1 mb-1">{w.name}</h3>
+                    {wTasks.map((t) => (
+                      <TaskLine key={t.id} task={t} />
+                    ))}
+                  </div>
+                );
+              })}
+              {openTasks.length > 0 && (
+                <div className="worker-task-print-section">
+                  <h3 className="text-base font-bold border-b-2 border-slate-900 pb-1 mb-1">
+                    Open — anyone can take these
+                  </h3>
+                  {openTasks.map((t) => (
+                    <TaskLine key={t.id} task={t} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

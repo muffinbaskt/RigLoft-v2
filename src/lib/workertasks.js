@@ -113,6 +113,28 @@ export function isTaskOverdue(task) {
   return new Date(task.dueDate + "T23:59:59") < new Date();
 }
 
+// Powers the printable task list's timeframe filter. "Today" deliberately
+// also catches anything overdue — a task due yesterday that's still open
+// needs attention now, not filed away separately from today's list. "This
+// week" is a rolling 7-day window (today through 6 days out), not the
+// calendar week, so a sheet printed on a Wednesday means the same thing as
+// one printed on a Saturday. "Whenever" is only tasks with no due date at
+// all — genuinely no particular timing, not "someday soon." `today`
+// defaults to the real date but takes an override so this stays testable.
+export function taskMatchesTimeframe(task, timeframe, today = new Date().toISOString().slice(0, 10)) {
+  if (timeframe === "all") return true;
+  if (timeframe === "whenever") return !task.dueDate;
+  if (!task.dueDate) return false;
+  if (timeframe === "today") return task.dueDate <= today;
+  if (timeframe === "this_week") {
+    const weekEnd = new Date(today + "T00:00:00");
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    const weekEndStr = weekEnd.toISOString().slice(0, 10);
+    return task.dueDate > today && task.dueDate <= weekEndStr;
+  }
+  return true;
+}
+
 export function formatDueDate(dueDate) {
   if (!dueDate) return "";
   const d = new Date(dueDate + "T00:00:00");
