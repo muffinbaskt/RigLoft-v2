@@ -20157,16 +20157,30 @@ function WorkerTasksSection({ onClose }) {
 
 // A running pull/hand-off list built by bulk-selecting items across one or
 // more Love Lists over time and dropping them here — see newLoveTaskEntry
-// in lib/lovelists.js for why this is a snapshot, not a live-synced second
-// copy of the item. Grouped by job, same shape as the plain-text export.
-function LoveTaskListModal({ entries, isEditor, onToggleDone, onRemove, onClearDone, onClearAll, onClose }) {
+// in lib/lovelists.js for why most of an entry (name, job) is a fixed
+// snapshot, not a live-synced second copy of the item. The quantity is the
+// one exception: it's resolved live against the source item every render
+// (qty minus whatever's already on hand), so the number here always
+// reflects what's actually still needed right now, not what was needed
+// the moment it got added — someone else marking part of it received
+// updates this list too, with no extra step. Falls back to the original
+// snapshot qty if the source list or item is gone (deleted, merged away),
+// so a stale entry never shows a wrong "0" just because it can't be found.
+function LoveTaskListModal({ entries, lists, isEditor, onToggleDone, onRemove, onClearDone, onClearAll, onClose }) {
   const [copied, setCopied] = useState(false);
   const [confirmingClearAll, setConfirmingClearAll] = useState(false);
-  const groups = groupLoveTaskEntries(entries);
+  const liveEntries = entries.map((e) => {
+    const sourceItem = lists
+      .find((l) => l.id === e.sourceListId)
+      ?.items.find((i) => i.id === e.sourceItemId);
+    if (!sourceItem) return e;
+    return { ...e, qty: Math.max(0, (sourceItem.qty || 0) - (sourceItem.qtyHave || 0)) };
+  });
+  const groups = groupLoveTaskEntries(liveEntries);
   const doneCount = entries.filter((e) => e.done).length;
 
   const copyList = async () => {
-    const ok = await copyToClipboard(formatLoveTaskListText(entries));
+    const ok = await copyToClipboard(formatLoveTaskListText(liveEntries));
     if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -20245,7 +20259,7 @@ function LoveTaskListModal({ entries, isEditor, onToggleDone, onRemove, onClearD
                           }`}
                         >
                           {entry.itemName}
-                          {entry.qty > 1 && ` x${entry.qty}`}
+                          {entry.qty !== 1 && ` x${entry.qty}`}
                         </p>
                         {isEditor && (
                           <button
@@ -20868,6 +20882,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
       {showLoveTaskList && (
         <LoveTaskListModal
           entries={loveTaskList}
+          lists={lists}
           isEditor={isEditor}
           onToggleDone={toggleLoveTaskDone}
           onRemove={removeLoveTaskEntry}

@@ -174,7 +174,13 @@ export function groupLoveTaskEntries(entries) {
 export function formatLoveTaskListText(entries) {
   return groupLoveTaskEntries(entries)
     .map((group) =>
-      [group.label, ...group.entries.map((e) => `${e.itemName}${e.qty > 1 ? ` x${e.qty}` : ""}`)].join("\n")
+      // Bare name means "1" (matches how these were always written by
+      // hand); anything else — including 0, once a live-tracked quantity
+      // can genuinely reach zero — gets an explicit number so "already
+      // fully in hand" is never mistaken for "still need 1".
+      [group.label, ...group.entries.map((e) => `${e.itemName}${e.qty !== 1 ? ` x${e.qty}` : ""}`)].join(
+        "\n"
+      )
     )
     .join("\n");
 }
