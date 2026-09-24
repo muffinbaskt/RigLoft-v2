@@ -6810,6 +6810,23 @@ function JobSheetScanModal({ catalog, onImport, onLearnAlias, onClose }) {
   const [linkingItemId, setLinkingItemId] = useState(null);
   const [catalogPickerSearch, setCatalogPickerSearch] = useState("");
   const fileInputRef = useRef(null);
+  // Same name memory Receiving/Archive use — a phrase OCR reads the same
+  // way twice (a supplier's or a foreman's own consistent shorthand on a
+  // requisition sheet) gets the corrected name pre-filled here too,
+  // instead of every scan starting from raw OCR text again. Loaded here
+  // rather than threaded down as a prop, same as the other three screens
+  // that already read/write this same shared key independently.
+  const [nameMemory, setNameMemory] = useState({});
+  useEffect(() => {
+    (async () => {
+      try {
+        const result = await getWithRetry(RECEIVING_NAME_MEMORY_KEY);
+        if (result.ok && result.value) setNameMemory(JSON.parse(result.value));
+      } catch {
+        // just starts empty — scanning still works, it just won't have memory yet
+      }
+    })();
+  }, []);
 
   const gangFromSection = (section) => {
     if (!section) return "Unassigned";
@@ -6864,10 +6881,18 @@ function JobSheetScanModal({ catalog, onImport, onLearnAlias, onClose }) {
       if (!data.ok) throw new Error(data.error || "Scan failed.");
 
       const items = (data.items || []).map((it) => {
-        const match = it.description ? findCatalogMatch(it.description, catalog) : null;
+        // The raw OCR text is what name memory is keyed on — kept
+        // separately from the (possibly corrected) description below so a
+        // later hand-edit still has the original text to re-remember
+        // against when the import is confirmed.
+        const rawDescription = it.description || "";
+        const remembered = rawDescription ? nameMemory[normalizeText(rawDescription)] : null;
+        const effectiveDescription = remembered || rawDescription;
+        const match = effectiveDescription ? findCatalogMatch(effectiveDescription, catalog) : null;
         return {
           id: uniqueId(),
-          description: it.description || "",
+          description: effectiveDescription,
+          rawDescription,
           quantity: Number(it.quantity) > 0 ? Number(it.quantity) : 1,
           quantityLabel: it.quantityLabel || null,
           ordered: !!it.ordered,
@@ -6950,6 +6975,18 @@ function JobSheetScanModal({ catalog, onImport, onLearnAlias, onClose }) {
       matched: !!it.matchedCatalogName,
       catalogId: it.catalogId || null,
     }));
+
+    // Remembers whatever the description ended up as, keyed to the raw
+    // OCR text — same moment Receiving/Archive remember it (on actually
+    // committing the item), not on every keystroke while still reviewing.
+    const nextMemory = { ...nameMemory };
+    reviewItems.forEach((it) => {
+      if (it.rawDescription && it.description.trim()) {
+        nextMemory[normalizeText(it.rawDescription)] = it.description.trim();
+      }
+    });
+    saveWithRetry(RECEIVING_NAME_MEMORY_KEY, JSON.stringify(nextMemory)).catch(() => {});
+
     onImport(previewRows);
     onClose();
   };
