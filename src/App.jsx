@@ -153,6 +153,10 @@ import {
   isStale,
   findPossibleDuplicates,
   LOVE_LISTS_KEY,
+  LOVE_TASK_LIST_KEY,
+  newLoveTaskEntry,
+  groupLoveTaskEntries,
+  formatLoveTaskListText,
 } from "./lib/lovelists";
 import {
   WORKER_TASK_STATUSES,
@@ -15924,7 +15928,7 @@ function PrintableLoveListModal({ list, onClose }) {
   );
 }
 
-function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onSyncToolsFromItem, onBack, onGoHome }) {
+function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onSyncToolsFromItem, onAddToLoveTaskList, onBack, onGoHome }) {
   const [addingItem, setAddingItem] = useState(false);
   const [showPullFromReceiving, setShowPullFromReceiving] = useState(false);
   const [mergingItem, setMergingItem] = useState(null);
@@ -16310,6 +16314,13 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     setSelectedIds(new Set());
   };
 
+  const addSelectedToTaskList = () => {
+    if (!onAddToLoveTaskList) return;
+    const selectedItems = list.items.filter((i) => selectedIds.has(i.id));
+    onAddToLoveTaskList(selectedItems);
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
 
   const relinkCatalog = (catalogItem) => {
     if (!relinkingItem) return;
@@ -16752,6 +16763,15 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                   <Users className="w-3.5 h-3.5" />
                   Assign {selectedIds.size} selected
                 </button>
+                {onAddToLoveTaskList && (
+                  <button
+                    onClick={addSelectedToTaskList}
+                    className="text-xs flex items-center gap-1 bg-rose-500 text-slate-950 font-semibold rounded-md px-2.5 py-1.5 hover:bg-rose-400"
+                  >
+                    <ClipboardList className="w-3.5 h-3.5" />
+                    Add {selectedIds.size} to Task List
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -17735,7 +17755,7 @@ function StaleThresholdsModal({ thresholds, onSave, onClose }) {
   );
 }
 
-function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onSaveThresholds, onOpenList, onAddList, onScanList, onOpenWorkerTasks, onBulkArchiveLists, onRestoreBackup, restoreError, restoreSuccessCount, onGoHome }) {
+function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onSaveThresholds, onOpenList, onAddList, onScanList, onOpenWorkerTasks, onOpenTaskList, taskListCount = 0, onBulkArchiveLists, onRestoreBackup, restoreError, restoreSuccessCount, onGoHome }) {
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("active"); // "active" | "ready"
   const [showThresholdSettings, setShowThresholdSettings] = useState(false);
@@ -17821,6 +17841,18 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
           </div>
           {isEditor && (
             <div className="flex gap-2 shrink-0">
+              <button
+                onClick={onOpenTaskList}
+                title="Task list"
+                className="relative flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+              >
+                <ClipboardList className="w-4 h-4" />
+                {taskListCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-slate-950 text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                    {taskListCount > 9 ? "9+" : taskListCount}
+                  </span>
+                )}
+              </button>
               <button
                 onClick={onOpenWorkerTasks}
                 title="Workers"
@@ -20123,6 +20155,132 @@ function WorkerTasksSection({ onClose }) {
   );
 }
 
+// A running pull/hand-off list built by bulk-selecting items across one or
+// more Love Lists over time and dropping them here — see newLoveTaskEntry
+// in lib/lovelists.js for why this is a snapshot, not a live-synced second
+// copy of the item. Grouped by job, same shape as the plain-text export.
+function LoveTaskListModal({ entries, isEditor, onToggleDone, onRemove, onClearDone, onClearAll, onClose }) {
+  const [copied, setCopied] = useState(false);
+  const [confirmingClearAll, setConfirmingClearAll] = useState(false);
+  const groups = groupLoveTaskEntries(entries);
+  const doneCount = entries.filter((e) => e.done).length;
+
+  const copyList = async () => {
+    const ok = await copyToClipboard(formatLoveTaskListText(entries));
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-40 bg-slate-950 text-slate-100 overflow-y-auto">
+      <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
+        <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+              <X className="w-5 h-5" />
+            </button>
+            <p className="font-semibold text-slate-100 flex items-center gap-1.5">
+              <ClipboardList className="w-4 h-4 text-rose-400" />
+              Task List
+            </p>
+          </div>
+          {entries.length > 0 && (
+            <button
+              onClick={copyList}
+              className="text-xs flex items-center gap-1.5 bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-3 py-2 hover:bg-slate-700"
+            >
+              <Copy className="w-3.5 h-3.5" />
+              {copied ? "Copied!" : "Copy"}
+            </button>
+          )}
+        </div>
+      </header>
+
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        {entries.length === 0 ? (
+          <p className="text-sm text-slate-500 text-center py-10">
+            Nothing here yet — select items on a Love List and add them to the Task List.
+          </p>
+        ) : (
+          <>
+            {isEditor && (
+              <div className="flex items-center gap-3 mb-4">
+                {doneCount > 0 && (
+                  <button onClick={onClearDone} className="text-xs text-slate-400 hover:text-slate-200">
+                    Clear {doneCount} done
+                  </button>
+                )}
+                <button
+                  onClick={() => setConfirmingClearAll(true)}
+                  className="text-xs text-slate-500 hover:text-red-400"
+                >
+                  Clear all
+                </button>
+              </div>
+            )}
+            <div className="space-y-5">
+              {groups.map((group) => (
+                <div key={group.key}>
+                  <p className="font-semibold text-slate-100 mb-2">{group.label}</p>
+                  <div className="space-y-1.5">
+                    {group.entries.map((entry) => (
+                      <div
+                        key={entry.id}
+                        className={`flex items-center gap-2.5 border rounded-md px-3 py-2 ${
+                          entry.done ? "border-slate-800 bg-slate-900/40" : "border-slate-800 bg-slate-900"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={entry.done}
+                          disabled={!isEditor}
+                          onChange={() => onToggleDone(entry.id)}
+                          className="w-4 h-4 rounded accent-rose-500 shrink-0"
+                        />
+                        <p
+                          className={`flex-1 min-w-0 text-sm truncate ${
+                            entry.done ? "text-slate-500 line-through" : "text-slate-100"
+                          }`}
+                        >
+                          {entry.itemName}
+                          {entry.qty > 1 && ` x${entry.qty}`}
+                        </p>
+                        {isEditor && (
+                          <button
+                            onClick={() => onRemove(entry.id)}
+                            className="text-slate-600 hover:text-red-400 shrink-0"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </main>
+
+      {confirmingClearAll && (
+        <ConfirmDelete
+          title="Clear the whole Task List?"
+          message={`This removes all ${entries.length} item${entries.length === 1 ? "" : "s"} on it. It doesn't affect the actual Love Lists items they came from.`}
+          confirmLabel="Clear all"
+          onConfirm={() => {
+            onClearAll();
+            setConfirmingClearAll(false);
+          }}
+          onCancel={() => setConfirmingClearAll(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   const [lists, setLists] = useState([]);
   const [catalog, setCatalog] = useState([]);
@@ -20137,6 +20295,8 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   const [showWorkerTasks, setShowWorkerTasks] = useState(false);
   const [tools, setTools] = useState([]);
   const toolsRef = useRef([]);
+  const [loveTaskList, setLoveTaskList] = useState([]);
+  const [showLoveTaskList, setShowLoveTaskList] = useState(false);
   // Saving works like Job Lists: every save says "I last saw the server at
   // time T", the server refuses if it has since changed, and the two
   // versions are merged item by item instead of one overwriting the other;
@@ -20207,6 +20367,12 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
     } catch {
       // custom thresholds just won't be available this session — defaults still work fine
     }
+    try {
+      const taskListResult = await getWithRetry(LOVE_TASK_LIST_KEY);
+      if (taskListResult.ok && taskListResult.value) setLoveTaskList(JSON.parse(taskListResult.value));
+    } catch {
+      // just starts empty — nothing else depends on this loading successfully
+    }
     setLoading(false);
     if (isEditor) maybeAutoBackupLoveLists(loadedLists);
   };
@@ -20220,6 +20386,32 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
     if (!isEditor) return;
     setStaleThresholds(updated);
     saveWithRetry(STALE_THRESHOLDS_KEY, JSON.stringify(updated)).catch(() => {});
+  };
+
+  const updateLoveTaskList = (updater) => {
+    if (!isEditor) return;
+    setLoveTaskList((prev) => {
+      const next = updater(prev);
+      saveWithRetry(LOVE_TASK_LIST_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+  const addToLoveTaskList = (list, addedItems) => {
+    if (!isEditor || addedItems.length === 0) return;
+    playSaveChime();
+    updateLoveTaskList((prev) => [...prev, ...addedItems.map((i) => newLoveTaskEntry(list, i))]);
+  };
+  const toggleLoveTaskDone = (id) => {
+    updateLoveTaskList((prev) => prev.map((e) => (e.id === id ? { ...e, done: !e.done } : e)));
+  };
+  const removeLoveTaskEntry = (id) => {
+    updateLoveTaskList((prev) => prev.filter((e) => e.id !== id));
+  };
+  const clearDoneLoveTasks = () => {
+    updateLoveTaskList((prev) => prev.filter((e) => !e.done));
+  };
+  const clearAllLoveTasks = () => {
+    updateLoveTaskList(() => []);
   };
 
   // Assigning an item creates a real task, not just a label — it shows up
@@ -20621,6 +20813,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
         onDeleteList={handleDeleteList}
         onLearnAlias={learnCatalogAlias}
         onSyncToolsFromItem={syncToolsFromLoveListItem}
+        onAddToLoveTaskList={(addedItems) => addToLoveTaskList(activeList, addedItems)}
         onBack={() => setActiveListId(null)}
         onGoHome={onGoHome}
       />
@@ -20645,6 +20838,8 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
         onAddList={() => setShowAddForm(true)}
         onScanList={() => setShowScanModal(true)}
         onOpenWorkerTasks={() => setShowWorkerTasks(true)}
+        onOpenTaskList={() => setShowLoveTaskList(true)}
+        taskListCount={loveTaskList.filter((e) => !e.done).length}
         onBulkArchiveLists={handleBulkArchiveLists}
         onRestoreBackup={handleRestoreFileChosen}
         restoreError={restoreError}
@@ -20668,6 +20863,17 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
             setShowWorkerTasks(false);
             reloadWorkerData();
           }}
+        />
+      )}
+      {showLoveTaskList && (
+        <LoveTaskListModal
+          entries={loveTaskList}
+          isEditor={isEditor}
+          onToggleDone={toggleLoveTaskDone}
+          onRemove={removeLoveTaskEntry}
+          onClearDone={clearDoneLoveTasks}
+          onClearAll={clearAllLoveTasks}
+          onClose={() => setShowLoveTaskList(false)}
         />
       )}
       {restorePending && (

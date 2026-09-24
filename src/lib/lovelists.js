@@ -1,4 +1,4 @@
-import { normalizeText } from "./utils";
+import { normalizeText, uniqueId } from "./utils";
 
 // Pure Love List domain logic — status progression, stale/duplicate
 // detection, and display-label formatting. Nothing here touches React;
@@ -118,3 +118,63 @@ export function findPossibleDuplicates(name, catalogId, catalog = [], allLists =
 }
 
 export const LOVE_LISTS_KEY = "warehub-love-lists";
+
+// A separate, lightweight pull/hand-off list — built by bulk-selecting
+// items across one or more Love Lists over time (potentially different
+// visits, different jobs) and dropping them here, viewed from the Love
+// Lists dashboard as one running list grouped by job. Deliberately not
+// synced back to the source item in any way (no status, no live qty) —
+// this is a snapshot of "what to go grab," not a second copy of the real
+// item record. Uses the same simple save-and-go persistence as Workers/
+// Worker Tasks/general To Dos elsewhere in the app, not the full
+// conflict-merge engine the Love List items themselves use, since this
+// is a single person's working list, not shared inventory state.
+export const LOVE_TASK_LIST_KEY = "warehub-love-task-list";
+
+export function newLoveTaskEntry(list, item) {
+  return {
+    id: uniqueId(),
+    jobLabel: list.jobLabel,
+    subJobLabel: list.subJobLabel || "",
+    itemName: item.name,
+    qty: item.qty,
+    qtyUnit: item.qtyUnit || "",
+    sourceListId: list.id,
+    sourceItemId: item.id,
+    addedAt: new Date().toISOString(),
+    done: false,
+  };
+}
+
+// Groups entries under their job (using the same nickname-aware label as
+// listDisplayLabel), in the order each job first appears, with entries
+// inside a group kept in the order they were added.
+export function groupLoveTaskEntries(entries) {
+  const groups = [];
+  const byJob = new Map();
+  entries.forEach((entry) => {
+    const key = `${entry.jobLabel}|${entry.subJobLabel || ""}`;
+    if (!byJob.has(key)) {
+      const group = {
+        key,
+        label: entry.subJobLabel ? `${entry.jobLabel} — ${entry.subJobLabel}` : entry.jobLabel,
+        entries: [],
+      };
+      byJob.set(key, group);
+      groups.push(group);
+    }
+    byJob.get(key).entries.push(entry);
+  });
+  return groups;
+}
+
+// Plain-text export — one job label per line, followed by its item lines
+// (name, plus "xN" only when more than one), no blank lines between
+// groups. Meant to be copied straight into a text message or a notes app.
+export function formatLoveTaskListText(entries) {
+  return groupLoveTaskEntries(entries)
+    .map((group) =>
+      [group.label, ...group.entries.map((e) => `${e.itemName}${e.qty > 1 ? ` x${e.qty}` : ""}`)].join("\n")
+    )
+    .join("\n");
+}
