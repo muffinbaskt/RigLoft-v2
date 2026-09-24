@@ -138,6 +138,7 @@ import {
   unionById,
   threeWayMergeJobs,
   threeWayMergeLoveLists,
+  wouldWipeAnyJobItems,
 } from "./lib/sync";
 import { createSyncEngine, applyLoveListResolutions } from "./lib/syncEngine";
 import {
@@ -12775,7 +12776,16 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
         // An empty/invalid list from the server is never trusted here — a
         // normal load would fall back to a starter job, and swapping that in
         // over real data mid-session is exactly the kind of wipe to avoid.
-        if (Array.isArray(parsed) && parsed.length > 0) parsedJobs = parsed;
+        // Same distrust extended to a single job going from having items to
+        // having none — found after a job's freshly-imported items vanished
+        // with no error and no explanation; this can't undo that, but it
+        // stops this specific background swap-in from ever being the cause
+        // going forward. A real cross-device deletion of a few items still
+        // comes through fine; this only refuses when a job goes all the way
+        // to zero in one swap.
+        if (Array.isArray(parsed) && parsed.length > 0 && !wouldWipeAnyJobItems(jobsRef.current, parsed)) {
+          parsedJobs = parsed;
+        }
       } catch {
         // unreadable — leave jobs as-is this round
       }

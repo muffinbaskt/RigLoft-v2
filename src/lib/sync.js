@@ -134,6 +134,27 @@ export function unionById(theirsList, mineList) {
   return [...byId.values()];
 }
 
+// A narrower, cheaper safety check than a full three-way merge — used
+// specifically before swapping in a whole "jobs" array fetched in the
+// background (see checkForRemoteChanges), where there's no base/mine/
+// theirs to actually merge, just a decision to trust the incoming data
+// or not. The existing rule already refuses an empty/invalid whole array
+// (a normal load falling back to a starter job looks the same as real
+// data being gone). This extends the same distrust to a single job: if
+// a job that currently has items would end up with none at all under
+// the incoming data, that's exactly the shape of a silent background
+// wipe, not a legitimate remote edit — a real cross-device deletion of a
+// few items out of many still passes through fine, since this only
+// fires on a job going all the way to zero.
+export function wouldWipeAnyJobItems(currentJobs, incomingJobs) {
+  return incomingJobs.some((incomingJob) => {
+    const currentJob = currentJobs.find((j) => String(j.id) === String(incomingJob.id));
+    const currentCount = (currentJob?.items || []).length;
+    const incomingCount = (incomingJob.items || []).length;
+    return currentCount > 0 && incomingCount === 0;
+  });
+}
+
 export function threeWayMergeJobs(baseJobs, mineJobs, theirJobs) {
   const baseById = new Map((baseJobs || []).map((j) => [String(j.id), j]));
   const mineById = new Map((mineJobs || []).map((j) => [String(j.id), j]));
