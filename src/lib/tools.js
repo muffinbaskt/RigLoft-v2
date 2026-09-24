@@ -517,15 +517,24 @@ export function parseCsvText(text) {
 // header row is matched by column name (case-insensitive, a few
 // reasonable variants allowed per column) to find which column is
 // which, then every value is read straight from its own real column.
+// Shared between the CSV and PDF-table header detection below, so the two
+// can't drift into recognizing different column names. Matches on a
+// leading word rather than the whole cell — "SME", "SME#", and "SME
+// Number" all start with "sme" followed by a non-letter (a word boundary),
+// which is exactly the kind of real-world header variation a supplier's
+// or a foreman's own spreadsheet export uses; only requiring an exact
+// "SME"/"SME#" match rejected a genuine file for no real reason.
+export const SME_TABLE_HEADER_PATTERNS = {
+  sme: /^sme\b/i,
+  item: /^item\b/i,
+  serial: /^serial\b/i,
+};
+
 export function parseSmeItemSerialCsv(csvText) {
   const table = parseCsvText(csvText);
   if (table.length === 0) return [];
 
-  const COLUMN_PATTERNS = {
-    sme: /^sme#?$/i,
-    item: /^item$/i,
-    serial: /^serial#?$/i,
-  };
+  const COLUMN_PATTERNS = SME_TABLE_HEADER_PATTERNS;
 
   let headerIndex = -1;
   let colIndex = null;
@@ -574,7 +583,7 @@ export function parseSmeItemSerialCsv(csvText) {
 // Only sme/item/serial values are kept; anything else is discarded.
 export function parseSmeItemSerialTable(rows) {
   if (!rows || rows.length === 0) return [];
-  const HEADER_PATTERNS = { sme: /^sme#?$/i, item: /^item$/i, serial: /^serial#?$/i };
+  const HEADER_PATTERNS = SME_TABLE_HEADER_PATTERNS;
 
   let headerRowIndex = -1;
   let headerCells = null;
