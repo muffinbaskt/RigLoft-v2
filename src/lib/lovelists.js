@@ -46,6 +46,9 @@ export function loveItemDisplayMeta(item) {
   if (item.status === "ordered" && item.qtyOrdered != null && item.qtyOrdered < item.qty) {
     return { ...base, label: `Partially Ordered (${item.qtyOrdered}/${item.qty})` };
   }
+  if (item.status === "ordered" && item.qtyOrdered != null && item.qtyOrdered > item.qty) {
+    return { ...base, label: `Ordered Extra (${item.qtyOrdered}/${item.qty})` };
+  }
   const totalSent = (item.sentBatches || []).reduce((sum, b) => sum + (b.sentQty || 0), 0);
   if (item.status !== "sent" && totalSent > 0) {
     return { ...base, label: `Partially Sent (${totalSent}/${item.qty})` };

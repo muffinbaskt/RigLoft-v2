@@ -16138,7 +16138,10 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
 
   const saveOrderedQty = () => {
     if (!editingOrderedQtyFor) return;
-    const clamped = Math.max(0, Math.min(editingOrderedQtyFor.qty, Number(orderedQtyDraft) || 0));
+    // Only floors at 0 — ordering more than what was requested genuinely
+    // happens (supplier minimums, rounding up to a case/box size), so this
+    // deliberately does NOT cap at the requested qty the way it used to.
+    const clamped = Math.max(0, Number(orderedQtyDraft) || 0);
     playSaveChime();
     onUpdateList({
       ...list,
@@ -17157,6 +17160,10 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                         <span className="text-amber-300">
                           📦 Ordered {item.qtyOrdered} of {item.qty} (partial)
                         </span>
+                      ) : item.qtyOrdered != null && item.qtyOrdered > item.qty ? (
+                        <span className="text-sky-300">
+                          📦 Ordered {item.qtyOrdered} of {item.qty} (+{item.qtyOrdered - item.qty} extra)
+                        </span>
                       ) : (
                         <span className="text-slate-600 hover:text-slate-400">
                           📦 Ordered {item.qtyOrdered ?? item.qty} of {item.qty}
@@ -17165,11 +17172,16 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                     </button>
                   ) : (
                     item.qtyOrdered != null &&
-                    item.qtyOrdered < item.qty && (
+                    item.qtyOrdered !== item.qty &&
+                    (item.qtyOrdered < item.qty ? (
                       <p className="text-xs text-amber-300 mb-2">
                         📦 Ordered {item.qtyOrdered} of {item.qty} (partial)
                       </p>
-                    )
+                    ) : (
+                      <p className="text-xs text-sky-300 mb-2">
+                        📦 Ordered {item.qtyOrdered} of {item.qty} (+{item.qtyOrdered - item.qty} extra)
+                      </p>
+                    ))
                   ))}
                 {isEditor ? (
                   <button
@@ -17454,13 +17466,13 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
             </h3>
             <p className="text-xs text-slate-500 mb-3">
               Defaults to the full {editingOrderedQtyFor.qty} requested — lower this if the
-              supplier order only covered part of it.
+              supplier order only covered part of it, or raise it if you ordered more (supplier
+              minimums, rounding up to a case size, etc).
             </p>
             <input
               type="number"
               autoFocus
               min="0"
-              max={editingOrderedQtyFor.qty}
               value={orderedQtyDraft}
               onChange={(e) => setOrderedQtyDraft(e.target.value)}
               onFocus={selectOnFocus}
