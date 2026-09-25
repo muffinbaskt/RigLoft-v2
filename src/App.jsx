@@ -20420,7 +20420,7 @@ function LoveTaskListModal({ entries, lists, isEditor, onToggleDone, onRemove, o
   );
 }
 
-function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null }) {
+function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDeepLinkConsumed }) {
   const [lists, setLists] = useState([]);
   const [catalog, setCatalog] = useState([]);
   const [workers, setWorkers] = useState([]);
@@ -20430,8 +20430,15 @@ function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null }) {
   const [loadFailed, setLoadFailed] = useState(false);
   // Seeded from a deep link (e.g. a pallet's QR code) when present. Lists
   // haven't loaded yet at this point, so activeList below just stays null
-  // — behind the loading spinner — until loadAll finds a match.
+  // — behind the loading spinner — until loadAll finds a match. Reports
+  // back to the parent (once, after this seed has already been captured
+  // above) so a later, unrelated remount of this screen starts at the
+  // dashboard instead of forcing the same list open again.
   const [activeListId, setActiveListId] = useState(initialListId);
+  useEffect(() => {
+    if (initialListId != null) onDeepLinkConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
   const [showWorkerTasks, setShowWorkerTasks] = useState(false);
@@ -26996,16 +27003,23 @@ export default function AuthGate() {
   // A deep link opens straight into its section, but still needs a
   // landing-screen history entry underneath it — otherwise Home/back on a
   // freshly-opened link (no prior history in this tab) has nowhere to go.
-  // pendingDeepLinkId is cleared right after this first render so it's a
-  // one-time seed: leaving and later returning to the same section through
-  // normal navigation won't keep reopening the linked record.
+  // This fires on the very first render regardless of session state, since
+  // history manipulation doesn't depend on what's on screen yet.
   useEffect(() => {
     if (!initialDeepLink) return;
     window.history.replaceState({ appSection: null }, "", window.location.pathname);
     window.history.pushState({ appSection: initialDeepLink.section }, "", window.location.pathname);
-    setPendingDeepLinkId(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // pendingDeepLinkId is cleared once the section that actually uses it
+  // reports back that it has (see LoveListsApp's onDeepLinkConsumed) —
+  // NOT from a plain mount effect here. The section it feeds sits behind
+  // the session-loading spinner below and can take a moment (an async
+  // supabase.auth.getSession() round trip) to mount for the first time;
+  // an effect firing unconditionally on this component's first render
+  // was clearing the id before that section ever got to read it, so every
+  // scanned QR silently landed on the dashboard instead of the list.
+  const consumeDeepLink = () => setPendingDeepLinkId(null);
   // Tapping a section's own Back/Home button goes through history.back()
   // too, rather than setting state directly — that way it consumes the
   // same history entry the swipe gesture would have, so the two ways of
@@ -27155,6 +27169,7 @@ export default function AuthGate() {
           isOwner={isOwner}
           onGoHome={goToLanding}
           initialListId={pendingDeepLinkId}
+          onDeepLinkConsumed={consumeDeepLink}
         />
       ) : appSection === "kiosk" ? (
         <WorkerKioskApp onRequestStaffLogin={() => setShowLogin(true)} />
