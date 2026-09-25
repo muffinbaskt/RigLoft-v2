@@ -26956,9 +26956,14 @@ export default function AuthGate() {
   const initialDeepLink = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
     const section = params.get("section");
-    const id = params.get("id");
+    const rawId = params.get("id");
     const validSections = ["jobs", "love", "receiving", "backorders", "archive", "tools"];
-    return section && id && validSections.includes(section) ? { section, id } : null;
+    if (!section || !rawId || !validSections.includes(section)) return null;
+    // Every id in this app comes from uniqueId() (a number), but a URL
+    // query param is always a string — comparing the two with === (as the
+    // list/job lookup does) silently never matches without this coercion.
+    const id = Number(rawId);
+    return Number.isFinite(id) ? { section, id } : null;
   }, []);
   const [appSection, setAppSection] = useState(initialDeepLink?.section ?? null); // null = landing, "jobs" | "love"
   const [pendingDeepLinkId, setPendingDeepLinkId] = useState(initialDeepLink?.id ?? null);
