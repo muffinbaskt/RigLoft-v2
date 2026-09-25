@@ -27,9 +27,9 @@ export function newWorkerTask(workerId, workerName, title, jobLabel, source = nu
     workerId,
     workerName, // snapshot at creation time, survives a later worker rename
     // Item-assignment tasks (from a Job List/Love List item card) are
-    // always exactly one person — capacity 1, that one person already on
-    // it. The open/multi-person pool lives in the standalone Worker Tasks
-    // dashboard instead, via newSharedWorkerTask below.
+    // exactly one person, already on it. When nobody's picked in the
+    // assign modal, the item card instead creates a newSharedWorkerTask
+    // below with no one assigned, so it shows up in Open Tasks.
     capacity: 1,
     assignedWorkerIds: workerId ? [workerId] : [],
     title,
@@ -54,7 +54,7 @@ export function newWorkerTask(workerId, workerName, title, jobLabel, source = nu
 // and assignedWorkers can be anywhere from empty (fully open, first-come)
 // to fully staffed (owner assigned everyone directly) to partial (owner
 // picked some, the rest is left open for someone else to claim/join).
-export function newSharedWorkerTask({ title, jobLabel, capacity, assignedWorkers, urgency, dueDate }) {
+export function newSharedWorkerTask({ title, jobLabel, capacity, assignedWorkers, urgency, dueDate, source = null }) {
   const workers = (assignedWorkers || []).slice(0, capacity);
   return {
     id: uniqueId(),
@@ -76,7 +76,7 @@ export function newSharedWorkerTask({ title, jobLabel, capacity, assignedWorkers
     resolvedAt: null,
     completionPhotoUrl: null,
     titleEs: null, // cached Spanish translation of title, filled in async after save
-    source: null,
+    source,
     archived: false,
   };
 }

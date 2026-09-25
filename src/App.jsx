@@ -10253,27 +10253,42 @@ function JobInventory({
   // real side effect (writing to Worker Tasks storage), not a pure data
   // transform, so it needs its own path.
   const bulkAssignToWorker = (workerIds) => {
-    if (!workerIds || workerIds.length === 0 || !onAssignToWorker) return;
+    if (!workerIds || !onAssignToWorker) return;
     playSaveChime();
     const targetItems = (job.items || []).filter((i) => selectedItemIds.includes(i.id));
     const newTaskIdsByItemId = {};
     targetItems.forEach((item) => {
-      const existingWorkerIds = (item.assignedTaskIds || [])
-        .map((tid) => workerTasks.find((t) => t.id === tid)?.workerId)
-        .filter(Boolean);
       const taskIds = [];
-      workerIds.forEach((wid) => {
-        if (existingWorkerIds.includes(wid)) return; // already assigned — don't duplicate
-        const worker = workers.find((w) => w.id === wid);
-        if (!worker) return;
-        const taskId = onAssignToWorker(
-          worker,
-          `${item.name} ${item.qtyHave}/${item.qtyNeeded}`,
-          job.name,
-          { type: "job_item", itemId: item.id, jobId: job.id }
-        );
-        if (taskId) taskIds.push(taskId);
-      });
+      if (workerIds.length === 0) {
+        // Nobody picked — goes to Open Tasks instead of the assignment
+        // just silently not happening, but only if this item doesn't
+        // already have a task riding on it.
+        if (!(item.assignedTaskIds || []).length) {
+          const taskId = onAssignToWorker(
+            null,
+            `${item.name} ${item.qtyHave}/${item.qtyNeeded}`,
+            job.name,
+            { type: "job_item", itemId: item.id, jobId: job.id }
+          );
+          if (taskId) taskIds.push(taskId);
+        }
+      } else {
+        const existingWorkerIds = (item.assignedTaskIds || [])
+          .map((tid) => workerTasks.find((t) => t.id === tid)?.workerId)
+          .filter(Boolean);
+        workerIds.forEach((wid) => {
+          if (existingWorkerIds.includes(wid)) return; // already assigned — don't duplicate
+          const worker = workers.find((w) => w.id === wid);
+          if (!worker) return;
+          const taskId = onAssignToWorker(
+            worker,
+            `${item.name} ${item.qtyHave}/${item.qtyNeeded}`,
+            job.name,
+            { type: "job_item", itemId: item.id, jobId: job.id }
+          );
+          if (taskId) taskIds.push(taskId);
+        });
+      }
       newTaskIdsByItemId[item.id] = taskIds;
     });
     onUpdateJob((prevJob) => ({
@@ -10287,7 +10302,10 @@ function JobInventory({
         {
           id: uniqueId(),
           time: timeStamp(),
-          message: `Assigned ${targetItems.length} item${targetItems.length === 1 ? "" : "s"} to ${workerIds.length} worker${workerIds.length === 1 ? "" : "s"}`,
+          message:
+            workerIds.length === 0
+              ? `Sent ${targetItems.length} item${targetItems.length === 1 ? "" : "s"} to Open Tasks`
+              : `Assigned ${targetItems.length} item${targetItems.length === 1 ? "" : "s"} to ${workerIds.length} worker${workerIds.length === 1 ? "" : "s"}`,
         },
         ...prevJob.activityLog,
       ].slice(0, 50),
@@ -10300,14 +10318,40 @@ function JobInventory({
     if (!assigningItem || !onAssignToWorker) return;
     playSaveChime();
     const currentTaskIds = assigningItem.assignedTaskIds || [];
+
+    // Nothing picked, and nothing riding on this item yet — goes to Open
+    // Tasks instead of the assignment just silently not happening.
+    if (workerIds.length === 0 && currentTaskIds.length === 0) {
+      const taskId = onAssignToWorker(
+        null,
+        `${assigningItem.name} ${assigningItem.qtyHave}/${assigningItem.qtyNeeded}`,
+        job.name,
+        { type: "job_item", itemId: assigningItem.id, jobId: job.id }
+      );
+      if (taskId) {
+        onUpdateJob((prevJob) => ({
+          ...prevJob,
+          items: prevJob.items.map((i) =>
+            i.id === assigningItem.id ? { ...i, assignedTaskIds: [taskId] } : i
+          ),
+        }));
+      }
+      setAssigningItem(null);
+      return;
+    }
+
     const currentWorkerIds = currentTaskIds
       .map((tid) => workerTasks.find((t) => t.id === tid)?.workerId)
       .filter(Boolean);
 
     const addedWorkerIds = workerIds.filter((wid) => !currentWorkerIds.includes(wid));
+    // Only sweeps up tasks that had an actual person on them — an already-
+    // open task (nobody assigned) was never represented by a checkbox
+    // here, so it shouldn't read as "someone got deselected" and get
+    // deleted just because this save left the worker list unchanged.
     const removedTaskIds = currentTaskIds.filter((tid) => {
       const t = workerTasks.find((task) => task.id === tid);
-      return t && !workerIds.includes(t.workerId);
+      return t && t.workerId && !workerIds.includes(t.workerId);
     });
 
     const newTaskIds = addedWorkerIds
@@ -13676,10 +13720,15 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
 
   // Assigning an item creates a real task, not just a label — same
   // behavior as the Love Lists side, so it shows up in Worker Tasks and
-  // counts toward that person's completion rate either way.
+  // counts toward that person's completion rate either way. A null worker
+  // (nobody picked in the assign modal) still creates a task — a shared/
+  // open one, capacity 1, nobody on it yet — so it lands in Open Tasks for
+  // anyone to pick up instead of the assignment just silently not happening.
   const assignItemToWorker = (worker, itemLabel, jobLabel, source) => {
     if (!isEditor) return null;
-    const task = newWorkerTask(worker.id, worker.name, itemLabel, jobLabel, source);
+    const task = worker
+      ? newWorkerTask(worker.id, worker.name, itemLabel, jobLabel, source)
+      : newSharedWorkerTask({ title: itemLabel, jobLabel, capacity: 1, assignedWorkers: [], source });
     setWorkerTasks((prev) => {
       const next = [...prev, task];
       saveWithRetry(WORKER_TASKS_KEY, JSON.stringify(next)).catch(() => {});
@@ -16333,6 +16382,19 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
       const updatedItems = list.items.map((i) => {
         const target = targetItems.find((t) => t.id === i.id);
         if (!target) return i;
+        const itemLabel = `${target.name} ${target.qtyHave ?? 0}/${target.qty}${target.qtyUnit ? ` ${target.qtyUnit}` : ""}`;
+        if (workerIds.length === 0) {
+          // Nobody picked — goes to Open Tasks instead of the assignment
+          // just silently not happening, but only if this item doesn't
+          // already have a task riding on it.
+          if ((target.assignedTaskIds || []).length > 0) return i;
+          const taskId = onAssignToWorker(null, itemLabel, list.jobLabel, {
+            type: "love_list_item",
+            itemId: target.id,
+            listId: list.id,
+          });
+          return taskId ? { ...i, assignedTaskIds: [...(i.assignedTaskIds || []), taskId] } : i;
+        }
         const existingWorkerIds = (target.assignedTaskIds || [])
           .map((tid) => workerTasks.find((t) => t.id === tid)?.workerId)
           .filter(Boolean);
@@ -16341,12 +16403,11 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           .map((wid) => {
             const worker = workers.find((w) => w.id === wid);
             if (!worker) return null;
-            return onAssignToWorker(
-              worker,
-              `${target.name} ${target.qtyHave ?? 0}/${target.qty}${target.qtyUnit ? ` ${target.qtyUnit}` : ""}`,
-              list.jobLabel,
-              { type: "love_list_item", itemId: target.id, listId: list.id }
-            );
+            return onAssignToWorker(worker, itemLabel, list.jobLabel, {
+              type: "love_list_item",
+              itemId: target.id,
+              listId: list.id,
+            });
           })
           .filter(Boolean);
         return { ...i, assignedTaskIds: [...(i.assignedTaskIds || []), ...newTaskIds] };
@@ -16362,14 +16423,38 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     // someone actually removes them instead of just leaving stale tasks.
     const target = assigningItem;
     const currentTaskIds = target.assignedTaskIds || [];
+
+    // Nothing picked, and nothing riding on this item yet — goes to Open
+    // Tasks instead of the assignment just silently not happening.
+    if (workerIds.length === 0 && currentTaskIds.length === 0) {
+      const taskId = onAssignToWorker(
+        null,
+        `${target.name} ${target.qtyHave ?? 0}/${target.qty}${target.qtyUnit ? ` ${target.qtyUnit}` : ""}`,
+        list.jobLabel,
+        { type: "love_list_item", itemId: target.id, listId: list.id }
+      );
+      if (taskId) {
+        onUpdateList({
+          ...list,
+          items: list.items.map((i) => (i.id === target.id ? { ...i, assignedTaskIds: [taskId] } : i)),
+        });
+      }
+      setAssigningItem(null);
+      return;
+    }
+
     const currentWorkerIds = currentTaskIds
       .map((tid) => workerTasks.find((t) => t.id === tid)?.workerId)
       .filter(Boolean);
 
     const addedWorkerIds = workerIds.filter((wid) => !currentWorkerIds.includes(wid));
+    // Only sweeps up tasks that had an actual person on them — an already-
+    // open task (nobody assigned) was never represented by a checkbox
+    // here, so it shouldn't read as "someone got deselected" and get
+    // deleted just because this save left the worker list unchanged.
     const removedTaskIds = currentTaskIds.filter((tid) => {
       const t = workerTasks.find((task) => task.id === tid);
-      return t && !workerIds.includes(t.workerId);
+      return t && t.workerId && !workerIds.includes(t.workerId);
     });
 
     const newTaskIds = addedWorkerIds
@@ -18665,22 +18750,29 @@ function AssignToWorkerModal({ workers, itemLabel, initiallySelectedWorkerIds = 
             No workers on the roster yet — add one from Worker Tasks first.
           </p>
         ) : (
-          <div className="flex-1 overflow-y-auto space-y-1.5 mb-2">
-            {workers.map((w) => (
-              <label
-                key={w.id}
-                className="flex items-center gap-2.5 px-3 py-2 rounded-md border border-slate-800 bg-slate-800/40 cursor-pointer"
-              >
-                <input
-                  type="checkbox"
-                  checked={selected.has(w.id)}
-                  onChange={() => toggle(w.id)}
-                  className="w-4 h-4 rounded accent-amber-500 shrink-0"
-                />
-                <span className="text-sm text-slate-100">{w.name}</span>
-              </label>
-            ))}
-          </div>
+          <>
+            <div className="flex-1 overflow-y-auto space-y-1.5 mb-2">
+              {workers.map((w) => (
+                <label
+                  key={w.id}
+                  className="flex items-center gap-2.5 px-3 py-2 rounded-md border border-slate-800 bg-slate-800/40 cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(w.id)}
+                    onChange={() => toggle(w.id)}
+                    className="w-4 h-4 rounded accent-amber-500 shrink-0"
+                  />
+                  <span className="text-sm text-slate-100">{w.name}</span>
+                </label>
+              ))}
+            </div>
+            {selected.size === 0 && (
+              <p className="text-xs text-slate-500 mb-2">
+                Nobody checked — this goes to Open Tasks for anyone to pick up.
+              </p>
+            )}
+          </>
         )}
         <div className="flex gap-3 mt-3">
           <button
@@ -20565,9 +20657,15 @@ function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDee
 
   // Assigning an item creates a real task, not just a label — it shows up
   // in Worker Tasks and counts toward that person's completion rate.
+  // A null worker (nobody picked in the assign modal) still creates a
+  // task — a shared/open one, capacity 1, nobody on it yet — so it lands
+  // in Open Tasks for anyone to pick up instead of the assignment just
+  // silently not happening.
   const assignItemToWorker = (worker, itemLabel, jobLabel, source) => {
     if (!isEditor) return null;
-    const task = newWorkerTask(worker.id, worker.name, itemLabel, jobLabel, source);
+    const task = worker
+      ? newWorkerTask(worker.id, worker.name, itemLabel, jobLabel, source)
+      : newSharedWorkerTask({ title: itemLabel, jobLabel, capacity: 1, assignedWorkers: [], source });
     setWorkerTasks((prev) => {
       const next = [...prev, task];
       saveWithRetry(WORKER_TASKS_KEY, JSON.stringify(next)).catch(() => {});
