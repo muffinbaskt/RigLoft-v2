@@ -219,7 +219,6 @@ import {
   extractPdfRows,
   uploadReferenceDocument,
   uploadLoveListScan,
-  uploadWorkerTaskPhoto,
   uploadReceiptScan,
   deleteReferenceDocument,
   updateSuggestionRow,
@@ -21256,9 +21255,6 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
   const [pinError, setPinError] = useState("");
   const [failingTask, setFailingTask] = useState(null);
   const [failReasonDraft, setFailReasonDraft] = useState("");
-  const [showHistory, setShowHistory] = useState(false);
-  const [uploadingPhotoFor, setUploadingPhotoFor] = useState(null);
-  const photoInputRef = useRef(null);
 
   const load = async () => {
     try {
@@ -21405,23 +21401,6 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
     }).catch(() => {});
   };
 
-  const attachPhoto = async (task, file) => {
-    setUploadingPhotoFor(task.id);
-    const result = await uploadWorkerTaskPhoto(file);
-    setUploadingPhotoFor(null);
-    if (!result.ok) return;
-    playSaveChime();
-    const updated = { ...task, completionPhotoUrl: result.url };
-    await saveTasks(tasks.map((t) => (t.id === task.id ? updated : t)));
-    logWorkerActivity({
-      id: uniqueId(),
-      time: new Date().toISOString(),
-      message: `${selectedWorker.name} attached a photo to "${task.title}"${
-        task.jobLabel ? ` (${task.jobLabel})` : ""
-      }`,
-    }).catch(() => {});
-  };
-
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -21524,20 +21503,10 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
       !(t.assignedWorkerIds || []).includes(selectedWorker.id) &&
       (t.assignedWorkerIds || []).length < (t.capacity || 1)
   );
-  const historyTasks = tasks
-    .filter(
-      (t) =>
-        (t.assignedWorkerIds || []).includes(selectedWorker.id) &&
-        (t.status === "completed" || t.status === "failed")
-    )
-    .sort((a, b) => new Date(b.resolvedAt || 0) - new Date(a.resolvedAt || 0))
-    .slice(0, 15);
-
   const TaskCard = ({ task, mode }) => {
     const meta = workerTaskStatusMeta(task.status);
     const claimedNames = (task.assignedWorkerIds || []).map(nameFor);
     const slotsLeft = (task.capacity || 1) - (task.assignedWorkerIds || []).length;
-    const isResolved = task.status === "completed" || task.status === "failed";
     return (
       <div className="border border-slate-800 rounded-lg p-3 bg-slate-900">
         <div className="flex items-center justify-between gap-2 mb-1">
@@ -21558,20 +21527,8 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
             In Progress · Started {formatTaskTimestamp(task.startedAt)}
           </p>
         )}
-        {mode === "history" && task.resolvedAt && (
-          <p className="text-xs text-slate-500 mb-1">
-            {meta.label} · {formatTaskTimestamp(task.resolvedAt)}
-          </p>
-        )}
         {task.status === "failed" && task.failReason && (
           <p className="text-xs text-red-400 mb-1">⚠ {task.failReason}</p>
-        )}
-        {task.completionPhotoUrl && (
-          <img
-            src={task.completionPhotoUrl}
-            alt=""
-            className="w-16 h-16 rounded-md object-cover mb-1 border border-slate-800"
-          />
         )}
         {mode === "open" ? (
           <button
@@ -21611,43 +21568,13 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
               Give this back
             </button>
           </>
-        ) : (
-          isResolved && (
-            <button
-              onClick={() => {
-                setUploadingPhotoFor(task);
-                photoInputRef.current?.click();
-              }}
-              disabled={uploadingPhotoFor === task.id}
-              className="w-full mt-1 text-xs text-slate-500 hover:text-amber-400 flex items-center justify-center gap-1"
-            >
-              <Camera className="w-3.5 h-3.5" />
-              {uploadingPhotoFor === task.id
-                ? "Uploading..."
-                : task.completionPhotoUrl
-                ? "Replace photo"
-                : "Add photo"}
-            </button>
-          )
-        )}
+        ) : null}
       </div>
     );
   };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <input
-        ref={photoInputRef}
-        type="file"
-        accept="image/*"
-        capture="environment"
-        className="hidden"
-        onChange={(e) => {
-          const file = e.target.files && e.target.files[0];
-          e.target.value = "";
-          if (file && uploadingPhotoFor) attachPhoto(uploadingPhotoFor, file);
-        }}
-      />
       <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
         <p className="font-semibold">{selectedWorker.name}</p>
         <button onClick={logOut} className="text-slate-400 hover:text-slate-200 text-sm">
@@ -21677,22 +21604,6 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
           )}
         </div>
 
-        <button
-          onClick={() => setShowHistory((v) => !v)}
-          className="w-full text-left text-xs font-medium text-slate-400 mb-2 flex items-center gap-1.5"
-        >
-          <History className="w-3.5 h-3.5" />
-          My history ({historyTasks.length}) {showHistory ? "▲" : "▼"}
-        </button>
-        {showHistory && (
-          <div className="space-y-2">
-            {historyTasks.length === 0 ? (
-              <p className="text-sm text-slate-500 py-4 text-center">Nothing finished yet.</p>
-            ) : (
-              historyTasks.map((t) => <TaskCard key={t.id} task={t} mode="history" />)
-            )}
-          </div>
-        )}
       </main>
 
       {failingTask && (
