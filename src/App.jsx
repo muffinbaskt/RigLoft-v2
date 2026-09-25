@@ -15975,6 +15975,74 @@ function PrintableLoveListModal({ list, onClose }) {
   );
 }
 
+// Encodes a link that opens straight into this list, bypassing the
+// dashboard — the whole point of putting one of these on a pallet.
+// Deliberately generic (?section=love&id=...) rather than a Love-List-only
+// scheme, since the same shape can later deep-link into a specific job.
+// Reached logged out, this still shows real content: session===null still
+// renders the app (just view-only), it's never a login wall.
+function LoveListQrModal({ list, onClose }) {
+  const canvasRef = useRef(null);
+  const url = `${window.location.origin}${window.location.pathname}?section=love&id=${list.id}`;
+  useEffect(() => {
+    if (canvasRef.current) {
+      QRCode.toCanvas(canvasRef.current, url, { width: 240, margin: 1 }, () => {});
+    }
+  }, [url]);
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center px-4 py-8 print:static print:block print:bg-white print:p-0">
+      <style>{`
+        @media print {
+          body * {
+            visibility: hidden;
+            height: 0 !important;
+            overflow: hidden !important;
+          }
+          #love-list-qr-print-area, #love-list-qr-print-area * {
+            visibility: visible;
+            height: auto !important;
+            overflow: visible !important;
+          }
+          #love-list-qr-print-area {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 0.5in;
+          }
+        }
+      `}</style>
+      <div className="bg-white text-slate-900 w-full max-w-sm rounded-lg flex flex-col print:static print:block print:max-w-none print:rounded-none">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 shrink-0 print:hidden">
+          <h3 className="font-semibold text-base">QR code for this pallet</h3>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => window.print()}
+              className="text-sm rounded-md px-3 py-1.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 flex items-center gap-1.5"
+            >
+              <Printer className="w-4 h-4" />
+              Print
+            </button>
+            <button onClick={onClose} className="text-slate-500 hover:text-slate-800">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+        <div id="love-list-qr-print-area" className="p-6 flex flex-col items-center text-center">
+          <h2 className="text-lg font-bold mb-1">{listDisplayLabel(list)}</h2>
+          <p className="text-sm text-slate-600 mb-4">
+            {[list.dateReceived, list.submittedBy].filter(Boolean).join(" · ") || " "}
+          </p>
+          <canvas ref={canvasRef} />
+          <p className="text-xs text-slate-500 mt-4 print:hidden">
+            Scanning this opens this list directly — no login needed to view it.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onSyncToolsFromItem, onAddToLoveTaskList, onBack, onGoHome }) {
   const [addingItem, setAddingItem] = useState(false);
   const [showPullFromReceiving, setShowPullFromReceiving] = useState(false);
@@ -15992,6 +16060,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [deleteListConfirm, setDeleteListConfirm] = useState(false);
   const [showPhotosModal, setShowPhotosModal] = useState(false);
   const [showPrintModal, setShowPrintModal] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
   const [referenceDocsOpen, setReferenceDocsOpen] = useState(false);
   const [editingNickname, setEditingNickname] = useState(false);
   const [nicknameDraft, setNicknameDraft] = useState("");
@@ -16612,6 +16681,13 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
             <Printer className="w-4 h-4" />
           </button>
           <button
+            onClick={() => setShowQrModal(true)}
+            title="QR code for this list (e.g. to put on a pallet)"
+            className="text-slate-400 hover:text-slate-200 p-2 shrink-0"
+          >
+            <QrCode className="w-4 h-4" />
+          </button>
+          <button
             onClick={() => setReferenceDocsOpen(true)}
             title="Reference documents"
             className="text-slate-400 hover:text-slate-200 p-2 shrink-0 relative"
@@ -16669,6 +16745,8 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
       )}
 
       {showPrintModal && <PrintableLoveListModal list={list} onClose={() => setShowPrintModal(false)} />}
+
+      {showQrModal && <LoveListQrModal list={list} onClose={() => setShowQrModal(false)} />}
 
       {referenceDocsOpen && (
         <ReferenceDocsModal
@@ -20342,7 +20420,7 @@ function LoveTaskListModal({ entries, lists, isEditor, onToggleDone, onRemove, o
   );
 }
 
-function LoveListsApp({ isEditor, isOwner, onGoHome }) {
+function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null }) {
   const [lists, setLists] = useState([]);
   const [catalog, setCatalog] = useState([]);
   const [workers, setWorkers] = useState([]);
@@ -20350,7 +20428,10 @@ function LoveListsApp({ isEditor, isOwner, onGoHome }) {
   const [staleThresholds, setStaleThresholds] = useState(DEFAULT_STALE_THRESHOLD_DAYS);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
-  const [activeListId, setActiveListId] = useState(null);
+  // Seeded from a deep link (e.g. a pallet's QR code) when present. Lists
+  // haven't loaded yet at this point, so activeList below just stays null
+  // — behind the loading spinner — until loadAll finds a match.
+  const [activeListId, setActiveListId] = useState(initialListId);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
   const [showWorkerTasks, setShowWorkerTasks] = useState(false);
@@ -26867,7 +26948,20 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches
 export default function AuthGate() {
   const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
   const [showLogin, setShowLogin] = useState(false);
-  const [appSection, setAppSection] = useState(null); // null = landing, "jobs" | "love"
+  // Lets a QR code (or any shared link) open the app straight into a
+  // specific record instead of the landing screen — e.g. a pallet's QR
+  // pointing at its Love List. Deliberately generic (section + id) rather
+  // than Love-List-specific, so the same ?section=jobs&id=... shape can
+  // later deep-link into a specific job without touching this parsing.
+  const initialDeepLink = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    const section = params.get("section");
+    const id = params.get("id");
+    const validSections = ["jobs", "love", "receiving", "backorders", "archive", "tools"];
+    return section && id && validSections.includes(section) ? { section, id } : null;
+  }, []);
+  const [appSection, setAppSection] = useState(initialDeepLink?.section ?? null); // null = landing, "jobs" | "love"
+  const [pendingDeepLinkId, setPendingDeepLinkId] = useState(initialDeepLink?.id ?? null);
   const [pendingJobAction, setPendingJobAction] = useState(null);
   const { updateAvailable, applyingUpdate, updateCheckMessage, checkForUpdateNow, applyUpdate } =
     useAppUpdate();
@@ -26893,6 +26987,19 @@ export default function AuthGate() {
     const onPopState = () => setAppSection(null);
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+  // A deep link opens straight into its section, but still needs a
+  // landing-screen history entry underneath it — otherwise Home/back on a
+  // freshly-opened link (no prior history in this tab) has nowhere to go.
+  // pendingDeepLinkId is cleared right after this first render so it's a
+  // one-time seed: leaving and later returning to the same section through
+  // normal navigation won't keep reopening the linked record.
+  useEffect(() => {
+    if (!initialDeepLink) return;
+    window.history.replaceState({ appSection: null }, "", window.location.pathname);
+    window.history.pushState({ appSection: initialDeepLink.section }, "", window.location.pathname);
+    setPendingDeepLinkId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // Tapping a section's own Back/Home button goes through history.back()
   // too, rather than setting state directly — that way it consumes the
@@ -27042,6 +27149,7 @@ export default function AuthGate() {
           isEditor={isOwner || isManager}
           isOwner={isOwner}
           onGoHome={goToLanding}
+          initialListId={pendingDeepLinkId}
         />
       ) : appSection === "kiosk" ? (
         <WorkerKioskApp onRequestStaffLogin={() => setShowLogin(true)} />
