@@ -9746,6 +9746,7 @@ function JobInventory({
   const [suggestionSentConfirm, setSuggestionSentConfirm] = useState(false);
   const [suggestNewItemOpen, setSuggestNewItemOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [jobQrOpen, setJobQrOpen] = useState(false);
   const [requisitionsOpen, setRequisitionsOpen] = useState(false);
 
   const logActivity = (message, extra = {}) => {
@@ -10859,6 +10860,15 @@ function JobInventory({
           </div>
         </div>
       )}
+      {jobQrOpen && (
+        <DeepLinkQrModal
+          section="jobs"
+          id={job.id}
+          heading="QR code for this job"
+          title={job.name}
+          onClose={() => setJobQrOpen(false)}
+        />
+      )}
       {/* Header */}
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
         <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between gap-2">
@@ -10992,6 +11002,16 @@ function JobInventory({
                   >
                     <Download className="w-4 h-4 text-slate-400" />
                     Export items
+                  </button>
+                  <button
+                    onClick={() => {
+                      setJobQrOpen(true);
+                      setMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-200 hover:bg-slate-700 text-left"
+                  >
+                    <QrCode className="w-4 h-4 text-slate-400" />
+                    QR code for this job
                   </button>
 
                   <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500 border-t border-slate-700 mt-1">
@@ -12363,7 +12383,7 @@ function migrateCatalogFromStorage(catalog) {
   return catalog.map((c) => ({ ...c, gang: normalizeGangName(c.gang) }));
 }
 
-function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, onGoToLanding, onCheckForUpdate, initialAction }) {
+function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, onGoToLanding, onCheckForUpdate, initialAction, initialJobId = null, onDeepLinkConsumed }) {
   const [jobs, setJobs] = useState([]);
   const [activeJobId, setActiveJobId] = useState(null);
   const [showPicker, setShowPicker] = useState(true);
@@ -13146,6 +13166,20 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
   // dropping you on the plain job picker — runs once, after real data has
   // loaded.
   const initialActionDone = useRef(false);
+  // A scanned QR / shared link opening straight into one job. Waits for the
+  // real jobs to load (they aren't there yet on first render), then opens it
+  // once and tells the parent it's been used so it isn't reapplied later.
+  const deepLinkDone = useRef(false);
+  useEffect(() => {
+    if (loading || initialJobId == null || deepLinkDone.current) return;
+    deepLinkDone.current = true;
+    onDeepLinkConsumed?.();
+    if (jobs.some((j) => j.id === initialJobId)) {
+      setActiveJobId(initialJobId);
+      setShowPicker(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, jobs, initialJobId]);
   useEffect(() => {
     if (loading || !initialAction || initialActionDone.current) return;
     initialActionDone.current = true;
@@ -16023,15 +16057,14 @@ function PrintableLoveListModal({ list, onClose }) {
   );
 }
 
-// Encodes a link that opens straight into this list, bypassing the
-// dashboard — the whole point of putting one of these on a pallet.
-// Deliberately generic (?section=love&id=...) rather than a Love-List-only
-// scheme, since the same shape can later deep-link into a specific job.
-// Reached logged out, this still shows real content: session===null still
-// renders the app (just view-only), it's never a login wall.
-function LoveListQrModal({ list, onClose }) {
+// Encodes a link that opens straight into one record (a Love List, a job),
+// bypassing the dashboard/picker — the whole point of putting one of these
+// on a pallet. The link is ?section=<key>&id=<id>, parsed once at the top of
+// AuthGate. Reached logged out, this still shows real content: session===null
+// still renders the app (just view-only), it's never a login wall.
+function DeepLinkQrModal({ section, id, title, subtitle, heading, onClose }) {
   const canvasRef = useRef(null);
-  const url = `${window.location.origin}${window.location.pathname}?section=love&id=${list.id}`;
+  const url = `${window.location.origin}${window.location.pathname}?section=${section}&id=${id}`;
   useEffect(() => {
     if (canvasRef.current) {
       QRCode.toCanvas(canvasRef.current, url, { width: 240, margin: 1 }, () => {});
@@ -16046,12 +16079,12 @@ function LoveListQrModal({ list, onClose }) {
             height: 0 !important;
             overflow: hidden !important;
           }
-          #love-list-qr-print-area, #love-list-qr-print-area * {
+          #deep-link-qr-print-area, #deep-link-qr-print-area * {
             visibility: visible;
             height: auto !important;
             overflow: visible !important;
           }
-          #love-list-qr-print-area {
+          #deep-link-qr-print-area {
             position: absolute;
             top: 0;
             left: 0;
@@ -16062,7 +16095,7 @@ function LoveListQrModal({ list, onClose }) {
       `}</style>
       <div className="bg-white text-slate-900 w-full max-w-sm rounded-lg flex flex-col print:static print:block print:max-w-none print:rounded-none">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 shrink-0 print:hidden">
-          <h3 className="font-semibold text-base">QR code for this pallet</h3>
+          <h3 className="font-semibold text-base">{heading}</h3>
           <div className="flex items-center gap-3">
             <button
               onClick={() => window.print()}
@@ -16076,14 +16109,14 @@ function LoveListQrModal({ list, onClose }) {
             </button>
           </div>
         </div>
-        <div id="love-list-qr-print-area" className="p-6 flex flex-col items-center text-center">
-          <h2 className="text-lg font-bold mb-1">{listDisplayLabel(list)}</h2>
+        <div id="deep-link-qr-print-area" className="p-6 flex flex-col items-center text-center">
+          <h2 className="text-lg font-bold mb-1">{title}</h2>
           <p className="text-sm text-slate-600 mb-4">
-            {[list.dateReceived, list.submittedBy].filter(Boolean).join(" · ") || " "}
+            {subtitle || "\u00A0"}
           </p>
           <canvas ref={canvasRef} />
           <p className="text-xs text-slate-500 mt-4 print:hidden">
-            Scanning this opens this list directly — no login needed to view it.
+            Scanning this opens it directly — no login needed to view it.
           </p>
         </div>
       </div>
@@ -16830,7 +16863,16 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
 
       {showPrintModal && <PrintableLoveListModal list={list} onClose={() => setShowPrintModal(false)} />}
 
-      {showQrModal && <LoveListQrModal list={list} onClose={() => setShowQrModal(false)} />}
+      {showQrModal && (
+        <DeepLinkQrModal
+          section="love"
+          id={list.id}
+          heading="QR code for this pallet"
+          title={listDisplayLabel(list)}
+          subtitle={[list.dateReceived, list.submittedBy].filter(Boolean).join(" · ")}
+          onClose={() => setShowQrModal(false)}
+        />
+      )}
 
       {referenceDocsOpen && (
         <ReferenceDocsModal
@@ -27192,6 +27234,8 @@ export default function AuthGate() {
           onGoToLanding={goToLanding}
           onCheckForUpdate={checkForUpdateNow}
           initialAction={pendingJobAction}
+          initialJobId={pendingDeepLinkId}
+          onDeepLinkConsumed={consumeDeepLink}
         />
       )}
       {showLogin && !session && (
