@@ -148,6 +148,7 @@ import {
   loveStatusMeta,
   loveItemDisplayMeta,
   listDisplayLabel,
+  describeListChange,
   DEFAULT_STALE_THRESHOLD_DAYS,
   STALE_THRESHOLDS_KEY,
   daysInCurrentStatus,
@@ -16124,7 +16125,9 @@ function DeepLinkQrModal({ section, id, title, subtitle, heading, onClose }) {
   );
 }
 
-function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onSyncToolsFromItem, onAddToLoveTaskList, onBack, onGoHome }) {
+function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onSyncToolsFromItem, onAddToLoveTaskList, onUndoLastAction, onBack, onGoHome }) {
+  const undoStack = list.undoStack || [];
+  const [undoOpen, setUndoOpen] = useState(false);
   const [addingItem, setAddingItem] = useState(false);
   const [showPullFromReceiving, setShowPullFromReceiving] = useState(false);
   const [mergingItem, setMergingItem] = useState(null);
@@ -17545,6 +17548,54 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
             );
           })}
         </div>
+
+        {isEditor && undoStack.length > 0 && (
+          <div className="mt-6 border border-slate-800 rounded-lg overflow-hidden">
+            <button
+              onClick={() => setUndoOpen((v) => !v)}
+              className="w-full flex items-center justify-between gap-3 px-4 py-3 bg-slate-900 hover:bg-slate-800/60 text-left"
+            >
+              <span className="flex items-center gap-2 text-sm font-medium text-slate-300 min-w-0">
+                <RotateCcw className="w-4 h-4 text-slate-500 shrink-0" />
+                <span className="truncate">
+                  Undo: <span className="text-slate-400 font-normal">{undoStack[0].label}</span>
+                </span>
+              </span>
+              <span className="flex items-center gap-2 shrink-0">
+                <span className="text-xs text-slate-600">
+                  {undoStack.length} step{undoStack.length === 1 ? "" : "s"} available
+                </span>
+                <ChevronDown
+                  className={`w-4 h-4 text-slate-500 transition-transform ${undoOpen ? "rotate-180" : ""}`}
+                />
+              </span>
+            </button>
+            {undoOpen && (
+              <div className="divide-y divide-slate-800/80">
+                {undoStack.map((entry, i) => (
+                  <div key={entry.id} className="px-4 py-2.5 flex items-center gap-3">
+                    <span className="text-xs text-slate-600 shrink-0 w-28">{entry.time}</span>
+                    <span className="text-sm text-slate-300 flex-1 min-w-0 truncate">
+                      {entry.label}
+                    </span>
+                    {i === 0 ? (
+                      <button
+                        onClick={onUndoLastAction}
+                        className="text-xs font-semibold text-amber-400 hover:text-amber-300 shrink-0 px-2 py-1"
+                      >
+                        Undo
+                      </button>
+                    ) : (
+                      <span className="text-xs text-slate-600 shrink-0 px-2 py-1">
+                        after {i} more undo{i === 1 ? "" : "s"}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {!isEditor && (
           <p className="text-xs text-slate-600 text-center mb-2">
@@ -20916,14 +20967,44 @@ function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDee
   // last saw — same fix Job Lists already has for a rapid multi-file
   // upload, where a second upload's stale closure could otherwise
   // silently overwrite the first one's just-added document.
+  // Same idea as Job Lists' applyJobUpdate/undoStack: every edit snapshots
+  // the list first (minus its own undoStack, so undo entries don't nest),
+  // keeping the last MAX_LIST_UNDO_ENTRIES. Love Lists has no activityLog
+  // to borrow a label from like jobs do, so describeListChange diffs the
+  // before/after to produce one instead.
+  const MAX_LIST_UNDO_ENTRIES = 3;
+  const applyListUpdate = (list, nextList) => {
+    if (nextList === list) return nextList;
+    const { undoStack: _priorUndoStack, ...snapshot } = list;
+    const entry = { id: uniqueId(), time: timeStamp(), label: describeListChange(list, nextList), snapshot };
+    return {
+      ...nextList,
+      undoStack: [entry, ...(list.undoStack || [])].slice(0, MAX_LIST_UNDO_ENTRIES),
+    };
+  };
+
   const handleUpdateList = (updatedOrUpdater) => {
     if (!isEditor) return;
     updateLists((prev) =>
       prev.map((l) => {
         if (typeof updatedOrUpdater === "function") {
-          return l.id === activeListId ? updatedOrUpdater(l) : l;
+          return l.id === activeListId ? applyListUpdate(l, updatedOrUpdater(l)) : l;
         }
-        return l.id === updatedOrUpdater.id ? updatedOrUpdater : l;
+        return l.id === updatedOrUpdater.id ? applyListUpdate(l, updatedOrUpdater) : l;
+      })
+    );
+  };
+
+  // Bypasses applyListUpdate above on purpose — restoring a snapshot isn't
+  // itself a new action to record, it's un-recording the most recent one.
+  const undoLastListAction = (listId) => {
+    updateLists((prev) =>
+      prev.map((l) => {
+        if (l.id !== listId) return l;
+        const stack = l.undoStack || [];
+        if (stack.length === 0) return l;
+        const [mostRecent, ...rest] = stack;
+        return { ...mostRecent.snapshot, undoStack: rest };
       })
     );
   };
@@ -21102,6 +21183,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDee
         onLearnAlias={learnCatalogAlias}
         onSyncToolsFromItem={syncToolsFromLoveListItem}
         onAddToLoveTaskList={(addedItems) => addToLoveTaskList(activeList, addedItems)}
+        onUndoLastAction={() => undoLastListAction(activeList.id)}
         onBack={() => setActiveListId(null)}
         onGoHome={onGoHome}
       />

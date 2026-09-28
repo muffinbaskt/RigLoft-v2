@@ -62,6 +62,49 @@ export function loveItemDisplayMeta(item) {
 export const listDisplayLabel = (list) =>
   list.subJobLabel ? `${list.jobLabel} — ${list.subJobLabel}` : list.jobLabel;
 
+// Job Lists gets its undo-stack labels for free from whatever message the
+// action already wrote to activityLog — Love Lists has no such log, so
+// this diffs before/after to produce something short and readable instead.
+// Only needs to be roughly right (it's a label on an Undo button, not an
+// audit trail) — falls back to something generic when nothing specific
+// stands out, same as Job Lists does for an unlabeled change.
+export function describeListChange(before, after) {
+  const beforeItems = before.items || [];
+  const afterItems = after.items || [];
+  const beforeById = new Map(beforeItems.map((i) => [i.id, i]));
+  const afterById = new Map(afterItems.map((i) => [i.id, i]));
+
+  const added = afterItems.filter((i) => !beforeById.has(i.id));
+  const removed = beforeItems.filter((i) => !afterById.has(i.id));
+  const changed = afterItems.filter((i) => {
+    const prev = beforeById.get(i.id);
+    return prev && prev !== i;
+  });
+
+  if (added.length && !removed.length && !changed.length) {
+    return added.length === 1 ? `Added ${added[0].name}` : `Added ${added.length} items`;
+  }
+  if (removed.length && !added.length && !changed.length) {
+    return removed.length === 1 ? `Removed ${removed[0].name}` : `Removed ${removed.length} items`;
+  }
+  if (changed.length === 1 && !added.length && !removed.length) {
+    const prev = beforeById.get(changed[0].id);
+    const item = changed[0];
+    if (prev.status !== item.status) {
+      return `${item.name}: ${loveStatusMeta(prev.status).label} → ${loveStatusMeta(item.status).label}`;
+    }
+    if (prev.archived !== item.archived) return `${item.archived ? "Archived" : "Unarchived"} ${item.name}`;
+    if (prev.qty !== item.qty) return `${item.name} qty updated`;
+    return `Updated ${item.name}`;
+  }
+  if (changed.length > 1 && !added.length && !removed.length) {
+    return `Updated ${changed.length} items`;
+  }
+  if (before.subJobLabel !== after.subJobLabel) return "Renamed list";
+  if (before.archived !== after.archived) return after.archived ? "Archived list" : "Unarchived list";
+  return "List updated";
+}
+
 // Default days an item can sit in a given status before it counts as
 // stuck and worth flagging — the actual fix for "we lose track of what's
 // been sitting around too long." Ordered gets a longer leash since that
