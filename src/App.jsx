@@ -45,6 +45,7 @@ import {
   RotateCcw,
   Home,
   QrCode,
+  LayoutGrid,
   Bell,
   AlertTriangle,
   DollarSign,
@@ -8590,6 +8591,119 @@ function JobCard({
   );
 }
 
+// One consistent header shell for every top-level section (Job Lists,
+// Love Lists, Receiving, Receipt Archive) — Job Lists' own header was the
+// one that already looked right, so this is that shape, shared instead of
+// each screen styling its own banner independently and slowly drifting
+// apart (which is exactly what had already happened: Love Lists used a
+// narrower width and an unboxed back icon, Receiving and Receipt Archive
+// had no boxed back button or centered content at all). onQuickNav is the
+// editor-only "jump to another section" menu — pass it only when the
+// caller is both a real section root and isEditor, never for a transient
+// sub-modal.
+function SectionHeader({
+  onBack,
+  backIcon: BackIcon = ChevronLeft,
+  icon: Icon,
+  iconClassName = "text-slate-400",
+  title,
+  badge,
+  subtitle,
+  titleSlot,
+  maxWidthClass = "max-w-5xl",
+  current,
+  onQuickNav,
+  children,
+  extra,
+}) {
+  return (
+    <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
+      <div className={`${maxWidthClass} mx-auto px-4 py-4 flex items-center justify-between gap-3 flex-wrap`}>
+        <div className="flex items-center gap-2.5 min-w-0">
+          <button
+            onClick={onBack}
+            className="w-8 h-8 rounded-md bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 hover:bg-slate-700 active:scale-90 transition-transform shrink-0"
+          >
+            <BackIcon className="w-4 h-4" />
+          </button>
+          {titleSlot || (
+            <div className="min-w-0">
+              <p className="font-semibold text-slate-100 leading-tight flex items-center gap-1.5 truncate">
+                {Icon && <Icon className={`w-4 h-4 shrink-0 ${iconClassName}`} />}
+                <span className="truncate">{title}</span>
+                {badge}
+              </p>
+              {subtitle && <p className="text-xs text-slate-500 leading-tight truncate">{subtitle}</p>}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap justify-end shrink-0">
+          {children}
+          {onQuickNav && <QuickNavMenu current={current} onNavigate={onQuickNav} />}
+        </div>
+      </div>
+      {/* Extra rows (search bars, filters, inline messages) that need to
+          stay part of the same sticky banner instead of scrolling away
+          with the page content below it. */}
+      {extra}
+    </header>
+  );
+}
+
+// The 4 sections an editor most often needs to jump directly between,
+// without backing out to the landing screen first. Deliberately narrow —
+// not every section (Tools, Backorders, Worker Kiosk) belongs in a quick
+// jump menu, and Kiosk specifically signs the current account out, so it's
+// left out on purpose.
+const QUICK_NAV_DESTINATIONS = [
+  { key: "jobs", label: "Job Lists", icon: Briefcase },
+  { key: "love", label: "Love Lists", icon: Heart },
+  { key: "receiving", label: "Receiving", icon: Inbox },
+  { key: "archive", label: "Receipt Archive", icon: BookOpen },
+];
+
+function QuickNavMenu({ current, onNavigate }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title="Jump to another section"
+        className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+      >
+        <LayoutGrid className="w-4 h-4" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-2 w-48 bg-slate-800 border border-slate-700 rounded-md shadow-lg z-40 overflow-hidden">
+            {QUICK_NAV_DESTINATIONS.map((d) => {
+              const isCurrent = d.key === current;
+              return (
+                <button
+                  key={d.key}
+                  onClick={() => {
+                    setOpen(false);
+                    if (!isCurrent) onNavigate(d.key);
+                  }}
+                  disabled={isCurrent}
+                  className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm text-left ${
+                    isCurrent ? "text-slate-600 cursor-default" : "text-slate-200 hover:bg-slate-700"
+                  }`}
+                >
+                  <d.icon className="w-4 h-4 text-slate-400 shrink-0" />
+                  {d.label}
+                  {isCurrent && <span className="ml-auto text-[10px] text-slate-600 shrink-0">current</span>}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function JobPicker({
   jobs,
   catalog,
@@ -8619,6 +8733,7 @@ function JobPicker({
   onOpenWorkerTasks,
   onCheckForUpdate,
   onGoToLanding,
+  onQuickNav,
 }) {
   const [collapsed, setCollapsed] = useState({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -8867,6 +8982,7 @@ function JobPicker({
                 <span className="hidden sm:inline">New job</span>
               </button>
             )}
+            {onQuickNav && <QuickNavMenu current="jobs" onNavigate={onQuickNav} />}
           </div>
         </div>
       </header>
@@ -9648,6 +9764,7 @@ function JobInventory({
   onMarkToolsFromShipWithoutTransfer,
   onClearToolsNeedTransfer,
   onOpenCatalog,
+  onQuickNav,
 }) {
   // A sealed job behaves exactly like browse-only mode, regardless of
   // being actually logged in — reuses every existing disabled-editing
@@ -10917,6 +11034,7 @@ function JobInventory({
             >
               <MoreVertical className="w-4 h-4" />
             </button>
+            {onQuickNav && <QuickNavMenu current="jobs" onNavigate={onQuickNav} />}
             {menuOpen && (
               <div className="absolute right-0 top-full mt-2 w-52 bg-slate-800 border border-slate-700 rounded-md shadow-lg z-40 overflow-hidden">
                   {isEditor && (
@@ -12384,7 +12502,7 @@ function migrateCatalogFromStorage(catalog) {
   return catalog.map((c) => ({ ...c, gang: normalizeGangName(c.gang) }));
 }
 
-function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, onGoToLanding, onCheckForUpdate, initialAction, initialJobId = null, onDeepLinkConsumed }) {
+function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, onGoToLanding, onCheckForUpdate, initialAction, initialJobId = null, onDeepLinkConsumed, onQuickNav }) {
   const [jobs, setJobs] = useState([]);
   const [activeJobId, setActiveJobId] = useState(null);
   const [showPicker, setShowPicker] = useState(true);
@@ -14310,6 +14428,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           onOpenWorkerTasks={() => setShowWorkerTasks(true)}
           onCheckForUpdate={onCheckForUpdate}
           onGoToLanding={onGoToLanding}
+          onQuickNav={onQuickNav}
         />
       ) : (
         <JobInventory
@@ -14333,6 +14452,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           onMarkToolsFromShipWithoutTransfer={markToolsFromShipWithoutTransfer}
           onClearToolsNeedTransfer={clearToolsFromUnship}
           onOpenCatalog={() => setCatalogModalOpen(true)}
+          onQuickNav={onQuickNav}
         />
       )}
 
@@ -16125,7 +16245,7 @@ function DeepLinkQrModal({ section, id, title, subtitle, heading, onClose }) {
   );
 }
 
-function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onSyncToolsFromItem, onAddToLoveTaskList, onUndoLastAction, onBack, onGoHome }) {
+function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onSyncToolsFromItem, onAddToLoveTaskList, onUndoLastAction, onBack, onQuickNav }) {
   const undoStack = list.undoStack || [];
   const [undoOpen, setUndoOpen] = useState(false);
   const [addingItem, setAddingItem] = useState(false);
@@ -16740,102 +16860,99 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
-        <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <button onClick={onBack} className="text-slate-400 hover:text-slate-200 shrink-0">
-              <ChevronLeft className="w-5 h-5" />
-            </button>
-            <button onClick={onGoHome} className="text-slate-400 hover:text-slate-200 shrink-0">
-              <Home className="w-4 h-4" />
-            </button>
-            <div className="min-w-0">
-              {isEditor ? (
-                <button
-                  onClick={() => {
-                    setEditingNickname(true);
-                    setNicknameDraft(list.subJobLabel || "");
-                  }}
-                  className="font-semibold text-slate-100 truncate flex items-center gap-1.5 hover:underline decoration-dotted text-left"
-                >
-                  <Heart className="w-4 h-4 text-rose-400 shrink-0" />
-                  {listDisplayLabel(list)}
-                  {list.archived && (
-                    <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-500 rounded-full px-1.5 py-0.5 shrink-0">
-                      Archived
-                    </span>
-                  )}
-                </button>
-              ) : (
-                <p className="font-semibold text-slate-100 truncate flex items-center gap-1.5">
-                  <Heart className="w-4 h-4 text-rose-400 shrink-0" />
-                  {listDisplayLabel(list)}
-                  {list.archived && (
-                    <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-500 rounded-full px-1.5 py-0.5 shrink-0">
-                      Archived
-                    </span>
-                  )}
-                </p>
-              )}
-              <p className="text-xs text-slate-500 truncate">
-                {list.dateReceived}
-                {list.submittedBy ? ` · ${list.submittedBy}` : ""}
+      <SectionHeader
+        onBack={onBack}
+        maxWidthClass="max-w-2xl"
+        current="love"
+        onQuickNav={onQuickNav}
+        titleSlot={
+          <div className="min-w-0">
+            {isEditor ? (
+              <button
+                onClick={() => {
+                  setEditingNickname(true);
+                  setNicknameDraft(list.subJobLabel || "");
+                }}
+                className="font-semibold text-slate-100 truncate flex items-center gap-1.5 hover:underline decoration-dotted text-left"
+              >
+                <Heart className="w-4 h-4 text-rose-400 shrink-0" />
+                {listDisplayLabel(list)}
+                {list.archived && (
+                  <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-500 rounded-full px-1.5 py-0.5 shrink-0">
+                    Archived
+                  </span>
+                )}
+              </button>
+            ) : (
+              <p className="font-semibold text-slate-100 truncate flex items-center gap-1.5">
+                <Heart className="w-4 h-4 text-rose-400 shrink-0" />
+                {listDisplayLabel(list)}
+                {list.archived && (
+                  <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-500 rounded-full px-1.5 py-0.5 shrink-0">
+                    Archived
+                  </span>
+                )}
               </p>
-            </div>
+            )}
+            <p className="text-xs text-slate-500 truncate">
+              {list.dateReceived}
+              {list.submittedBy ? ` · ${list.submittedBy}` : ""}
+            </p>
           </div>
-          <button
-            onClick={() => setShowPhotosModal(true)}
-            title="Photos"
-            className="text-slate-400 hover:text-slate-200 p-2 shrink-0 relative"
-          >
-            <ImageIcon className="w-4 h-4" />
-            {(list.scanImageUrl || (list.referenceImages || []).length > 0) && (
-              <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-rose-400" />
-            )}
-          </button>
-          <button
-            onClick={() => setShowPrintModal(true)}
-            title="Print a clean list to work from"
-            className="text-slate-400 hover:text-slate-200 p-2 shrink-0"
-          >
-            <Printer className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setShowQrModal(true)}
-            title="QR code for this list (e.g. to put on a pallet)"
-            className="text-slate-400 hover:text-slate-200 p-2 shrink-0"
-          >
-            <QrCode className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setReferenceDocsOpen(true)}
-            title="Reference documents"
-            className="text-slate-400 hover:text-slate-200 p-2 shrink-0 relative"
-          >
-            <FileText className="w-4 h-4" />
-            {(list.referenceDocuments || []).length > 0 && (
-              <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-rose-400" />
-            )}
-          </button>
-          {isEditor && (
-            <button
-              onClick={() => onUpdateList({ ...list, archived: !list.archived })}
-              title={list.archived ? "Unarchive (show in main list)" : "Archive (hide from main list)"}
-              className="text-slate-500 hover:text-slate-300 p-2 shrink-0"
-            >
-              <Archive className="w-4 h-4" />
-            </button>
+        }
+      >
+        <button
+          onClick={() => setShowPhotosModal(true)}
+          title="Photos"
+          className="text-slate-400 hover:text-slate-200 p-2 shrink-0 relative"
+        >
+          <ImageIcon className="w-4 h-4" />
+          {(list.scanImageUrl || (list.referenceImages || []).length > 0) && (
+            <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-rose-400" />
           )}
-          {isOwner && (
-            <button
-              onClick={() => setDeleteListConfirm(true)}
-              className="text-slate-500 hover:text-red-400 p-2 shrink-0"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
+        </button>
+        <button
+          onClick={() => setShowPrintModal(true)}
+          title="Print a clean list to work from"
+          className="text-slate-400 hover:text-slate-200 p-2 shrink-0"
+        >
+          <Printer className="w-4 h-4" />
+        </button>
+        <button
+          onClick={() => setShowQrModal(true)}
+          title="QR code for this list (e.g. to put on a pallet)"
+          className="text-slate-400 hover:text-slate-200 p-2 shrink-0"
+        >
+          <QrCode className="w-4 h-4" />
+        </button>
+        <button
+          onClick={() => setReferenceDocsOpen(true)}
+          title="Reference documents"
+          className="text-slate-400 hover:text-slate-200 p-2 shrink-0 relative"
+        >
+          <FileText className="w-4 h-4" />
+          {(list.referenceDocuments || []).length > 0 && (
+            <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-rose-400" />
           )}
-        </div>
-      </header>
+        </button>
+        {isEditor && (
+          <button
+            onClick={() => onUpdateList({ ...list, archived: !list.archived })}
+            title={list.archived ? "Unarchive (show in main list)" : "Archive (hide from main list)"}
+            className="text-slate-500 hover:text-slate-300 p-2 shrink-0"
+          >
+            <Archive className="w-4 h-4" />
+          </button>
+        )}
+        {isOwner && (
+          <button
+            onClick={() => setDeleteListConfirm(true)}
+            className="text-slate-500 hover:text-red-400 p-2 shrink-0"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        )}
+      </SectionHeader>
 
       {showPhotosModal && (
         <LoveListPhotosModal
@@ -18057,7 +18174,7 @@ function StaleThresholdsModal({ thresholds, onSave, onClose }) {
   );
 }
 
-function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onSaveThresholds, onOpenList, onAddList, onScanList, onOpenWorkerTasks, onOpenTaskList, taskListCount = 0, onBulkArchiveLists, onRestoreBackup, restoreError, restoreSuccessCount, onGoHome }) {
+function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onSaveThresholds, onOpenList, onAddList, onScanList, onOpenWorkerTasks, onOpenTaskList, taskListCount = 0, onBulkArchiveLists, onRestoreBackup, restoreError, restoreSuccessCount, onGoHome, onQuickNav }) {
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("active"); // "active" | "ready"
   const [showThresholdSettings, setShowThresholdSettings] = useState(false);
@@ -18125,130 +18242,134 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
-        <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <button onClick={onGoHome} className="text-slate-400 hover:text-slate-200">
-              <Home className="w-4 h-4" />
-            </button>
-            <p className="font-semibold text-slate-100 flex items-center gap-1.5">
-              <Heart className="w-4 h-4 text-rose-400" />
-              Love Lists
-              {!isEditor && (
-                <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-400 rounded-full px-2 py-0.5">
-                  View only
+      <SectionHeader
+        onBack={onGoHome}
+        backIcon={Home}
+        icon={Heart}
+        iconClassName="text-rose-400"
+        title="Love Lists"
+        badge={
+          !isEditor && (
+            <span className="text-[10px] font-medium tracking-wide uppercase bg-slate-800 border border-slate-700 text-slate-400 rounded-full px-2 py-0.5">
+              View only
+            </span>
+          )
+        }
+        maxWidthClass="max-w-2xl"
+        current="love"
+        onQuickNav={onQuickNav}
+        extra={
+          <>
+            {restoreError && (
+              <div className="max-w-2xl mx-auto px-4 pb-2">
+                <p className="text-xs text-red-400">{restoreError}</p>
+              </div>
+            )}
+            {restoreSuccessCount !== null && restoreSuccessCount !== undefined && (
+              <div className="max-w-2xl mx-auto px-4 pb-2">
+                <p className="text-xs text-emerald-400">
+                  ✓ Restored {restoreSuccessCount} list{restoreSuccessCount === 1 ? "" : "s"} from backup.
+                </p>
+              </div>
+            )}
+            <div className="max-w-2xl mx-auto px-4 pb-3">
+              <div className="relative mb-2">
+                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search an item — find out where it goes..."
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md pl-9 pr-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+                />
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {LOVE_STATUSES.map((s) => (
+                  <button
+                    key={s.key}
+                    onClick={() => setStatusFilter((prev) => (prev === s.key ? null : s.key))}
+                    className={`text-xs rounded-full px-2.5 py-1 border transition-all ${s.color} ${
+                      statusFilter && statusFilter !== s.key
+                        ? "opacity-40"
+                        : statusFilter === s.key
+                        ? "ring-2 ring-offset-1 ring-offset-slate-950 ring-white/60"
+                        : ""
+                    }`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        }
+      >
+        {isEditor && (
+          <>
+            <button
+              onClick={onOpenTaskList}
+              title="Task list"
+              className="relative flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+            >
+              <ClipboardList className="w-4 h-4" />
+              {taskListCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-slate-950 text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                  {taskListCount > 9 ? "9+" : taskListCount}
                 </span>
               )}
-            </p>
-          </div>
-          {isEditor && (
-            <div className="flex gap-2 shrink-0">
-              <button
-                onClick={onOpenTaskList}
-                title="Task list"
-                className="relative flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
-              >
-                <ClipboardList className="w-4 h-4" />
-                {taskListCount > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-slate-950 text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
-                    {taskListCount > 9 ? "9+" : taskListCount}
-                  </span>
-                )}
-              </button>
-              <button
-                onClick={onOpenWorkerTasks}
-                title="Workers"
-                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
-              >
-                <Users className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setShowThresholdSettings(true)}
-                title="Needs Attention timing"
-                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
-              >
-                <Settings className="w-4 h-4" />
-              </button>
-              <button
-                onClick={onScanList}
-                title="Scan a list"
-                className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
-              >
-                <ScanLine className="w-4 h-4" />
-              </button>
-              {onRestoreBackup && (
-                <>
-                  <input
-                    ref={restoreFileInputRef}
-                    type="file"
-                    accept="application/json"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files[0];
-                      if (file) onRestoreBackup(file);
-                      e.target.value = "";
-                    }}
-                  />
-                  <button
-                    onClick={() => restoreFileInputRef.current && restoreFileInputRef.current.click()}
-                    title="Restore Love Lists from backup file"
-                    className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
-                  >
-                    <RotateCcw className="w-4 h-4" />
-                  </button>
-                </>
-              )}
-              <button
-                onClick={onAddList}
-                className="flex items-center gap-1.5 bg-rose-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-rose-400"
-              >
-                <Plus className="w-4 h-4" />
-                New list
-              </button>
-            </div>
-          )}
-        </div>
-        {restoreError && (
-          <div className="max-w-2xl mx-auto px-4 pb-2">
-            <p className="text-xs text-red-400">{restoreError}</p>
-          </div>
+            </button>
+            <button
+              onClick={onOpenWorkerTasks}
+              title="Workers"
+              className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+            >
+              <Users className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setShowThresholdSettings(true)}
+              title="Needs Attention timing"
+              className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+            <button
+              onClick={onScanList}
+              title="Scan a list"
+              className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+            >
+              <ScanLine className="w-4 h-4" />
+            </button>
+            {onRestoreBackup && (
+              <>
+                <input
+                  ref={restoreFileInputRef}
+                  type="file"
+                  accept="application/json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files[0];
+                    if (file) onRestoreBackup(file);
+                    e.target.value = "";
+                  }}
+                />
+                <button
+                  onClick={() => restoreFileInputRef.current && restoreFileInputRef.current.click()}
+                  title="Restore Love Lists from backup file"
+                  className="flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-200 rounded-md p-2 hover:bg-slate-700"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+              </>
+            )}
+            <button
+              onClick={onAddList}
+              className="flex items-center gap-1.5 bg-rose-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-rose-400"
+            >
+              <Plus className="w-4 h-4" />
+              New list
+            </button>
+          </>
         )}
-        {restoreSuccessCount !== null && restoreSuccessCount !== undefined && (
-          <div className="max-w-2xl mx-auto px-4 pb-2">
-            <p className="text-xs text-emerald-400">
-              ✓ Restored {restoreSuccessCount} list{restoreSuccessCount === 1 ? "" : "s"} from backup.
-            </p>
-          </div>
-        )}
-        <div className="max-w-2xl mx-auto px-4 pb-3">
-          <div className="relative mb-2">
-            <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search an item — find out where it goes..."
-              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md pl-9 pr-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
-            />
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {LOVE_STATUSES.map((s) => (
-              <button
-                key={s.key}
-                onClick={() => setStatusFilter((prev) => (prev === s.key ? null : s.key))}
-                className={`text-xs rounded-full px-2.5 py-1 border transition-all ${s.color} ${
-                  statusFilter && statusFilter !== s.key
-                    ? "opacity-40"
-                    : statusFilter === s.key
-                    ? "ring-2 ring-offset-1 ring-offset-slate-950 ring-white/60"
-                    : ""
-                }`}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </header>
+      </SectionHeader>
 
       <main className="max-w-2xl mx-auto px-4 py-5">
         {searchLower ? (
@@ -20604,7 +20725,7 @@ function LoveTaskListModal({ entries, lists, isEditor, onToggleDone, onRemove, o
   );
 }
 
-function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDeepLinkConsumed }) {
+function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDeepLinkConsumed, onQuickNav }) {
   const [lists, setLists] = useState([]);
   const [catalog, setCatalog] = useState([]);
   const [workers, setWorkers] = useState([]);
@@ -21185,7 +21306,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDee
         onAddToLoveTaskList={(addedItems) => addToLoveTaskList(activeList, addedItems)}
         onUndoLastAction={() => undoLastListAction(activeList.id)}
         onBack={() => setActiveListId(null)}
-        onGoHome={onGoHome}
+        onQuickNav={onQuickNav}
       />
       </>
     );
@@ -21215,6 +21336,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDee
         restoreError={restoreError}
         restoreSuccessCount={restoreSuccessCount}
         onGoHome={onGoHome}
+        onQuickNav={onQuickNav}
       />
       {showAddForm && isEditor && (
         <LoveListAddForm catalog={catalog} allLists={lists} onLearnAlias={learnCatalogAlias} onSave={handleSaveNewList} onCancel={() => setShowAddForm(false)} />
@@ -22861,7 +22983,7 @@ function PrintableReceiptsModal({ entries, onClose }) {
   );
 }
 
-function ReceiptArchive({ onGoHome }) {
+function ReceiptArchive({ onGoHome, onQuickNav }) {
   const [entries, setEntries] = useState([]);
   const [catalog, setCatalog] = useState([]);
   const [nameMemory, setNameMemory] = useState({});
@@ -23464,15 +23586,15 @@ function ReceiptArchive({ onGoHome }) {
           if (files.length > 0) runArchiveScans(files);
         }}
       />
-      <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
-        <button onClick={onGoHome} className="text-slate-400 hover:text-slate-200 flex items-center gap-1.5">
-          <ChevronLeft className="w-5 h-5" />
-          <span className="text-sm">Back</span>
-        </button>
-        <p className="font-semibold flex items-center gap-1.5">
-          <BookOpen className="w-4 h-4 text-amber-400" />
-          Receipt Archive
-        </p>
+      <SectionHeader
+        onBack={onGoHome}
+        icon={BookOpen}
+        iconClassName="text-amber-400"
+        title="Receipt Archive"
+        maxWidthClass="max-w-2xl"
+        current="archive"
+        onQuickNav={onQuickNav}
+      >
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={scanning}
@@ -23485,7 +23607,7 @@ function ReceiptArchive({ onGoHome }) {
               : "Scanning..."
             : "Scan"}
         </button>
-      </header>
+      </SectionHeader>
       <main className="max-w-2xl mx-auto px-4 py-5">
         <p className="text-xs text-slate-500 mb-4">
           A searchable photo log — nothing here creates or updates any items on a job or Love
@@ -25383,7 +25505,7 @@ function ToolDetailPage({ tool, allTools = [], onUpdate, onMerge, onDelete, onBa
   );
 }
 
-function ReceivingApp({ onGoHome }) {
+function ReceivingApp({ onGoHome, onQuickNav }) {
   const [queue, setQueue] = useState([]);
   // Kept in sync on every single write, synchronously — this is what a
   // long bulk scan reads from before merging in each new receipt. Using
@@ -26146,6 +26268,7 @@ function ReceivingApp({ onGoHome }) {
           onCombine={combineBatches}
           onViewPhoto={setViewingPhoto}
           onBack={() => setActiveBatchId(null)}
+          onQuickNav={onQuickNav}
         />
         {photoViewerOverlay}
       </>
@@ -26171,16 +26294,15 @@ function ReceivingApp({ onGoHome }) {
           if (files.length > 0) runScans(files);
         }}
       />
-      <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
-        <div className="flex items-center gap-2">
-          <button onClick={onGoHome} className="text-slate-400 hover:text-slate-200">
-            <ChevronLeft className="w-5 h-5" />
-          </button>
-          <p className="font-semibold flex items-center gap-1.5">
-            <Inbox className="w-4 h-4 text-amber-400" />
-            Receiving
-          </p>
-        </div>
+      <SectionHeader
+        onBack={onGoHome}
+        icon={Inbox}
+        iconClassName="text-amber-400"
+        title="Receiving"
+        maxWidthClass="max-w-2xl"
+        current="receiving"
+        onQuickNav={onQuickNav}
+      >
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={scanning}
@@ -26193,7 +26315,7 @@ function ReceivingApp({ onGoHome }) {
               : "Scanning..."
             : "Scan receipts"}
         </button>
-      </header>
+      </SectionHeader>
       <main className="max-w-2xl mx-auto px-4 py-5">
         {receivingUndoStack.length > 0 && (
           <button
@@ -26453,7 +26575,7 @@ function ReceivingApp({ onGoHome }) {
 // The review screen for one scanned receipt — verify against the pallet,
 // fix up anything OCR misread, link unmatched names to the catalog, pick
 // which Job or Love List this shipment belongs to, then approve.
-function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches, onUpdateBatch, onLearnAlias, onApprove, onDiscard, onCombine, onViewPhoto, onBack }) {
+function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches, onUpdateBatch, onLearnAlias, onApprove, onDiscard, onCombine, onViewPhoto, onBack, onQuickNav }) {
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const [confirmingApprove, setConfirmingApprove] = useState(false);
   const [relinkingLine, setRelinkingLine] = useState(null);
@@ -26614,15 +26736,23 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
-        <button onClick={onBack} className="text-slate-400 hover:text-slate-200 flex items-center gap-1.5">
-          <ChevronLeft className="w-5 h-5" />
-          <span className="text-sm">Back — saves automatically</span>
-        </button>
-        <button onClick={() => setConfirmingDiscard(true)} className="text-xs text-slate-500 hover:text-red-400">
+      <SectionHeader
+        onBack={onBack}
+        icon={Inbox}
+        iconClassName="text-amber-400"
+        title={batch.label || "Review receipt"}
+        subtitle="Saves automatically"
+        maxWidthClass="max-w-2xl"
+        current="receiving"
+        onQuickNav={onQuickNav}
+      >
+        <button
+          onClick={() => setConfirmingDiscard(true)}
+          className="text-xs text-slate-500 hover:text-red-400 px-2 py-2"
+        >
           Discard
         </button>
-      </header>
+      </SectionHeader>
       <main className="max-w-2xl mx-auto px-4 py-5">
         <p className="text-xs text-slate-500 mb-4">
           Every line picks its own destination — one receipt can split across several jobs and
@@ -27316,11 +27446,17 @@ export default function AuthGate() {
           onSignOut={() => supabase.auth.signOut()}
         />
       ) : appSection === "receiving" ? (
-        <ReceivingApp onGoHome={goToLanding} />
+        <ReceivingApp
+          onGoHome={goToLanding}
+          onQuickNav={isOwner || isManager ? navigateToSection : undefined}
+        />
       ) : appSection === "backorders" ? (
         <BackorderDashboard onGoHome={goToLanding} />
       ) : appSection === "archive" ? (
-        <ReceiptArchive onGoHome={goToLanding} />
+        <ReceiptArchive
+          onGoHome={goToLanding}
+          onQuickNav={isOwner || isManager ? navigateToSection : undefined}
+        />
       ) : appSection === "tools" ? (
         <ToolsApp onGoHome={goToLanding} />
       ) : appSection === "love" ? (
@@ -27330,6 +27466,7 @@ export default function AuthGate() {
           onGoHome={goToLanding}
           initialListId={pendingDeepLinkId}
           onDeepLinkConsumed={consumeDeepLink}
+          onQuickNav={isOwner || isManager ? navigateToSection : undefined}
         />
       ) : appSection === "kiosk" ? (
         <WorkerKioskApp onRequestStaffLogin={() => setShowLogin(true)} />
@@ -27345,6 +27482,7 @@ export default function AuthGate() {
           initialAction={pendingJobAction}
           initialJobId={pendingDeepLinkId}
           onDeepLinkConsumed={consumeDeepLink}
+          onQuickNav={isOwner || isManager ? navigateToSection : undefined}
         />
       )}
       {showLogin && !session && (
