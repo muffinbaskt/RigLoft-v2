@@ -21807,10 +21807,25 @@ function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarg
     })();
   }, []);
 
+  // Local state updates immediately on every call (typing stays
+  // responsive, and queueRef.current is always the true latest for
+  // anything that reads it mid-typing, like approve()). The actual write
+  // to Supabase is debounced instead of firing per call — a name or
+  // quantity field calls this on every keystroke, and with no debounce,
+  // each keystroke fired its own independent save with no ordering
+  // guarantee; a slow connection could let an earlier, half-typed request
+  // land *after* the final one and silently overwrite it, so the value
+  // that actually persisted was a mid-typing snapshot, not what was last
+  // on screen. Waiting for a pause means exactly one save goes out, with
+  // whatever queueRef.current holds by then — always the final value.
+  const queueSaveTimer = useRef(null);
   const saveQueue = (next) => {
     queueRef.current = next;
     setQueue(next);
-    saveWithRetry(RECEIVING_QUEUE_KEY, JSON.stringify(next)).catch(() => {});
+    if (queueSaveTimer.current) clearTimeout(queueSaveTimer.current);
+    queueSaveTimer.current = setTimeout(() => {
+      saveWithRetry(RECEIVING_QUEUE_KEY, JSON.stringify(queueRef.current)).catch(() => {});
+    }, 600);
   };
 
   const learnAlias = (catalogId, aliasText) => {
@@ -25438,10 +25453,22 @@ function ReceivingApp({ onGoHome }) {
     load();
   }, []);
 
+  // Same fix as PullFromReceivingModal's saveQueue: local state updates
+  // immediately, but the actual write to Supabase is debounced instead of
+  // firing on every call. A name or quantity field calls this on every
+  // keystroke — with no debounce, each keystroke fired its own
+  // independent, unordered save, so a slow connection could let an
+  // earlier, half-typed request land *after* the final one and silently
+  // overwrite it with a mid-typing snapshot. Waiting for a pause means
+  // exactly one save goes out, with the true final value.
+  const queueSaveTimer = useRef(null);
   const saveQueue = (next) => {
     queueRef.current = next;
     setQueue(next);
-    saveWithRetry(RECEIVING_QUEUE_KEY, JSON.stringify(next)).catch(() => {});
+    if (queueSaveTimer.current) clearTimeout(queueSaveTimer.current);
+    queueSaveTimer.current = setTimeout(() => {
+      saveWithRetry(RECEIVING_QUEUE_KEY, JSON.stringify(queueRef.current)).catch(() => {});
+    }, 600);
   };
 
   // Undo for Receiving's genuinely consequential actions — approve,
