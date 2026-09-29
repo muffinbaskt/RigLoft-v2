@@ -13375,6 +13375,20 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, initialAction, isEditor]);
 
+  // The note box on the suggestion form reads as "leave a note on this
+  // item" but it's actually just a message to whoever reviews it — it
+  // only ever landed in the activity log, never on the item itself, which
+  // is exactly the gap the owner ran into ("I just approved a note to an
+  // item but it doesn't appear on the item"). Folding it into the item's
+  // own notes field on approval is what actually closes that gap, without
+  // discarding whatever the item's notes field already said.
+  const combineNotes = (existingNotes, suggestionNote) => {
+    const existing = (existingNotes || "").trim();
+    const addition = (suggestionNote || "").trim();
+    if (!addition) return existing;
+    return existing ? `${existing}\n${addition}` : addition;
+  };
+
   const approveSuggestion = async (s) => {
     const job = jobs.find((j) => String(j.id) === String(s.job_id));
     if (!job) {
@@ -13396,7 +13410,11 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           if (String(i.id) !== String(s.item_id)) return i;
           if (s.payload.proposedItem) {
             // Current shape — a full proposed item, applied wholesale.
-            return { ...s.payload.proposedItem, id: i.id };
+            return {
+              ...s.payload.proposedItem,
+              id: i.id,
+              notes: combineNotes(s.payload.proposedItem.notes, s.note),
+            };
           }
           // Older shape, kept working for anything already pending from
           // before this — a narrow, field-by-field suggestion.
@@ -13418,6 +13436,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
             ordered: s.payload.ordered,
             received: s.payload.received,
             status,
+            notes: combineNotes(i.notes, s.note),
           };
         }),
         containerOptions: (() => {
@@ -13461,6 +13480,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           containers,
           qtyHave: totalHave(containers),
           status: containers.length > 0 ? "green" : "red",
+          notes: combineNotes(null, s.note),
         };
         return {
           ...prevJob,
