@@ -8613,6 +8613,7 @@ function SectionHeader({
   maxWidthClass = "max-w-5xl",
   current,
   onQuickNav,
+  locked = false,
   children,
   extra,
 }) {
@@ -8620,12 +8621,26 @@ function SectionHeader({
     <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
       <div className={`${maxWidthClass} mx-auto px-4 py-4 flex items-center justify-between gap-3 flex-wrap`}>
         <div className="flex items-center gap-2.5 min-w-0">
-          <button
-            onClick={onBack}
-            className="w-8 h-8 rounded-md bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 hover:bg-slate-700 active:scale-90 transition-transform shrink-0"
-          >
-            <BackIcon className="w-4 h-4" />
-          </button>
+          {locked ? (
+            // A scanned QR code opened straight to this one record, and
+            // whoever scanned it isn't logged in — no back button, no way
+            // to browse into the dashboard or anywhere else. This is
+            // meant to be a dead end, not an on-ramp into the rest of the
+            // app.
+            <div
+              title="Shared view — nothing else to navigate to here"
+              className="w-8 h-8 rounded-md bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-500 shrink-0"
+            >
+              <Lock className="w-4 h-4" />
+            </div>
+          ) : (
+            <button
+              onClick={onBack}
+              className="w-8 h-8 rounded-md bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 hover:bg-slate-700 active:scale-90 transition-transform shrink-0"
+            >
+              <BackIcon className="w-4 h-4" />
+            </button>
+          )}
           {titleSlot || (
             <div className="min-w-0">
               <p className="font-semibold text-slate-100 leading-tight flex items-center gap-1.5 truncate">
@@ -8639,7 +8654,7 @@ function SectionHeader({
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end shrink-0">
           {children}
-          {onQuickNav && <QuickNavMenu current={current} onNavigate={onQuickNav} />}
+          {!locked && onQuickNav && <QuickNavMenu current={current} onNavigate={onQuickNav} />}
         </div>
       </div>
       {/* Extra rows (search bars, filters, inline messages) that need to
@@ -9765,6 +9780,7 @@ function JobInventory({
   onClearToolsNeedTransfer,
   onOpenCatalog,
   onQuickNav,
+  locked = false,
 }) {
   // A sealed job behaves exactly like browse-only mode, regardless of
   // being actually logged in — reuses every existing disabled-editing
@@ -10991,12 +11007,25 @@ function JobInventory({
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
         <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
-            <button
-              onClick={onBackToJobs}
-              className="w-8 h-8 rounded-md bg-slate-800 flex items-center justify-center shrink-0 hover:bg-slate-700"
-            >
-              <ChevronLeft className="w-4.5 h-4.5 text-slate-300" />
-            </button>
+            {locked ? (
+              // A scanned QR code opened straight to this job, and
+              // whoever scanned it isn't logged in — no back button into
+              // the full job picker. Meant to be a dead end, not an
+              // on-ramp into every other job.
+              <div
+                title="Shared view — nothing else to navigate to here"
+                className="w-8 h-8 rounded-md bg-slate-800 flex items-center justify-center shrink-0 text-slate-500"
+              >
+                <Lock className="w-4 h-4" />
+              </div>
+            ) : (
+              <button
+                onClick={onBackToJobs}
+                className="w-8 h-8 rounded-md bg-slate-800 flex items-center justify-center shrink-0 hover:bg-slate-700"
+              >
+                <ChevronLeft className="w-4.5 h-4.5 text-slate-300" />
+              </button>
+            )}
             <div className="min-w-0">
               <h1 className="font-bold text-slate-100 leading-tight truncate flex items-center gap-2">
                 {job.color && (
@@ -11034,7 +11063,7 @@ function JobInventory({
             >
               <MoreVertical className="w-4 h-4" />
             </button>
-            {onQuickNav && <QuickNavMenu current="jobs" onNavigate={onQuickNav} />}
+            {!locked && onQuickNav && <QuickNavMenu current="jobs" onNavigate={onQuickNav} />}
             {menuOpen && (
               <div className="absolute right-0 top-full mt-2 w-52 bg-slate-800 border border-slate-700 rounded-md shadow-lg z-40 overflow-hidden">
                   {isEditor && (
@@ -13299,6 +13328,15 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, jobs, initialJobId]);
+  // Fixed for the life of this screen, same idea as Love Lists' equivalent
+  // flag — a scanned QR code is meant to be a dead end for anyone not
+  // logged in, not a way into every other job. A logged-in owner/manager
+  // scanning their own code keeps full navigation.
+  const [openedViaDeepLink] = useState(initialJobId != null);
+  // isEditor here means "owner" specifically (WareHub's isManager is a
+  // separate flag) — a manager is still a real logged-in account and
+  // should keep full navigation too, so both are checked.
+  const lockedToDeepLink = openedViaDeepLink && !isEditor && !isManager;
   useEffect(() => {
     if (loading || !initialAction || initialActionDone.current) return;
     initialActionDone.current = true;
@@ -14453,6 +14491,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
           onClearToolsNeedTransfer={clearToolsFromUnship}
           onOpenCatalog={() => setCatalogModalOpen(true)}
           onQuickNav={onQuickNav}
+          locked={lockedToDeepLink}
         />
       )}
 
@@ -16245,7 +16284,7 @@ function DeepLinkQrModal({ section, id, title, subtitle, heading, onClose }) {
   );
 }
 
-function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onSyncToolsFromItem, onAddToLoveTaskList, onUndoLastAction, onBack, onQuickNav }) {
+function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onSyncToolsFromItem, onAddToLoveTaskList, onUndoLastAction, onBack, onQuickNav, locked = false }) {
   const undoStack = list.undoStack || [];
   const [undoOpen, setUndoOpen] = useState(false);
   const [addingItem, setAddingItem] = useState(false);
@@ -16866,6 +16905,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <SectionHeader
         onBack={onBack}
+        locked={locked}
         maxWidthClass="max-w-2xl"
         current="love"
         onQuickNav={onQuickNav}
@@ -20748,6 +20788,16 @@ function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDee
     if (initialListId != null) onDeepLinkConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // Fixed for the life of this screen (unlike initialListId/pendingDeepLinkId
+  // upstream, which get cleared right after mount so a later, normal
+  // re-entry into Love Lists doesn't keep reopening the same list). A
+  // pallet's QR code is meant to be a dead end for anyone not logged in —
+  // see what job it's for, nothing else — so an anonymous viewer who
+  // arrived this way gets the list locked to just that one screen, no
+  // back button into the dashboard/rest of the app. A logged-in owner or
+  // manager scanning their own code keeps full navigation.
+  const [openedViaDeepLink] = useState(initialListId != null);
+  const lockedToDeepLink = openedViaDeepLink && !isEditor;
   const [showAddForm, setShowAddForm] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
   const [showWorkerTasks, setShowWorkerTasks] = useState(false);
@@ -21311,6 +21361,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDee
         onUndoLastAction={() => undoLastListAction(activeList.id)}
         onBack={() => setActiveListId(null)}
         onQuickNav={onQuickNav}
+        locked={lockedToDeepLink}
       />
       </>
     );
