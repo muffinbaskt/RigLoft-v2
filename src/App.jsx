@@ -16322,27 +16322,31 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [showTransferList, setShowTransferList] = useState(false);
   const [transferCopied, setTransferCopied] = useState(false);
 
-  // What actually shows on the transfer list: only SME-tracked items,
-  // since that's the whole point of the record. Includes both items
-  // genuinely marked Sent, and partial-send snapshots — each showing the
-  // quantity and SME#s that were actually present at the moment that
-  // portion went out, not whatever the item's current values happen to
-  // be now.
+  // What actually shows on the transfer list: only SME-tracked items still
+  // sitting at Staged, not ones already marked Sent — the paperwork needs
+  // to exist while something's staged and about to physically go, not
+  // after the fact once it's already gone. An item drops off here the
+  // moment it's marked Sent (matching a physical load that already left,
+  // which no longer needs a "getting ready to ship" list). Includes
+  // partial-staging snapshots — each showing the quantity and SME#s that
+  // were actually present at the moment that portion was staged, not
+  // whatever the item's current values happen to be now.
   const transferListEntries = list.items
-    .filter((i) => !i.archived && i.needsTransfer)
+    .filter((i) => !i.archived && i.needsTransfer && i.status === "staged")
     .flatMap((i) => {
-      const batches = (i.sentBatches || []).filter(
-        (b) => b.sentQty > 0 || (b.serials || []).length > 0
+      const batches = (i.stagedBatches || []).filter(
+        (b) => b.stagedQty > 0 || (b.serials || []).length > 0
       );
       return batches.map((batch, idx) => ({
         item: i,
-        qty: batch.sentQty,
+        qty: batch.stagedQty,
         qtyUnit: i.qtyUnit,
         serials: batch.serials || [],
         date: batch.timestamp.slice(0, 10),
-        // The final batch is only "not partial" if the item actually
-        // reached a genuine, fully-caught-up Sent status.
-        partial: idx < batches.length - 1 || i.status !== "sent",
+        // Only the most recent staging batch is treated as "caught up" —
+        // every earlier one was a partial staging snapshot superseded by
+        // a later one.
+        partial: idx < batches.length - 1,
       }));
     });
   const transferListCount = transferListEntries.length;
@@ -16368,7 +16372,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           const withSme = serials.length > 0 ? `${base} — SME# ${serials.join(", ")}` : base;
           return partial ? `${withSme} (partial)` : withSme;
         });
-      return `Sent on ${formatTransferDate(date)}:\n${lines.join("\n")}`;
+      return `Staged on ${formatTransferDate(date)}:\n${lines.join("\n")}`;
     })
     .join("\n\n");
 
@@ -17771,7 +17775,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
               {transferDates.map((date) => (
                 <div key={date}>
                   <p className="text-xs font-semibold text-slate-400 mb-1.5">
-                    Sent on {formatTransferDate(date)}
+                    Staged on {formatTransferDate(date)}
                   </p>
                   <div className="border border-slate-800 rounded-lg divide-y divide-slate-800 overflow-hidden">
                     {transferListEntries
