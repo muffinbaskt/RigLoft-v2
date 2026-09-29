@@ -24835,7 +24835,36 @@ function ImportSerialNumbersModal({ tools, onSave, onClose }) {
     setRows((prev) => prev.filter((r) => r.id !== id));
   };
 
-  const newCount = rows.filter((r) => !tools.some((t) => t.sme === r.sme)).length;
+  // Previews exactly what handleConfirm/attachSerialNumbers will actually
+  // do — including the same one-to-one, first-come claim on an
+  // awaiting-SME# tool by name — so this screen doesn't tell someone "will
+  // create" for a row that's really about to fill in the receiving record
+  // they already have sitting there.
+  const rowPreviews = (() => {
+    const claimed = new Set();
+    return rows.map((row) => {
+      const sme = (row.sme || "").trim();
+      const existing = tools.find((t) => t.sme === sme);
+      if (existing) return { row, kind: "existing", match: existing };
+      const rowName = (row.name || row.nameGuess || "").trim();
+      const normRowName = rowName ? normalizeText(rowName) : "";
+      const awaitingMatch = normRowName
+        ? tools.find(
+            (t) =>
+              t.status === "awaiting_sme" &&
+              !t.sme &&
+              !claimed.has(t.id) &&
+              normalizeText(t.name || "") === normRowName
+          )
+        : null;
+      if (awaitingMatch) {
+        claimed.add(awaitingMatch.id);
+        return { row, kind: "awaiting_match", match: awaitingMatch };
+      }
+      return { row, kind: "new" };
+    });
+  })();
+  const newCount = rowPreviews.filter((p) => p.kind === "new").length;
 
   const handleConfirm = () => {
     const updated = attachSerialNumbers(tools, rows);
@@ -24915,8 +24944,7 @@ function ImportSerialNumbersModal({ tools, onSave, onClose }) {
                 <p className="text-sm text-slate-500 text-center py-10">Nothing left to import.</p>
               ) : (
                 <div className="space-y-2">
-                  {rows.map((row) => {
-                    const existing = tools.find((t) => t.sme === row.sme);
+                  {rowPreviews.map(({ row, kind, match }) => {
                     return (
                       <div key={row.id} className="border border-slate-800 rounded-lg p-2.5 bg-slate-800/40">
                         <div className="flex items-center gap-2 mb-1.5">
@@ -24936,9 +24964,13 @@ function ImportSerialNumbersModal({ tools, onSave, onClose }) {
                             <X className="w-3.5 h-3.5" />
                           </button>
                         </div>
-                        {existing ? (
+                        {kind === "existing" ? (
                           <p className="text-[11px] text-emerald-400">
-                            🔗 {existing.name || "Unnamed tool"} — {toolStatusLabel(existing)}
+                            🔗 {match.name || "Unnamed tool"} — {toolStatusLabel(match)}
+                          </p>
+                        ) : kind === "awaiting_match" ? (
+                          <p className="text-[11px] text-emerald-400">
+                            🔗 Matched by name to "{match.name}" — Awaiting SME# (from receiving)
                           </p>
                         ) : (
                           <div className="flex items-center gap-1.5">

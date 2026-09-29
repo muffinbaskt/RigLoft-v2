@@ -10,6 +10,8 @@
 // separate data-entry pass. Backfilling everything already sitting on
 // current jobs from before this existed is its own later phase, still
 // not part of this one.
+import { normalizeText } from "./utils";
+
 export const TOOLS_KEY = "warehub-tools";
 
 // The actual "does this look like a tool" heuristic — a catalog item
@@ -647,11 +649,45 @@ export function parseSmeItemSerialTable(rows) {
 // anywhere).
 export function attachSerialNumbers(currentTools, rows) {
   let tools = [...currentTools];
+  // Tools received before their SME# is known sit here (added by name
+  // only, from the receipt). Once claimed by a row below, a record is
+  // never matched again for a later row in the same import — each
+  // physical tool only fills in one SME#/serial, even if several
+  // identically-named awaiting_sme tools were received in the same batch.
+  const claimedAwaitingIds = new Set();
   rows.forEach((row) => {
     const sme = (row.sme || "").trim();
     if (!sme) return;
     const idx = tools.findIndex((t) => t.sme === sme);
     if (idx === -1) {
+      // No tool has this SME# yet — before creating a brand-new record,
+      // check for one that was already added from receiving under this
+      // same name but is still waiting on its SME#. Filling that one in
+      // instead of creating a new one is what stops this import from
+      // leaving two records for the one physical tool: the real one from
+      // receiving (with its receipt) and an orphaned new one from here
+      // (with the number, but no receipt).
+      const rowName = (row.name || row.nameGuess || "").trim();
+      const normRowName = rowName ? normalizeText(rowName) : "";
+      const awaitingIdx = normRowName
+        ? tools.findIndex(
+            (t) =>
+              t.status === "awaiting_sme" &&
+              !t.sme &&
+              !claimedAwaitingIds.has(t.id) &&
+              normalizeText(t.name || "") === normRowName
+          )
+        : -1;
+      if (awaitingIdx !== -1) {
+        const existing = tools[awaitingIdx];
+        claimedAwaitingIds.add(existing.id);
+        tools[awaitingIdx] = logToolEvent(
+          { ...existing, sme, serialNumber: row.serial || existing.serialNumber || null, status: "needs_engraving" },
+          "serial_attached",
+          `SME# ${sme}${row.serial ? ` and Serial# ${row.serial}` : ""} attached (matched to the receiving record by name)`
+        );
+        return;
+      }
       const tool = logToolEvent(
         { ...newTool({ sme, name: row.name || row.nameGuess || "", status: "storage" }), serialNumber: row.serial || null },
         "serial_attached",
