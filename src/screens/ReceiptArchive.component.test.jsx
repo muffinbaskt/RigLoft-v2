@@ -6,10 +6,10 @@
 // notice in production.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { ReceiptArchive } from "./App";
-import { RECEIPT_ARCHIVE_KEY } from "./lib/receiving";
+import { ReceiptArchive } from "./ReceiptArchive";
+import { RECEIPT_ARCHIVE_KEY } from "../lib/receiving";
 
-vi.mock("./lib/api", () => ({
+vi.mock("../lib/api", () => ({
   JOBS_KEY: "warehub-jobs",
   CATALOG_KEY: "warehub-catalog",
   getWithRetry: vi.fn(),
@@ -17,7 +17,7 @@ vi.mock("./lib/api", () => ({
   deleteReferenceDocument: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
-import { getWithRetry, saveWithRetry } from "./lib/api";
+import { getWithRetry, saveWithRetry } from "../lib/api";
 
 const entry = {
   id: 1,
