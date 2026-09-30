@@ -5642,6 +5642,21 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
                               placeholder="Location (optional)"
                               className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-400 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
                             />
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() =>
+                                setEditingEntry({ ...editingEntry, ordered: !editingEntry.ordered })
+                              }
+                              className={`flex-1 flex items-center justify-center gap-1.5 text-xs rounded-md py-1.5 border transition-colors ${
+                                editingEntry.ordered
+                                  ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
+                                  : "bg-slate-800 border-slate-700 text-slate-400"
+                              }`}
+                            >
+                              <Truck className="w-3.5 h-3.5" />
+                              {editingEntry.ordered ? "Ordered" : "Not ordered yet"}
+                            </button>
                             <button
                               onClick={saveEntry}
                               className="text-xs bg-amber-500 text-slate-950 font-semibold rounded-md px-2 py-1.5 shrink-0"
@@ -5684,6 +5699,11 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
                               >
                                 {r.spec}
                               </span>
+                              {r.ordered && (
+                                <span className="text-[9px] font-medium tracking-wide uppercase bg-amber-500/15 border border-amber-500/40 text-amber-300 rounded-full px-1.5 py-0.5 shrink-0">
+                                  Ordered
+                                </span>
+                              )}
                             </span>
                             {r.location && (
                               <span className="text-xs text-slate-500 truncate pl-0">
