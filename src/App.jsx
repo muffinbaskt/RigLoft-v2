@@ -5362,6 +5362,7 @@ function ReturnsListPage({ returns, onOpenReturn, onBack, onGoHome }) {
 
 function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
   const requisitions = job.requisitions || [];
+  const [referenceDocsOpen, setReferenceDocsOpen] = useState(false);
   const [addingCategory, setAddingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [addRowFor, setAddRowFor] = useState(null);
@@ -5491,17 +5492,39 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
               <p className="text-xs text-slate-500 leading-tight truncate">{job.name}</p>
             </div>
           </div>
-          {isEditor && (
+          <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={() => setAddingCategory(true)}
-              className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400 shrink-0"
+              onClick={() => setReferenceDocsOpen(true)}
+              title="Receipt photos & reference documents"
+              className="relative w-9 h-9 flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-300 rounded-md hover:bg-slate-700"
             >
-              <Plus className="w-4 h-4" />
-              <span className="hidden sm:inline">Add category</span>
+              <FileText className="w-4 h-4" />
+              {(job.referenceDocuments || []).length > 0 && (
+                <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-rose-400" />
+              )}
             </button>
-          )}
+            {isEditor && (
+              <button
+                onClick={() => setAddingCategory(true)}
+                className="flex items-center gap-1.5 bg-amber-500 text-slate-950 text-sm font-semibold rounded-md px-3.5 py-2 hover:bg-amber-400"
+              >
+                <Plus className="w-4 h-4" />
+                <span className="hidden sm:inline">Add category</span>
+              </button>
+            )}
+          </div>
         </div>
       </header>
+
+      {referenceDocsOpen && (
+        <ReferenceDocsModal
+          entity={job}
+          entityLabel="this job's requisitions"
+          isEditor={isEditor}
+          onUpdateEntity={onUpdateJob}
+          onClose={() => setReferenceDocsOpen(false)}
+        />
+      )}
 
       <main className="max-w-5xl mx-auto px-4 py-5">
         {categories.length === 0 ? (
