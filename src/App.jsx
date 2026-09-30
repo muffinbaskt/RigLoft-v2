@@ -14892,7 +14892,7 @@ function LoveListItemEntry({ catalog, allLists = [], currentListId, onLearnAlias
           {duplicates.map(({ list, item }) => (
             <p key={item.id} className="text-xs text-amber-200/80">
               "{item.name}" for {list.jobLabel} on {list.dateReceived} —{" "}
-              {loveStatusMeta(item.status).label}
+              {loveItemDisplayMeta(item).label}
             </p>
           ))}
         </div>

@@ -40,6 +40,14 @@ export const loveStatusMeta = (key) => LOVE_STATUSES.find((s) => s.key === key) 
 // something that tells the truth about what's actually outstanding.
 export function loveItemDisplayMeta(item) {
   const base = loveStatusMeta(item.status);
+  // An item pulled from existing inventory (needsOrdering === false) skips
+  // the "Ordered" step entirely (see nextLoveStatus above), so by the time
+  // it reaches this point it was never actually received from a vendor —
+  // it's just been pulled and is sitting ready to use. "Received" implies
+  // a purchase that never happened, so it gets its own label here instead.
+  if (item.status === "received" && item.needsOrdering === false) {
+    return { ...base, label: "In Stock" };
+  }
   // Checked before the Sent case below since they can never both apply —
   // qtyOrdered only matters while still sitting at Ordered, and totalSent
   // only ever accumulates once the item's moved well past that.
@@ -91,7 +99,7 @@ export function describeListChange(before, after) {
     const prev = beforeById.get(changed[0].id);
     const item = changed[0];
     if (prev.status !== item.status) {
-      return `${item.name}: ${loveStatusMeta(prev.status).label} → ${loveStatusMeta(item.status).label}`;
+      return `${item.name}: ${loveItemDisplayMeta(prev).label} → ${loveItemDisplayMeta(item).label}`;
     }
     if (prev.archived !== item.archived) return `${item.archived ? "Archived" : "Unarchived"} ${item.name}`;
     if (prev.qty !== item.qty) return `${item.name} qty updated`;

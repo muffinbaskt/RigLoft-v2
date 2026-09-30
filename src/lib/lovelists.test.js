@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { describeListChange } from "./lovelists";
+import { describeListChange, loveItemDisplayMeta } from "./lovelists";
 
 const baseList = {
   id: 1,
@@ -75,5 +75,28 @@ describe("describeListChange", () => {
   it("falls back to a generic label for anything else", () => {
     const after = { ...baseList, dateReceived: "2026-01-01" };
     expect(describeListChange(baseList, after)).toBe("List updated");
+  });
+
+  it("labels an inventory item's jump straight to Received as 'In Stock'", () => {
+    const after = {
+      ...baseList,
+      items: [
+        { ...baseList.items[0], status: "received", needsOrdering: false },
+        baseList.items[1],
+      ],
+    };
+    expect(describeListChange(baseList, after)).toBe("Gloves: Requested → In Stock");
+  });
+});
+
+describe("loveItemDisplayMeta", () => {
+  it("shows 'In Stock' for an item pulled from inventory that reached Received", () => {
+    const item = { status: "received", needsOrdering: false, qty: 3 };
+    expect(loveItemDisplayMeta(item).label).toBe("In Stock");
+  });
+
+  it("still shows 'Received' for an item that was actually ordered", () => {
+    const item = { status: "received", needsOrdering: true, qty: 3 };
+    expect(loveItemDisplayMeta(item).label).toBe("Received");
   });
 });
