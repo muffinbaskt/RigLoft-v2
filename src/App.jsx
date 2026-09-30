@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
 import { useRemoteRefresh } from "./lib/useRemoteRefresh";
 import { useAppUpdate } from "./lib/useAppUpdate";
 import QRCode from "qrcode";
@@ -114,10 +114,21 @@ import {
   QuickNavMenu,
   AddToolModal,
 } from "./components/shared";
-import { BackorderDashboard } from "./screens/BackorderDashboard";
-import { ReceiptArchive } from "./screens/ReceiptArchive";
-import { ToolsApp } from "./screens/ToolsApp";
-import { ReceivingApp } from "./screens/ReceivingApp";
+// Lazy-loaded: each of these 4 only downloads once someone actually opens
+// that section, instead of every visit shipping all of Receiving/Receipt
+// Archive/Tools/Backorders whether or not that session ever touches them.
+// Named exports (not default), so React.lazy's import() needs the .then
+// remap - lazy() itself only understands a module's default export.
+const BackorderDashboard = lazy(() =>
+  import("./screens/BackorderDashboard").then((m) => ({ default: m.BackorderDashboard }))
+);
+const ReceiptArchive = lazy(() =>
+  import("./screens/ReceiptArchive").then((m) => ({ default: m.ReceiptArchive }))
+);
+const ToolsApp = lazy(() => import("./screens/ToolsApp").then((m) => ({ default: m.ToolsApp })));
+const ReceivingApp = lazy(() =>
+  import("./screens/ReceivingApp").then((m) => ({ default: m.ReceivingApp }))
+);
 import {
   RECEIVING_QUEUE_KEY,
   RECEIPT_ARCHIVE_KEY,
@@ -258,6 +269,15 @@ import {
   applyToolMerge,
 } from "./lib/tools";
 
+// Fallback shown for the brief moment a lazy-loaded screen's chunk is still
+// downloading. Matches the app's existing full-screen spinner styling.
+function SectionLoadingFallback() {
+  return (
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+      <div className="w-8 h-8 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
+    </div>
+  );
+}
 
 function Select({ value, onChange, options, labels }) {
   return (
@@ -22512,21 +22532,29 @@ export default function AuthGate() {
           onSignOut={() => supabase.auth.signOut()}
         />
       ) : appSection === "receiving" ? (
-        <ReceivingApp
-          onGoHome={goToLanding}
-          onQuickNav={isOwner ? navigateToSection : undefined}
-          isOwner={isOwner}
-        />
+        <Suspense fallback={<SectionLoadingFallback />}>
+          <ReceivingApp
+            onGoHome={goToLanding}
+            onQuickNav={isOwner ? navigateToSection : undefined}
+            isOwner={isOwner}
+          />
+        </Suspense>
       ) : appSection === "backorders" ? (
-        <BackorderDashboard onGoHome={goToLanding} />
+        <Suspense fallback={<SectionLoadingFallback />}>
+          <BackorderDashboard onGoHome={goToLanding} />
+        </Suspense>
       ) : appSection === "archive" ? (
-        <ReceiptArchive
-          onGoHome={goToLanding}
-          onQuickNav={isOwner ? navigateToSection : undefined}
-          isOwner={isOwner}
-        />
+        <Suspense fallback={<SectionLoadingFallback />}>
+          <ReceiptArchive
+            onGoHome={goToLanding}
+            onQuickNav={isOwner ? navigateToSection : undefined}
+            isOwner={isOwner}
+          />
+        </Suspense>
       ) : appSection === "tools" ? (
-        <ToolsApp onGoHome={goToLanding} isOwner={isOwner} />
+        <Suspense fallback={<SectionLoadingFallback />}>
+          <ToolsApp onGoHome={goToLanding} isOwner={isOwner} />
+        </Suspense>
       ) : appSection === "love" ? (
         <LoveListsApp
           isEditor={isOwner || isManager}
