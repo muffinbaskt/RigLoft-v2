@@ -1,23 +1,21 @@
-// Smoke tests for BackorderDashboard, written ahead of any component-
-// splitting work on App.jsx. The point isn't full coverage — it's a
-// before/after baseline: render this screen with fake data, assert what
-// it currently does, then re-run the exact same file once the component
-// has been moved to its own module. If these still pass, the move didn't
-// change behavior; if one fails, it caught the regression before a real
-// user would have.
+// Smoke tests for BackorderDashboard. Written ahead of splitting this
+// screen out of App.jsx as a before/after baseline; now living alongside
+// the extracted component. Not full coverage — renders with fake data and
+// asserts real behavior (list rendering, search, empty state, clear/back
+// actions) so a future change here can't silently break any of it.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { BackorderDashboard } from "./App";
-import { JOBS_KEY, LOVE_LISTS_KEY } from "./lib/api";
+import { BackorderDashboard } from "./BackorderDashboard";
+import { JOBS_KEY } from "../lib/api";
+import { LOVE_LISTS_KEY } from "../lib/lovelists";
 
-vi.mock("./lib/api", () => ({
+vi.mock("../lib/api", () => ({
   JOBS_KEY: "warehub-jobs",
-  LOVE_LISTS_KEY: "warehub-love-lists",
   getWithRetry: vi.fn(),
   saveWithRetry: vi.fn().mockResolvedValue({ ok: true, updatedAt: new Date().toISOString() }),
 }));
 
-import { getWithRetry, saveWithRetry } from "./lib/api";
+import { getWithRetry, saveWithRetry } from "../lib/api";
 
 const job = {
   id: 1,
