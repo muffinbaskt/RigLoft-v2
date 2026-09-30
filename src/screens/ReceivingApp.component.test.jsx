@@ -3,17 +3,17 @@
 // same way ReceiptArchive's does.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { ReceivingApp } from "./App";
-import { RECEIVING_QUEUE_KEY } from "./lib/receiving";
+import { ReceivingApp } from "./ReceivingApp";
+import { RECEIVING_QUEUE_KEY } from "../lib/receiving";
 
-vi.mock("./lib/api", () => ({
+vi.mock("../lib/api", () => ({
   JOBS_KEY: "warehub-jobs",
   CATALOG_KEY: "warehub-catalog",
   getWithRetry: vi.fn(),
   saveWithRetry: vi.fn().mockResolvedValue({ ok: true, updatedAt: new Date().toISOString() }),
 }));
 
-import { getWithRetry } from "./lib/api";
+import { getWithRetry } from "../lib/api";
 
 const pendingBatch = {
   id: 1,

@@ -7,7 +7,7 @@
 // a future refactor reintroducing either would be caught here.
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { ReceivingBatchReview } from "./App";
+import { ReceivingBatchReview } from "./ReceivingApp";
 
 const batch = {
   id: 1,
