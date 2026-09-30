@@ -9324,6 +9324,10 @@ function MergeItemModal({ item, items, onConfirm, onClose }) {
   const [search, setSearch] = useState("");
   if (!item) return null;
   const sourceHave = totalHave(item.containers);
+  // An item that came in entirely backordered (0 on hand) still has
+  // something worth merging over — the backorder note itself — even
+  // though there's no physical quantity to move. See mergeJobItems.
+  const hasBackorderToCarry = (item.backorderQty || 0) > 0;
   const q = search.trim().toLowerCase();
   const candidates = items.filter((i) => i.id !== item.id && (!q || i.name.toLowerCase().includes(q)));
 
@@ -9338,8 +9342,9 @@ function MergeItemModal({ item, items, onConfirm, onClose }) {
         </div>
         <div className="px-5 pt-4 shrink-0">
           <p className="text-xs text-slate-500 mb-3">
-            Has {sourceHave} on hand. Whatever's needed to fill the target moves over — anything
-            left stays here.
+            Has {sourceHave} on hand{hasBackorderToCarry ? ` and ${item.backorderQty} on backorder` : ""}.
+            Whatever's needed to fill the target moves over — anything left stays here
+            {hasBackorderToCarry ? ", and the backorder note carries over too" : ""}.
           </p>
           <input
             autoFocus
@@ -9364,11 +9369,15 @@ function MergeItemModal({ item, items, onConfirm, onClose }) {
               const willMoveInTargetUnits = Math.min(sourceHaveInTargetUnits, remaining);
               const willMoveInSourceUnits = convertQtyForUnit(willMoveInTargetUnits, c.qtyUnit, item.qtyUnit);
               const unitsDiffer = (item.qtyUnit || "each") !== (c.qtyUnit || "each");
+              // A pure backorder-carry merge moves no physical quantity, so
+              // it's never "blocked" by the target already being full —
+              // there's nothing to overfill it with in the first place.
+              const canMerge = willMoveInTargetUnits > 0 || hasBackorderToCarry;
               return (
                 <button
                   key={c.id}
                   onClick={() => onConfirm(c.id)}
-                  disabled={willMoveInTargetUnits <= 0}
+                  disabled={!canMerge}
                   className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-800 hover:border-slate-700 mb-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <p className="text-slate-100">{c.name}</p>
@@ -9378,6 +9387,8 @@ function MergeItemModal({ item, items, onConfirm, onClose }) {
                       ? ` — will take ${willMoveInTargetUnits}${unitsDiffer ? ` ${c.qtyUnit || "each"}` : ""}, leaving ${
                           sourceHave - willMoveInSourceUnits
                         } here`
+                      : hasBackorderToCarry
+                      ? " — nothing to move, but will carry the backorder note over"
                       : " — already full, nothing to move"}
                   </p>
                 </button>
@@ -15963,6 +15974,10 @@ function MergeLoveListItemModal({ item, items, onConfirm, onClose }) {
   const [search, setSearch] = useState("");
   if (!item) return null;
   const sourceHave = item.qtyHave || 0;
+  // An item that came in entirely backordered (0 on hand) still has
+  // something worth merging over — the backorder note itself — even
+  // though there's no physical quantity to move. See mergeLoveListItems.
+  const hasBackorderToCarry = (item.backorderQty || 0) > 0;
   const q = search.trim().toLowerCase();
   const candidates = items.filter((i) => i.id !== item.id && (!q || i.name.toLowerCase().includes(q)));
 
@@ -15977,8 +15992,9 @@ function MergeLoveListItemModal({ item, items, onConfirm, onClose }) {
         </div>
         <div className="px-5 pt-4 shrink-0">
           <p className="text-xs text-slate-500 mb-3">
-            Has {sourceHave} on hand. Whatever's needed to fill the target moves over — anything
-            left stays here.
+            Has {sourceHave} on hand{hasBackorderToCarry ? ` and ${item.backorderQty} on backorder` : ""}.
+            Whatever's needed to fill the target moves over — anything left stays here
+            {hasBackorderToCarry ? ", and the backorder note carries over too" : ""}.
           </p>
           <input
             autoFocus
@@ -16000,11 +16016,15 @@ function MergeLoveListItemModal({ item, items, onConfirm, onClose }) {
               const willMoveInTargetUnits = Math.min(sourceHaveInTargetUnits, remaining);
               const willMoveInSourceUnits = convertQtyForUnit(willMoveInTargetUnits, c.qtyUnit, item.qtyUnit);
               const unitsDiffer = (item.qtyUnit || "each") !== (c.qtyUnit || "each");
+              // Same as the Job List version — a pure backorder-carry merge
+              // moves no physical quantity, so the target being full
+              // already doesn't block it.
+              const canMerge = willMoveInTargetUnits > 0 || hasBackorderToCarry;
               return (
                 <button
                   key={c.id}
                   onClick={() => onConfirm(c.id)}
-                  disabled={willMoveInTargetUnits <= 0}
+                  disabled={!canMerge}
                   className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-800 hover:border-slate-700 mb-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <p className="text-slate-100">{c.name}</p>
@@ -16014,6 +16034,8 @@ function MergeLoveListItemModal({ item, items, onConfirm, onClose }) {
                       ? ` — will take ${willMoveInTargetUnits}${unitsDiffer ? ` ${c.qtyUnit || "each"}` : ""}, leaving ${
                           sourceHave - willMoveInSourceUnits
                         } here`
+                      : hasBackorderToCarry
+                      ? " — nothing to move, but will carry the backorder note over"
                       : " — already full, nothing to move"}
                   </p>
                 </button>
