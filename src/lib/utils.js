@@ -464,6 +464,17 @@ export function normalizeText(str) {
   return cleaned.split(" ").map(singularize).join(" ");
 }
 
+// Folds a comment (e.g. a suggestion's "note to the owner" field) into an
+// item's own persistent notes, appended rather than overwritten — used by
+// Job Lists' suggestion-approval flow so a note left when suggesting a
+// change actually ends up on the item, not just in an activity log.
+export function combineNotes(existingNotes, addition) {
+  const existing = (existingNotes || "").trim();
+  const added = (addition || "").trim();
+  if (!added) return existing;
+  return existing ? `${existing}\n${added}` : added;
+}
+
 export function tokenSet(str) {
   return new Set(normalizeText(str).split(" ").filter(Boolean));
 }

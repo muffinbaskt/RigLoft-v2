@@ -84,6 +84,7 @@ import {
   singularize,
   normalizeReceived,
   normalizeText,
+  combineNotes,
   tokenSet,
   findCatalogMatch,
   getEffectiveCatalogMatch,
@@ -8613,6 +8614,7 @@ function SectionHeader({
   maxWidthClass = "max-w-5xl",
   current,
   onQuickNav,
+  quickNavIsOwner = false,
   locked = false,
   children,
   extra,
@@ -8654,7 +8656,9 @@ function SectionHeader({
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end shrink-0">
           {children}
-          {!locked && onQuickNav && <QuickNavMenu current={current} onNavigate={onQuickNav} />}
+          {!locked && onQuickNav && (
+            <QuickNavMenu current={current} onNavigate={onQuickNav} isOwner={quickNavIsOwner} />
+          )}
         </div>
       </div>
       {/* Extra rows (search bars, filters, inline messages) that need to
@@ -8673,12 +8677,16 @@ function SectionHeader({
 const QUICK_NAV_DESTINATIONS = [
   { key: "jobs", label: "Job Lists", icon: Briefcase },
   { key: "love", label: "Love Lists", icon: Heart },
-  { key: "receiving", label: "Receiving", icon: Inbox },
-  { key: "archive", label: "Receipt Archive", icon: BookOpen },
+  { key: "receiving", label: "Receiving", icon: Inbox, ownerOnly: true },
+  { key: "archive", label: "Receipt Archive", icon: BookOpen, ownerOnly: true },
 ];
 
-function QuickNavMenu({ current, onNavigate }) {
+function QuickNavMenu({ current, onNavigate, isOwner = false }) {
   const [open, setOpen] = useState(false);
+  // Receiving and Receipt Archive are owner-only screens (no view-only
+  // mode of their own) — a manager would just get bounced to an "Owner
+  // only" screen, so those two don't even show up as options for them.
+  const destinations = QUICK_NAV_DESTINATIONS.filter((d) => !d.ownerOnly || isOwner);
   return (
     <div className="relative">
       <button
@@ -8692,7 +8700,7 @@ function QuickNavMenu({ current, onNavigate }) {
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
           <div className="absolute right-0 top-full mt-2 w-48 bg-slate-800 border border-slate-700 rounded-md shadow-lg z-40 overflow-hidden">
-            {QUICK_NAV_DESTINATIONS.map((d) => {
+            {destinations.map((d) => {
               const isCurrent = d.key === current;
               return (
                 <button
@@ -8997,7 +9005,7 @@ function JobPicker({
                 <span className="hidden sm:inline">New job</span>
               </button>
             )}
-            {onQuickNav && <QuickNavMenu current="jobs" onNavigate={onQuickNav} />}
+            {onQuickNav && <QuickNavMenu current="jobs" onNavigate={onQuickNav} isOwner={isEditor} />}
           </div>
         </div>
       </header>
@@ -11063,7 +11071,9 @@ function JobInventory({
             >
               <MoreVertical className="w-4 h-4" />
             </button>
-            {!locked && onQuickNav && <QuickNavMenu current="jobs" onNavigate={onQuickNav} />}
+            {!locked && onQuickNav && (
+              <QuickNavMenu current="jobs" onNavigate={onQuickNav} isOwner={rawIsEditor} />
+            )}
             {menuOpen && (
               <div className="absolute right-0 top-full mt-2 w-52 bg-slate-800 border border-slate-700 rounded-md shadow-lg z-40 overflow-hidden">
                   {isEditor && (
@@ -13375,19 +13385,6 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, initialAction, isEditor]);
 
-  // The note box on the suggestion form reads as "leave a note on this
-  // item" but it's actually just a message to whoever reviews it — it
-  // only ever landed in the activity log, never on the item itself, which
-  // is exactly the gap the owner ran into ("I just approved a note to an
-  // item but it doesn't appear on the item"). Folding it into the item's
-  // own notes field on approval is what actually closes that gap, without
-  // discarding whatever the item's notes field already said.
-  const combineNotes = (existingNotes, suggestionNote) => {
-    const existing = (existingNotes || "").trim();
-    const addition = (suggestionNote || "").trim();
-    if (!addition) return existing;
-    return existing ? `${existing}\n${addition}` : addition;
-  };
 
   const approveSuggestion = async (s) => {
     const job = jobs.find((j) => String(j.id) === String(s.job_id));
@@ -16929,6 +16926,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
         maxWidthClass="max-w-2xl"
         current="love"
         onQuickNav={onQuickNav}
+        quickNavIsOwner={isOwner}
         titleSlot={
           <div className="min-w-0">
             {isEditor ? (
@@ -18238,7 +18236,7 @@ function StaleThresholdsModal({ thresholds, onSave, onClose }) {
   );
 }
 
-function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onSaveThresholds, onOpenList, onAddList, onScanList, onOpenWorkerTasks, onOpenTaskList, taskListCount = 0, onBulkArchiveLists, onRestoreBackup, restoreError, restoreSuccessCount, onGoHome, onQuickNav }) {
+function LoveListsDashboard({ lists, isEditor, isOwner, staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onSaveThresholds, onOpenList, onAddList, onScanList, onOpenWorkerTasks, onOpenTaskList, taskListCount = 0, onBulkArchiveLists, onRestoreBackup, restoreError, restoreSuccessCount, onGoHome, onQuickNav }) {
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("active"); // "active" | "ready"
   const [showThresholdSettings, setShowThresholdSettings] = useState(false);
@@ -18322,6 +18320,7 @@ function LoveListsDashboard({ lists, isEditor, staleThresholds = DEFAULT_STALE_T
         maxWidthClass="max-w-2xl"
         current="love"
         onQuickNav={onQuickNav}
+        quickNavIsOwner={isOwner}
         extra={
           <>
             {restoreError && (
@@ -21398,6 +21397,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDee
       <LoveListsDashboard
         lists={lists}
         isEditor={isEditor}
+        isOwner={isOwner}
         staleThresholds={staleThresholds}
         onSaveThresholds={saveStaleThresholds}
         onOpenList={(l) => setActiveListId(l.id)}
@@ -23058,7 +23058,7 @@ function PrintableReceiptsModal({ entries, onClose }) {
   );
 }
 
-function ReceiptArchive({ onGoHome, onQuickNav }) {
+function ReceiptArchive({ onGoHome, onQuickNav, isOwner }) {
   const [entries, setEntries] = useState([]);
   const [catalog, setCatalog] = useState([]);
   const [nameMemory, setNameMemory] = useState({});
@@ -23137,9 +23137,16 @@ function ReceiptArchive({ onGoHome, onQuickNav }) {
   };
 
   useEffect(() => {
+    // Same reasoning as Receiving: no view-only mode here at all, so the
+    // real gate has to live in this component, not just at the landing
+    // screen's tile (which only hides a button) — this screen is also
+    // reachable via a manager's own login, the quick-nav menu, or a
+    // crafted ?section=archive&id=... link. Skipping the load itself
+    // means a blocked visitor's browser never fetches the archive.
+    if (!isOwner) return;
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isOwner]);
 
   const saveEntries = (next) => {
     if (loadFailedRef.current) return;
@@ -23595,6 +23602,26 @@ function ReceiptArchive({ onGoHome, onQuickNav }) {
     setCatalogSearch("");
   };
 
+  if (!isOwner) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center px-4">
+        <div className="max-w-sm text-center">
+          <div className="w-12 h-12 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center mx-auto mb-4">
+            <Lock className="w-5 h-5 text-slate-400" />
+          </div>
+          <h2 className="font-semibold text-slate-100 mb-2">Owner only</h2>
+          <p className="text-sm text-slate-500 mb-5">Receipt Archive isn't available on this account.</p>
+          <button
+            onClick={onGoHome}
+            className="inline-flex items-center gap-1.5 bg-slate-800 border border-slate-700 text-slate-200 text-sm font-semibold rounded-md px-4 py-2 hover:bg-slate-700"
+          >
+            Back to home
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (loading) {
     if (loadFailed) {
     return (
@@ -23669,6 +23696,7 @@ function ReceiptArchive({ onGoHome, onQuickNav }) {
         maxWidthClass="max-w-2xl"
         current="archive"
         onQuickNav={onQuickNav}
+        quickNavIsOwner={isOwner}
       >
         <button
           onClick={() => fileInputRef.current?.click()}
@@ -25612,7 +25640,7 @@ function ToolDetailPage({ tool, allTools = [], onUpdate, onMerge, onDelete, onBa
   );
 }
 
-function ReceivingApp({ onGoHome, onQuickNav }) {
+function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
   const [queue, setQueue] = useState([]);
   // Kept in sync on every single write, synchronously — this is what a
   // long bulk scan reads from before merging in each new receipt. Using
@@ -25679,8 +25707,20 @@ function ReceivingApp({ onGoHome, onQuickNav }) {
   };
 
   useEffect(() => {
+    // Receiving's tied to money (vendor spend) and has no view-only mode
+    // of its own — unlike Love Lists/Job Lists, anyone who reaches this
+    // component at all sees and can edit everything. The landing screen
+    // already hides its tile from anyone but the owner, but that's just a
+    // hidden button — this screen is also reachable directly (a manager's
+    // own login, the quick-nav menu, or even a crafted
+    // ?section=receiving&id=... link), so the real gate has to live here,
+    // not just at the one obvious door. Skipping the load itself (not
+    // just hiding the render below) means a blocked visitor's browser
+    // never even fetches the receiving queue.
+    if (!isOwner) return;
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOwner]);
 
   // Same fix as PullFromReceivingModal's saveQueue: local state updates
   // immediately, but the actual write to Supabase is debounced instead of
@@ -26227,6 +26267,26 @@ function ReceivingApp({ onGoHome, onQuickNav }) {
     if (!stillPending) setActiveBatchId(null);
   };
 
+  if (!isOwner) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center px-4">
+        <div className="max-w-sm text-center">
+          <div className="w-12 h-12 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center mx-auto mb-4">
+            <Lock className="w-5 h-5 text-slate-400" />
+          </div>
+          <h2 className="font-semibold text-slate-100 mb-2">Owner only</h2>
+          <p className="text-sm text-slate-500 mb-5">Receiving isn't available on this account.</p>
+          <button
+            onClick={onGoHome}
+            className="inline-flex items-center gap-1.5 bg-slate-800 border border-slate-700 text-slate-200 text-sm font-semibold rounded-md px-4 py-2 hover:bg-slate-700"
+          >
+            Back to home
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -26409,6 +26469,7 @@ function ReceivingApp({ onGoHome, onQuickNav }) {
         maxWidthClass="max-w-2xl"
         current="receiving"
         onQuickNav={onQuickNav}
+        quickNavIsOwner={isOwner}
       >
         <button
           onClick={() => fileInputRef.current?.click()}
@@ -26852,6 +26913,7 @@ function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches
         maxWidthClass="max-w-2xl"
         current="receiving"
         onQuickNav={onQuickNav}
+        quickNavIsOwner // only ever reached once ReceivingApp has already confirmed the owner
       >
         <button
           onClick={() => setConfirmingDiscard(true)}
@@ -27571,14 +27633,16 @@ export default function AuthGate() {
       ) : appSection === "receiving" ? (
         <ReceivingApp
           onGoHome={goToLanding}
-          onQuickNav={isOwner || isManager ? navigateToSection : undefined}
+          onQuickNav={isOwner ? navigateToSection : undefined}
+          isOwner={isOwner}
         />
       ) : appSection === "backorders" ? (
         <BackorderDashboard onGoHome={goToLanding} />
       ) : appSection === "archive" ? (
         <ReceiptArchive
           onGoHome={goToLanding}
-          onQuickNav={isOwner || isManager ? navigateToSection : undefined}
+          onQuickNav={isOwner ? navigateToSection : undefined}
+          isOwner={isOwner}
         />
       ) : appSection === "tools" ? (
         <ToolsApp onGoHome={goToLanding} />
