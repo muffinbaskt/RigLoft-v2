@@ -568,7 +568,13 @@ export function parseSmeItemSerialCsv(csvText) {
       serial: (row[colIndex.serial] || "").trim(),
       nameGuess: (row[colIndex.item] || "").trim(),
     }))
-    .filter((r) => r.sme && r.serial); // exact columns are known here, so just require both aren't blank
+    // Only the SME# is actually required — attachSerialNumbers already
+    // handles a blank serial fine (it just creates/updates the tool
+    // without one). Requiring serial too used to silently reject an
+    // entire file that's legitimately just registering SME#s with no
+    // serial recorded yet (a fresh tool tagging sheet, say), producing
+    // "no rows found" instead of importing anything.
+    .filter((r) => r.sme);
 }
 
 
@@ -631,7 +637,8 @@ export function parseSmeItemSerialTable(rows) {
     const sme = (colTexts.sme || []).join(" ").trim();
     const serial = (colTexts.serial || []).join(" ").trim();
     const nameGuess = (colTexts.item || []).join(" ").trim();
-    if (!sme || !serial) return; // an exact column is known here, so just require it isn't blank
+    // Same fix as the CSV path above — only the SME# is actually required.
+    if (!sme) return;
     results.push({ sme, serial, nameGuess });
   });
   return results;

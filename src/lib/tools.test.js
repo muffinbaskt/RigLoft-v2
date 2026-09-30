@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { attachSerialNumbers, newTool } from "./tools";
+import { attachSerialNumbers, newTool, parseSmeItemSerialCsv } from "./tools";
 
 describe("attachSerialNumbers", () => {
   it("matches an unrecognized SME# to an awaiting_sme tool by name instead of creating a new one", () => {
@@ -55,5 +55,33 @@ describe("attachSerialNumbers", () => {
     const tools = [];
     const result = attachSerialNumbers(tools, [{ sme: "", serial: "SN-X", name: "Whatever" }]);
     expect(result.length).toBe(0);
+  });
+});
+
+describe("parseSmeItemSerialCsv", () => {
+  // Regression test for a real file: a tool-tagging sheet that has SME#s
+  // and names assigned but no serial numbers recorded yet at all. Used to
+  // produce zero rows (silently rejected by a filter requiring both sme
+  // AND serial to be non-blank), so the whole file failed to import.
+  it("still imports rows whose Serial column is entirely blank", () => {
+    const csv = ["SME,Item,Category,Serial", "22640,Air Manifold,Air Manifolds,", "22641,Air Manifold,Air Manifolds,"].join(
+      "\n"
+    );
+    const rows = parseSmeItemSerialCsv(csv);
+    expect(rows).toEqual([
+      { sme: "22640", serial: "", nameGuess: "Air Manifold" },
+      { sme: "22641", serial: "", nameGuess: "Air Manifold" },
+    ]);
+  });
+
+  it("still requires an SME# — a row missing that is dropped", () => {
+    const csv = ["SME,Item,Category,Serial", ",Air Manifold,Air Manifolds,"].join("\n");
+    expect(parseSmeItemSerialCsv(csv)).toEqual([]);
+  });
+
+  it("handles a quoted item name containing its own comma", () => {
+    const csv = ['SME,Item,Category,Serial', '22661,"Ram, 4""",Porta Power Ram,'].join("\n");
+    const rows = parseSmeItemSerialCsv(csv);
+    expect(rows).toEqual([{ sme: "22661", serial: "", nameGuess: 'Ram, 4"' }]);
   });
 });
