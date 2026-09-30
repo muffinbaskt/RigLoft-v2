@@ -540,8 +540,22 @@ export function SectionHeader({
 export const QUICK_NAV_DESTINATIONS = [
   { key: "jobs", label: "Job Lists", icon: Briefcase },
   { key: "love", label: "Love Lists", icon: Heart },
-  { key: "receiving", label: "Receiving", icon: Inbox, ownerOnly: true },
-  { key: "archive", label: "Receipt Archive", icon: BookOpen, ownerOnly: true },
+  {
+    key: "receiving",
+    label: "Receiving",
+    icon: Inbox,
+    ownerOnly: true,
+    // Lazy-loaded screen — start its chunk downloading on hover/touch-start
+    // instead of waiting for the click, same as the landing-screen tiles.
+    preload: () => import("../screens/ReceivingApp"),
+  },
+  {
+    key: "archive",
+    label: "Receipt Archive",
+    icon: BookOpen,
+    ownerOnly: true,
+    preload: () => import("../screens/ReceiptArchive"),
+  },
 ];
 
 export function QuickNavMenu({ current, onNavigate, isOwner = false }) {
@@ -572,6 +586,8 @@ export function QuickNavMenu({ current, onNavigate, isOwner = false }) {
                     setOpen(false);
                     if (!isCurrent) onNavigate(d.key);
                   }}
+                  onMouseEnter={d.preload}
+                  onTouchStart={d.preload}
                   disabled={isCurrent}
                   className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm text-left ${
                     isCurrent ? "text-slate-600 cursor-default" : "text-slate-200 hover:bg-slate-700"

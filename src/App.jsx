@@ -129,6 +129,16 @@ const ToolsApp = lazy(() => import("./screens/ToolsApp").then((m) => ({ default:
 const ReceivingApp = lazy(() =>
   import("./screens/ReceivingApp").then((m) => ({ default: m.ReceivingApp }))
 );
+
+// Predictive preloading: calling the same dynamic import() ahead of time
+// (e.g. on hover/touch-start, before the actual click) lets the browser's
+// module cache satisfy React.lazy's own import() for free once it fires -
+// so by the time someone finishes clicking a tile, the chunk's often
+// already there instead of showing the loading spinner.
+const preloadBackorderDashboard = () => import("./screens/BackorderDashboard");
+const preloadReceiptArchive = () => import("./screens/ReceiptArchive");
+const preloadToolsApp = () => import("./screens/ToolsApp");
+const preloadReceivingApp = () => import("./screens/ReceivingApp");
 import {
   RECEIVING_QUEUE_KEY,
   RECEIPT_ARCHIVE_KEY,
@@ -14685,6 +14695,8 @@ function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onS
             <div className="sm:col-span-2 flex justify-center">
               <button
                 onClick={onSelectReceiving}
+                onMouseEnter={preloadReceivingApp}
+                onTouchStart={preloadReceivingApp}
                 className="w-full sm:w-1/2 bg-slate-900 border-2 border-slate-800 hover:border-sky-500/60 hover:bg-sky-500/5 rounded-xl p-8 text-center transition-colors"
               >
                 <Inbox className="w-9 h-9 text-sky-400 mx-auto mb-3" />
@@ -14704,6 +14716,8 @@ function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onS
         {isEditor && (
           <button
             onClick={onSelectBackorders}
+            onMouseEnter={preloadBackorderDashboard}
+            onTouchStart={preloadBackorderDashboard}
             className="w-full mt-3 flex items-center justify-center gap-2 bg-slate-900 border-2 border-slate-800 hover:border-slate-600 rounded-xl p-4 text-center transition-colors"
           >
             <AlertTriangle className="w-5 h-5 text-slate-400" />
@@ -14713,6 +14727,8 @@ function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onS
         {isEditor && (
           <button
             onClick={onSelectArchive}
+            onMouseEnter={preloadReceiptArchive}
+            onTouchStart={preloadReceiptArchive}
             className="w-full mt-3 flex items-center justify-center gap-2 bg-slate-900 border-2 border-slate-800 hover:border-slate-600 rounded-xl p-4 text-center transition-colors"
           >
             <BookOpen className="w-5 h-5 text-slate-400" />
@@ -14722,6 +14738,8 @@ function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onS
         {isEditor && (
           <button
             onClick={onSelectTools}
+            onMouseEnter={preloadToolsApp}
+            onTouchStart={preloadToolsApp}
             className="relative w-full mt-3 flex items-center justify-center gap-2 bg-slate-900 border-2 border-slate-800 hover:border-slate-600 rounded-xl p-4 text-center transition-colors"
           >
             {toolsAlertCount > 0 && (
