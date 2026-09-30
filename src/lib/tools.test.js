@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { attachSerialNumbers, awaitingSmeNamesMatch, newTool, parseSmeItemSerialCsv } from "./tools";
+import {
+  attachSerialNumbers,
+  awaitingSmeNamesMatch,
+  learnToolNameAlias,
+  newTool,
+  parseSmeItemSerialCsv,
+  resolveToolNameAlias,
+} from "./tools";
 
 describe("attachSerialNumbers", () => {
   it("matches an unrecognized SME# to an awaiting_sme tool by name instead of creating a new one", () => {
@@ -87,6 +94,62 @@ describe("attachSerialNumbers", () => {
     const newAirManifold = result.find((t) => t.name === "Air Manifold");
     expect(newAirManifold).toBeTruthy();
     expect(newAirManifold.sme).toBe("1004");
+  });
+
+  it("uses a learned alias to bridge a genuine synonym automatically", () => {
+    const tools = [{ ...newTool({ name: "Air Pig", status: "awaiting_sme" }), id: "airpig" }];
+    const rows = [{ sme: "2001", serial: "", nameGuess: "Air Manifold" }];
+    const nameAliases = { "air manifold": "Air Pig" };
+
+    const result = attachSerialNumbers(tools, rows, nameAliases);
+
+    expect(result.length).toBe(1);
+    expect(result[0].id).toBe("airpig");
+    expect(result[0].sme).toBe("2001");
+  });
+
+  it("a manual row.linkedName wins even without a saved alias yet", () => {
+    const tools = [{ ...newTool({ name: "Air Pig", status: "awaiting_sme" }), id: "airpig" }];
+    const rows = [{ sme: "2001", serial: "", nameGuess: "Air Manifold", linkedName: "Air Pig" }];
+
+    const result = attachSerialNumbers(tools, rows);
+
+    expect(result.length).toBe(1);
+    expect(result[0].id).toBe("airpig");
+    expect(result[0].sme).toBe("2001");
+  });
+});
+
+describe("resolveToolNameAlias", () => {
+  it("returns the taught canonical name when one exists", () => {
+    const aliases = { "air manifold": "Air Pig" };
+    expect(resolveToolNameAlias(aliases, "Air Manifold")).toBe("Air Pig");
+  });
+
+  it("falls back to the raw name unchanged when nothing's taught", () => {
+    expect(resolveToolNameAlias({}, "Die Grinder")).toBe("Die Grinder");
+  });
+
+  it("matches regardless of the raw name's exact casing/punctuation", () => {
+    const aliases = { "air manifold": "Air Pig" };
+    expect(resolveToolNameAlias(aliases, "  AIR   MANIFOLD  ")).toBe("Air Pig");
+  });
+});
+
+describe("learnToolNameAlias", () => {
+  it("adds a new alias", () => {
+    const result = learnToolNameAlias({}, "Air Manifold", "Air Pig");
+    expect(result).toEqual({ "air manifold": "Air Pig" });
+  });
+
+  it("returns the same reference when there's nothing new to learn", () => {
+    const aliases = { "air manifold": "Air Pig" };
+    expect(learnToolNameAlias(aliases, "Air Manifold", "Air Pig")).toBe(aliases);
+  });
+
+  it("doesn't learn a no-op alias (raw name already matches the canonical one)", () => {
+    const aliases = {};
+    expect(learnToolNameAlias(aliases, "Die Grinder", "Die Grinder")).toBe(aliases);
   });
 });
 

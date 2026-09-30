@@ -18,6 +18,7 @@ import {
 import { CATALOG_KEY, JOBS_KEY, deleteReferenceDocument, extractPdfRows, getWithRetry, saveWithRetry, uploadReferenceDocument } from "../lib/api";
 import {
   TOOLS_KEY,
+  TOOL_NAME_ALIASES_KEY,
   TOOL_STATUSES,
   applyToolMerge,
   applyToolsBackfill,
@@ -25,15 +26,17 @@ import {
   awaitingSmeNamesMatch,
   findBackfillCandidates,
   isToolCandidate,
+  learnToolNameAlias,
   logToolEvent,
   parseSmeItemSerialCsv,
   parseSmeItemSerialTable,
   parseSmeSerialLines,
+  resolveToolNameAlias,
   toolStatusLabel,
 } from "../lib/tools";
 import { uniqueId } from "../lib/utils";
 import { formatTaskTimestamp } from "../lib/workertasks";
-import { AddToolModal, ConfirmDelete, ZoomableImage } from "../components/shared";
+import { AddToolModal, ConfirmDelete, SimpleListPickerModal, ZoomableImage } from "../components/shared";
 
 // Tools registry, phase 1: a permanent record per physical tool (keyed
 // by SME#), separate from any one job's item list, so "have I seen this
@@ -569,7 +572,22 @@ function ImportSerialNumbersModal({ tools, onSave, onClose }) {
   const [step, setStep] = useState("upload"); // "upload" | "processing" | "review" | "error"
   const [error, setError] = useState("");
   const [rows, setRows] = useState([]);
+  const [nameAliases, setNameAliases] = useState({});
+  const [linkingRowId, setLinkingRowId] = useState(null);
   const fileInputRef = useRef(null);
+
+  // Loaded once per open — taught pairings (Air Pig = Air Manifold, say)
+  // persist across sessions/devices the same way Receiving's own name
+  // memory does.
+  useEffect(() => {
+    getWithRetry(TOOL_NAME_ALIASES_KEY).then((result) => {
+      if (result.ok && result.value) {
+        try {
+          setNameAliases(JSON.parse(result.value));
+        } catch {}
+      }
+    });
+  }, []);
 
   const handleFilesChosen = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -621,25 +639,35 @@ function ImportSerialNumbersModal({ tools, onSave, onClose }) {
   // awaiting-SME# tool by name — so this screen doesn't tell someone "will
   // create" for a row that's really about to fill in the receiving record
   // they already have sitting there.
+  // Names currently sitting in the registry with no SME# yet — what the
+  // "link to an existing name instead" picker offers. Deduped since many
+  // physical tools (several ladders, several Air Pigs) share one name.
+  const distinctAwaitingNames = [
+    ...new Set(tools.filter((t) => t.status === "awaiting_sme" && !t.sme).map((t) => t.name).filter(Boolean)),
+  ].sort();
+
   const rowPreviews = (() => {
     const claimed = new Set();
     return rows.map((row) => {
       const sme = (row.sme || "").trim();
       const existing = tools.find((t) => t.sme === sme);
       if (existing) return { row, kind: "existing", match: existing };
-      const rowName = (row.name || row.nameGuess || "").trim();
-      const awaitingMatch = rowName
+      const rawRowName = (row.name || row.nameGuess || "").trim();
+      // A manual link (picked in this same review) wins over a previously
+      // learned alias, which wins over the raw text as-is.
+      const effectiveName = (row.linkedName || resolveToolNameAlias(nameAliases, rawRowName) || rawRowName).trim();
+      const awaitingMatch = effectiveName
         ? tools.find(
             (t) =>
               t.status === "awaiting_sme" &&
               !t.sme &&
               !claimed.has(t.id) &&
-              awaitingSmeNamesMatch(t.name || "", rowName)
+              awaitingSmeNamesMatch(t.name || "", effectiveName)
           )
         : null;
       if (awaitingMatch) {
         claimed.add(awaitingMatch.id);
-        return { row, kind: "awaiting_match", match: awaitingMatch };
+        return { row, kind: row.linkedName ? "manual_link" : "awaiting_match", match: awaitingMatch };
       }
       return { row, kind: "new" };
     });
@@ -647,7 +675,18 @@ function ImportSerialNumbersModal({ tools, onSave, onClose }) {
   const newCount = rowPreviews.filter((p) => p.kind === "new").length;
 
   const handleConfirm = () => {
-    const updated = attachSerialNumbers(tools, rows);
+    const updated = attachSerialNumbers(tools, rows, nameAliases);
+    // Remember every manual link taught just now, so the same wording
+    // auto-matches next time without needing to link it again.
+    let nextAliases = nameAliases;
+    rows.forEach((row) => {
+      if (!row.linkedName) return;
+      const rawRowName = (row.name || row.nameGuess || "").trim();
+      nextAliases = learnToolNameAlias(nextAliases, rawRowName, row.linkedName);
+    });
+    if (nextAliases !== nameAliases) {
+      saveWithRetry(TOOL_NAME_ALIASES_KEY, JSON.stringify(nextAliases)).catch(() => {});
+    }
     onSave(updated);
   };
 
@@ -752,14 +791,36 @@ function ImportSerialNumbersModal({ tools, onSave, onClose }) {
                           <p className="text-[11px] text-emerald-400">
                             🔗 Matched by name to "{match.name}" — Awaiting SME# (from receiving)
                           </p>
+                        ) : kind === "manual_link" ? (
+                          <div className="flex items-center justify-between gap-1.5">
+                            <p className="text-[11px] text-emerald-400">
+                              🔗 Linked to "{match.name}" — remembered for next time
+                            </p>
+                            <button
+                              onClick={() => updateRow(row.id, { linkedName: undefined })}
+                              className="text-[11px] text-slate-500 hover:text-slate-300 underline underline-offset-2 shrink-0"
+                            >
+                              Undo
+                            </button>
+                          </div>
                         ) : (
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-[11px] text-amber-400 shrink-0">No existing tool — will create:</span>
-                            <input
-                              value={row.nameGuess}
-                              onChange={(e) => updateRow(row.id, { nameGuess: e.target.value })}
-                              className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-200 text-[11px] rounded-md px-1.5 py-0.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-                            />
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[11px] text-amber-400 shrink-0">No existing tool — will create:</span>
+                              <input
+                                value={row.nameGuess}
+                                onChange={(e) => updateRow(row.id, { nameGuess: e.target.value })}
+                                className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-200 text-[11px] rounded-md px-1.5 py-0.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                              />
+                            </div>
+                            {distinctAwaitingNames.length > 0 && (
+                              <button
+                                onClick={() => setLinkingRowId(row.id)}
+                                className="text-[11px] text-sky-400 hover:text-sky-300 underline underline-offset-2"
+                              >
+                                Actually, this is the same tool as an existing name...
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -780,6 +841,17 @@ function ImportSerialNumbersModal({ tools, onSave, onClose }) {
           </>
         )}
       </div>
+      {linkingRowId && (
+        <SimpleListPickerModal
+          title="Which existing name is this really?"
+          options={distinctAwaitingNames}
+          onPick={(name) => {
+            updateRow(linkingRowId, { linkedName: name });
+            setLinkingRowId(null);
+          }}
+          onClose={() => setLinkingRowId(null)}
+        />
+      )}
     </div>
   );
 }

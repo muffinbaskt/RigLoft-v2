@@ -42,6 +42,34 @@ export function awaitingSmeNamesMatch(toolName, rowName) {
 
 export const TOOLS_KEY = "warehub-tools";
 
+// A genuine synonym (Air Pig / Air Manifold — same physical thing, no
+// shared words) can never be bridged automatically by awaitingSmeNamesMatch
+// above, no matter how loose the wording rules get. This is the taught
+// fallback: once someone manually links an imported name to an existing
+// awaiting-SME# tool's name, that pairing is remembered here (flat map of
+// normalizedRawName -> canonicalName) and applied automatically before
+// matching on every import after that, the same way Receiving's own
+// per-line name memory works.
+export const TOOL_NAME_ALIASES_KEY = "warehub-tool-name-aliases";
+
+export function resolveToolNameAlias(nameAliases, rawName) {
+  const trimmed = (rawName || "").trim();
+  const key = normalizeText(trimmed);
+  return (key && nameAliases && nameAliases[key]) || trimmed;
+}
+
+// Returns the same object reference when there's nothing new to remember
+// (already learned, or the two names are actually the same once
+// normalized) so callers can tell whether a save is actually needed.
+export function learnToolNameAlias(nameAliases, rawName, canonicalName) {
+  const key = normalizeText(rawName || "");
+  const canonical = (canonicalName || "").trim();
+  if (!key || !canonical) return nameAliases;
+  if (normalizeText(canonical) === key) return nameAliases;
+  if (nameAliases && nameAliases[key] === canonical) return nameAliases;
+  return { ...(nameAliases || {}), [key]: canonical };
+}
+
 // The actual "does this look like a tool" heuristic — a catalog item
 // counts as a Tools candidate only if it's Transfer-tagged AND hasn't
 // been explicitly excluded. excludeFromTools is deliberately separate
@@ -687,7 +715,7 @@ export function parseSmeItemSerialTable(rows) {
 // field elsewhere in the app shouldn't be left permanently unregistrable
 // just because this happens to be the first time its number shows up
 // anywhere).
-export function attachSerialNumbers(currentTools, rows) {
+export function attachSerialNumbers(currentTools, rows, nameAliases = {}) {
   let tools = [...currentTools];
   // Tools received before their SME# is known sit here (added by name
   // only, from the receipt). Once claimed by a row below, a record is
@@ -707,14 +735,22 @@ export function attachSerialNumbers(currentTools, rows) {
       // leaving two records for the one physical tool: the real one from
       // receiving (with its receipt) and an orphaned new one from here
       // (with the number, but no receipt).
-      const rowName = (row.name || row.nameGuess || "").trim();
-      const awaitingIdx = rowName
+      //
+      // row.linkedName is a manual override — someone taught this specific
+      // wording onto an existing tool's name in the review screen, which
+      // takes priority even over a previously-learned alias (an explicit
+      // choice made right now beats a remembered guess). Otherwise, a
+      // learned alias resolves genuine synonyms (Air Pig / Air Manifold)
+      // that no amount of word-order/subset matching could ever bridge.
+      const rawRowName = (row.name || row.nameGuess || "").trim();
+      const matchName = (row.linkedName || resolveToolNameAlias(nameAliases, rawRowName) || rawRowName).trim();
+      const awaitingIdx = matchName
         ? tools.findIndex(
             (t) =>
               t.status === "awaiting_sme" &&
               !t.sme &&
               !claimedAwaitingIds.has(t.id) &&
-              awaitingSmeNamesMatch(t.name || "", rowName)
+              awaitingSmeNamesMatch(t.name || "", matchName)
           )
         : -1;
       if (awaitingIdx !== -1) {
@@ -727,8 +763,12 @@ export function attachSerialNumbers(currentTools, rows) {
         );
         return;
       }
+      // No match even after alias resolution — create a new tool, but
+      // still named after whatever it actually resolved to (matchName),
+      // so a taught/aliased name comes in consistent with the registry
+      // instead of a copy of whatever wording this particular file used.
       const tool = logToolEvent(
-        { ...newTool({ sme, name: row.name || row.nameGuess || "", status: "storage" }), serialNumber: row.serial || null },
+        { ...newTool({ sme, name: matchName || rawRowName, status: "storage" }), serialNumber: row.serial || null },
         "serial_attached",
         row.serial ? `Serial# ${row.serial} attached (new tool, imported)` : "Imported from file"
       );
