@@ -14213,6 +14213,7 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
             <div className="px-5 py-4 border-t border-slate-800 shrink-0">
               <button
                 onClick={async () => {
+                  setSyncing(true);
                   let finalJobs = mergeState.jobs;
                   let finalCatalog = mergeState.catalog;
 
@@ -14265,11 +14266,16 @@ function WareHub({ isEditor, isManager, managerName, onSignOut, onRequestLogin, 
                   clearOfflineQueue();
                   offlineSnapshotRef.current = null;
                   setOfflineQueued(false);
+                  setSyncing(false);
                   setMergeState(null);
                 }}
-                className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+                disabled={syncing}
+                className="w-full flex items-center justify-center gap-2 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-70 disabled:cursor-not-allowed"
               >
-                Apply and sync
+                {syncing && (
+                  <div className="w-3.5 h-3.5 border-2 border-slate-950/30 border-t-slate-950 rounded-full animate-spin" />
+                )}
+                {syncing ? "Saving..." : "Apply and sync"}
               </button>
               <p className="text-xs text-slate-600 mt-3">
                 Your full offline changes are also saved in the backup file that just
@@ -20720,6 +20726,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDee
   const listsRef = useRef([]);
   const loveEngineRef = useRef(null);
   const [loveMerge, setLoveMerge] = useState(null); // { lists, conflicts, theirsUpdatedAt, error? }
+  const [loveMergeSubmitting, setLoveMergeSubmitting] = useState(false);
   const [remoteNotice, setRemoteNotice] = useState(null);
   const remoteNoticeTimer = useRef(null);
 
@@ -20900,6 +20907,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDee
       },
       onPrompt: setLoveMerge,
       onNotice: showLoveNotice,
+      onSubmitting: setLoveMergeSubmitting,
     });
   }
 
@@ -21192,9 +21200,13 @@ function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDee
           {loveMerge.error && <p className="text-xs text-red-400 mb-2">{loveMerge.error}</p>}
           <button
             onClick={() => loveEngineRef.current.submitResolutions(loveMerge.conflicts)}
-            className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+            disabled={loveMergeSubmitting}
+            className="w-full flex items-center justify-center gap-2 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-70 disabled:cursor-not-allowed"
           >
-            Apply and sync
+            {loveMergeSubmitting && (
+              <div className="w-3.5 h-3.5 border-2 border-slate-950/30 border-t-slate-950 rounded-full animate-spin" />
+            )}
+            {loveMergeSubmitting ? "Saving..." : "Apply and sync"}
           </button>
         </div>
       </div>

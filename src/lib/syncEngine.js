@@ -27,6 +27,7 @@ export function createSyncEngine({
   setLocal, // (array) => void, stores it so getLocal returns the same reference
   onPrompt = () => {}, // (pending | null) => void
   onNotice = () => {}, // (message) => void
+  onSubmitting = () => {}, // (bool) => void — true while submitResolutions is in flight
   quietMs = 8000,
   now = () => Date.now(),
 }) {
@@ -132,6 +133,7 @@ export function createSyncEngine({
   async function submitResolutions(conflicts) {
     if (!pending || submitting) return; // ignore a double-tap while a submit is in flight
     submitting = true;
+    onSubmitting(true);
     try {
       const finalLists = applyResolutions(pending.lists, conflicts);
       const saved = await write(JSON.stringify(finalLists), pending.theirsUpdatedAt);
@@ -165,6 +167,7 @@ export function createSyncEngine({
       onPrompt(pending);
     } finally {
       submitting = false;
+      onSubmitting(false);
     }
   }
 
