@@ -22557,7 +22557,7 @@ function ReceiptHistoryDetail({ batch, jobs, lists, onBack, onViewPhoto }) {
 // and every Love List at once, sorted by how long it's been waiting.
 // Read-only — this is a look-back view, not another place to edit
 // inventory; go to the actual job or Love List for that.
-function BackorderDashboard({ onGoHome }) {
+export function BackorderDashboard({ onGoHome }) {
   const [jobs, setJobs] = useState([]);
   const [lists, setLists] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -23058,7 +23058,7 @@ function PrintableReceiptsModal({ entries, onClose }) {
   );
 }
 
-function ReceiptArchive({ onGoHome, onQuickNav, isOwner }) {
+export function ReceiptArchive({ onGoHome, onQuickNav, isOwner }) {
   const [entries, setEntries] = useState([]);
   const [catalog, setCatalog] = useState([]);
   const [nameMemory, setNameMemory] = useState({});
@@ -24314,7 +24314,7 @@ function ReceiptArchive({ onGoHome, onQuickNav, isOwner }) {
 // through old receipt photos. Manual add/browse/search/history only in
 // this phase — auto-linking SME#s typed elsewhere in the app, and
 // backfilling tools already sitting on current jobs, are later phases.
-function ToolsApp({ onGoHome }) {
+export function ToolsApp({ onGoHome }) {
   const [tools, setTools] = useState([]);
   const [catalog, setCatalog] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -25640,7 +25640,7 @@ function ToolDetailPage({ tool, allTools = [], onUpdate, onMerge, onDelete, onBa
   );
 }
 
-function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
+export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
   const [queue, setQueue] = useState([]);
   // Kept in sync on every single write, synchronously — this is what a
   // long bulk scan reads from before merging in each new receipt. Using
@@ -26743,7 +26743,7 @@ function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
 // The review screen for one scanned receipt — verify against the pallet,
 // fix up anything OCR misread, link unmatched names to the catalog, pick
 // which Job or Love List this shipment belongs to, then approve.
-function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches, onUpdateBatch, onLearnAlias, onApprove, onDiscard, onCombine, onViewPhoto, onBack, onQuickNav }) {
+export function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches, onUpdateBatch, onLearnAlias, onApprove, onDiscard, onCombine, onViewPhoto, onBack, onQuickNav }) {
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const [confirmingApprove, setConfirmingApprove] = useState(false);
   const [relinkingLine, setRelinkingLine] = useState(null);
