@@ -5,17 +5,17 @@
 // accidental breakage from moving the file, not full feature coverage.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { ToolsApp } from "./App";
-import { TOOLS_KEY } from "./lib/tools";
+import { ToolsApp } from "./ToolsApp";
+import { TOOLS_KEY } from "../lib/tools";
 
-vi.mock("./lib/api", () => ({
+vi.mock("../lib/api", () => ({
   JOBS_KEY: "warehub-jobs",
   CATALOG_KEY: "warehub-catalog",
   getWithRetry: vi.fn(),
   saveWithRetry: vi.fn().mockResolvedValue({ ok: true, updatedAt: new Date().toISOString() }),
 }));
 
-import { getWithRetry } from "./lib/api";
+import { getWithRetry } from "../lib/api";
 
 const tool = {
   id: 1,
