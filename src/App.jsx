@@ -27400,14 +27400,30 @@ export default function AuthGate() {
   // A deep link opens straight into its section, but still needs a
   // landing-screen history entry underneath it — otherwise Home/back on a
   // freshly-opened link (no prior history in this tab) has nowhere to go.
-  // This fires on the very first render regardless of session state, since
-  // history manipulation doesn't depend on what's on screen yet.
+  // Waits for session to resolve before deciding what to do with the URL
+  // itself: a logged-in viewer gets it cleared once consumed, same as
+  // before, but an anonymous one keeps the link's query string in the
+  // address bar. Without that, refreshing mid-visit reloads with no deep
+  // link at all and drops straight onto the open landing screen — the
+  // "locked" view in LoveListDetailPage/JobInventory only holds up for as
+  // long as this one page load lasts, so a refresh was a real way around
+  // it, not just a cosmetic gap.
+  const deepLinkHistorySetup = useRef(false);
   useEffect(() => {
-    if (!initialDeepLink) return;
+    if (!initialDeepLink || session === undefined || deepLinkHistorySetup.current) return;
+    deepLinkHistorySetup.current = true;
+    const authenticated = !!session;
+    // Captured before replaceState touches window.location — otherwise
+    // the search string read for the pushState just below is already
+    // gone by the time this runs.
+    const currentUrl = window.location.pathname + window.location.search;
     window.history.replaceState({ appSection: null }, "", window.location.pathname);
-    window.history.pushState({ appSection: initialDeepLink.section }, "", window.location.pathname);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    window.history.pushState(
+      { appSection: initialDeepLink.section },
+      "",
+      authenticated ? window.location.pathname : currentUrl
+    );
+  }, [initialDeepLink, session]);
   // pendingDeepLinkId is cleared once the section that actually uses it
   // reports back that it has (see LoveListsApp's onDeepLinkConsumed) —
   // NOT from a plain mount effect here. The section it feeds sits behind
