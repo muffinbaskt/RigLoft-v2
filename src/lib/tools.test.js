@@ -84,4 +84,17 @@ describe("parseSmeItemSerialCsv", () => {
     const rows = parseSmeItemSerialCsv(csv);
     expect(rows).toEqual([{ sme: "22661", serial: "", nameGuess: 'Ram, 4"' }]);
   });
+
+  // A natural follow-up file once serials are actually in hand: just SME
+  // and Serial, no Item column at all (the tool already exists, matched
+  // by SME#, so a name isn't needed). Item used to be required too, which
+  // would have rejected a file shaped exactly like this.
+  it("imports a header with just SME and Serial columns, no Item", () => {
+    const csv = ["SME,Serial", "22640,SN-111", "22641,SN-112"].join("\n");
+    const rows = parseSmeItemSerialCsv(csv);
+    expect(rows).toEqual([
+      { sme: "22640", serial: "SN-111", nameGuess: "" },
+      { sme: "22641", serial: "SN-112", nameGuess: "" },
+    ]);
+  });
 });

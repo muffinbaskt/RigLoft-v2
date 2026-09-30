@@ -547,7 +547,11 @@ export function parseSmeItemSerialCsv(csvText) {
       const matched = Object.entries(COLUMN_PATTERNS).find(([, pattern]) => pattern.test(text));
       if (matched) found[matched[0]] = idx;
     });
-    if (found.sme !== undefined && found.item !== undefined && found.serial !== undefined) {
+    // Item is optional — a follow-up "just filling in serials now" sheet
+    // for tools that already exist (matched by SME#) has no real need for
+    // a name column at all, and attachSerialNumbers doesn't touch a
+    // tool's existing name when it's just attaching a serial.
+    if (found.sme !== undefined && found.serial !== undefined) {
       headerIndex = i;
       colIndex = found;
       break;
@@ -566,7 +570,7 @@ export function parseSmeItemSerialCsv(csvText) {
     .map((row) => ({
       sme: (row[colIndex.sme] || "").trim(),
       serial: (row[colIndex.serial] || "").trim(),
-      nameGuess: (row[colIndex.item] || "").trim(),
+      nameGuess: colIndex.item !== undefined ? (row[colIndex.item] || "").trim() : "",
     }))
     // Only the SME# is actually required — attachSerialNumbers already
     // handles a blank serial fine (it just creates/updates the tool
@@ -602,7 +606,8 @@ export function parseSmeItemSerialTable(rows) {
       return { x: cell.x, key: matched ? matched[0] : "_ignore" };
     });
     const found = new Set(cells.filter((c) => c.key !== "_ignore").map((c) => c.key));
-    if (found.has("sme") && found.has("item") && found.has("serial")) {
+    // Item is optional here too — see the CSV version of this same check.
+    if (found.has("sme") && found.has("serial")) {
       headerRowIndex = i;
       headerCells = cells.sort((a, b) => a.x - b.x);
       break;
