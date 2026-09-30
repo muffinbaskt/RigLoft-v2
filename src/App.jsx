@@ -18588,10 +18588,29 @@ function LoveListsDashboard({ lists, isEditor, isOwner, staleThresholds = DEFAUL
                           .filter((l) => l.jobLabel === jobLabel)
                           .sort((a, b) => b.dateReceived.localeCompare(a.dateReceived))
                           .map((list) => {
-                            const counts = LOVE_STATUSES.map((s) => ({
-                              ...s,
-                              n: list.items.filter((i) => i.status === s.key).length,
-                            })).filter((s) => s.n > 0);
+                            // "In Stock" items are still status "received"
+                            // underneath (see loveItemDisplayMeta) — group
+                            // them into their own pill here too, rather
+                            // than silently lumping them in with items that
+                            // were actually ordered and received.
+                            const receivedIdx = LOVE_STATUSES.findIndex((s) => s.key === "received");
+                            const countBuckets = [
+                              ...LOVE_STATUSES.slice(0, receivedIdx + 1),
+                              { key: "inStock", label: "In Stock", color: loveStatusMeta("received").color },
+                              ...LOVE_STATUSES.slice(receivedIdx + 1),
+                            ];
+                            const counts = countBuckets
+                              .map((s) => ({
+                                ...s,
+                                n: list.items.filter((i) =>
+                                  s.key === "inStock"
+                                    ? i.status === "received" && i.needsOrdering === false
+                                    : s.key === "received"
+                                    ? i.status === "received" && i.needsOrdering !== false
+                                    : i.status === s.key
+                                ).length,
+                              }))
+                              .filter((s) => s.n > 0);
                             return (
                               <button
                                 key={list.id}
@@ -20581,7 +20600,15 @@ function LoveTaskListModal({ entries, lists, isEditor, onToggleDone, onRemove, o
       .find((l) => l.id === e.sourceListId)
       ?.items.find((i) => i.id === e.sourceItemId);
     if (!sourceItem) return e;
-    return { ...e, qty: Math.max(0, (sourceItem.qty || 0) - (sourceItem.qtyHave || 0)) };
+    // Live-syncs the requested amount only (in case it's edited after being
+    // added here) — deliberately doesn't subtract qtyHave. This list's job
+    // is "go physically grab this and bring it to the job," and qtyHave
+    // reaching the full qty just means it's been logged as received/in
+    // stock, not that anyone's actually carried it over yet. An "In Stock"
+    // item in particular jumps straight to fully-received the moment it's
+    // marked, which used to zero this out immediately — showing "need x0"
+    // for an item nobody's grabbed yet.
+    return { ...e, qty: sourceItem.qty ?? e.qty };
   });
   const groups = groupLoveTaskEntries(liveEntries);
   const doneCount = entries.filter((e) => e.done).length;
