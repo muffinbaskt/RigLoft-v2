@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { attachSerialNumbers, newTool, parseSmeItemSerialCsv } from "./tools";
+import { attachSerialNumbers, awaitingSmeNamesMatch, newTool, parseSmeItemSerialCsv } from "./tools";
 
 describe("attachSerialNumbers", () => {
   it("matches an unrecognized SME# to an awaiting_sme tool by name instead of creating a new one", () => {
@@ -55,6 +55,73 @@ describe("attachSerialNumbers", () => {
     const tools = [];
     const result = attachSerialNumbers(tools, [{ sme: "", serial: "SN-X", name: "Whatever" }]);
     expect(result.length).toBe(0);
+  });
+
+  // Regression test using the real names that failed to match: only "Die
+  // Grinder" (worded identically on both sides) matched; ladders, the
+  // porta ram, and the air manifold/pig all didn't, purely because the
+  // wording differed (or, for air pig/manifold, because it's a genuine
+  // synonym no amount of reordering can bridge).
+  it("matches word-order and superset name variations end to end", () => {
+    const tools = [
+      { ...newTool({ name: "Extension Ladder, 24'", status: "awaiting_sme" }), id: "ladder" },
+      { ...newTool({ name: 'Porta Ram, 4"', status: "awaiting_sme" }), id: "ram" },
+      { ...newTool({ name: "Porta Pump, Large", status: "awaiting_sme" }), id: "pump" },
+      { ...newTool({ name: "Air Pig", status: "awaiting_sme" }), id: "airpig" },
+    ];
+    const rows = [
+      { sme: "1001", serial: "", nameGuess: "24 Foot Extension Ladder" },
+      { sme: "1002", serial: "", nameGuess: 'Ram, 4"' },
+      { sme: "1003", serial: "", nameGuess: "Porta Pump" },
+      { sme: "1004", serial: "", nameGuess: "Air Manifold" },
+    ];
+
+    const result = attachSerialNumbers(tools, rows);
+
+    expect(result.find((t) => t.id === "ladder").sme).toBe("1001");
+    expect(result.find((t) => t.id === "ram").sme).toBe("1002");
+    expect(result.find((t) => t.id === "pump").sme).toBe("1003");
+    // Air Pig/Air Manifold share no real words — correctly NOT matched,
+    // so a brand-new tool gets created instead of silently guessing.
+    expect(result.find((t) => t.id === "airpig").sme).toBeNull();
+    const newAirManifold = result.find((t) => t.name === "Air Manifold");
+    expect(newAirManifold).toBeTruthy();
+    expect(newAirManifold.sme).toBe("1004");
+  });
+});
+
+describe("awaitingSmeNamesMatch", () => {
+  it("matches identical names", () => {
+    expect(awaitingSmeNamesMatch("Die Grinder", "Die Grinder")).toBe(true);
+  });
+
+  it("matches regardless of word order", () => {
+    expect(awaitingSmeNamesMatch("Extension Ladder, 24'", "24 Foot Extension Ladder")).toBe(true);
+    expect(awaitingSmeNamesMatch("Extension Ladder, 32'", "32 Foot Extension Ladder")).toBe(true);
+    expect(awaitingSmeNamesMatch("Step Ladder, 8'", "8 Foot Step Ladder")).toBe(true);
+  });
+
+  it("matches when one name is a superset of the other's words", () => {
+    expect(awaitingSmeNamesMatch('Porta Ram, 4"', 'Ram, 4"')).toBe(true);
+    expect(awaitingSmeNamesMatch("Porta Pump, Large", "Porta Pump")).toBe(true);
+  });
+
+  it("does not match a different-size ladder", () => {
+    expect(awaitingSmeNamesMatch("Extension Ladder, 24'", "32 Foot Extension Ladder")).toBe(false);
+  });
+
+  it("does not match a true synonym sharing only one generic word", () => {
+    expect(awaitingSmeNamesMatch("Air Pig", "Air Manifold")).toBe(false);
+  });
+
+  it("does not match a single generic word against anything containing it", () => {
+    expect(awaitingSmeNamesMatch("Air", "Air Pig")).toBe(false);
+    expect(awaitingSmeNamesMatch("Air Pig", "Air")).toBe(false);
+  });
+
+  it("handles blank names safely", () => {
+    expect(awaitingSmeNamesMatch("", "Die Grinder")).toBe(false);
+    expect(awaitingSmeNamesMatch("Die Grinder", "")).toBe(false);
   });
 });
 

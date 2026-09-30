@@ -22,6 +22,7 @@ import {
   applyToolMerge,
   applyToolsBackfill,
   attachSerialNumbers,
+  awaitingSmeNamesMatch,
   findBackfillCandidates,
   isToolCandidate,
   logToolEvent,
@@ -30,7 +31,7 @@ import {
   parseSmeSerialLines,
   toolStatusLabel,
 } from "../lib/tools";
-import { normalizeText, uniqueId } from "../lib/utils";
+import { uniqueId } from "../lib/utils";
 import { formatTaskTimestamp } from "../lib/workertasks";
 import { AddToolModal, ConfirmDelete, ZoomableImage } from "../components/shared";
 
@@ -627,14 +628,13 @@ function ImportSerialNumbersModal({ tools, onSave, onClose }) {
       const existing = tools.find((t) => t.sme === sme);
       if (existing) return { row, kind: "existing", match: existing };
       const rowName = (row.name || row.nameGuess || "").trim();
-      const normRowName = rowName ? normalizeText(rowName) : "";
-      const awaitingMatch = normRowName
+      const awaitingMatch = rowName
         ? tools.find(
             (t) =>
               t.status === "awaiting_sme" &&
               !t.sme &&
               !claimed.has(t.id) &&
-              normalizeText(t.name || "") === normRowName
+              awaitingSmeNamesMatch(t.name || "", rowName)
           )
         : null;
       if (awaitingMatch) {
