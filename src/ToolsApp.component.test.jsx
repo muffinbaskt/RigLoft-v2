@@ -38,9 +38,18 @@ beforeEach(() => {
 });
 
 describe("ToolsApp", () => {
-  it("lists tools with their name and SME#", async () => {
+  it("blocks anyone who isn't the owner, without loading any data", async () => {
     mockData();
-    render(<ToolsApp onGoHome={() => {}} />);
+    render(<ToolsApp onGoHome={() => {}} isOwner={false} />);
+
+    expect(await screen.findByText("Owner only")).toBeInTheDocument();
+    expect(screen.getByText("Tools isn't available on this account.")).toBeInTheDocument();
+    expect(getWithRetry).not.toHaveBeenCalled();
+  });
+
+  it("lists tools with their name and SME# for the owner", async () => {
+    mockData();
+    render(<ToolsApp onGoHome={() => {}} isOwner />);
 
     expect(await screen.findByText("Ramset Gun")).toBeInTheDocument();
     expect(screen.getByText("SME# 10001")).toBeInTheDocument();
@@ -48,7 +57,7 @@ describe("ToolsApp", () => {
 
   it("shows the empty state when the registry is empty", async () => {
     mockData({ tools: [] });
-    render(<ToolsApp onGoHome={() => {}} />);
+    render(<ToolsApp onGoHome={() => {}} isOwner />);
 
     expect(
       await screen.findByText('No tools in the registry yet — tap "Add tool" to start tracking one.')
@@ -59,7 +68,7 @@ describe("ToolsApp", () => {
     mockData({
       tools: [tool, { id: 2, name: "Impact Wrench", sme: "10002", status: "storage", history: [] }],
     });
-    render(<ToolsApp onGoHome={() => {}} />);
+    render(<ToolsApp onGoHome={() => {}} isOwner />);
     await screen.findByText("Ramset Gun");
 
     fireEvent.change(screen.getByPlaceholderText("Search SME #, item name, or job..."), {
@@ -73,7 +82,7 @@ describe("ToolsApp", () => {
   it("back button calls onGoHome", async () => {
     mockData();
     const onGoHome = vi.fn();
-    const { container } = render(<ToolsApp onGoHome={onGoHome} />);
+    const { container } = render(<ToolsApp onGoHome={onGoHome} isOwner />);
     await screen.findByText("Ramset Gun");
 
     fireEvent.click(container.querySelector("header button"));

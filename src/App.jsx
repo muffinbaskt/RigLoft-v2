@@ -24314,7 +24314,7 @@ export function ReceiptArchive({ onGoHome, onQuickNav, isOwner }) {
 // through old receipt photos. Manual add/browse/search/history only in
 // this phase — auto-linking SME#s typed elsewhere in the app, and
 // backfilling tools already sitting on current jobs, are later phases.
-export function ToolsApp({ onGoHome }) {
+export function ToolsApp({ onGoHome, isOwner }) {
   const [tools, setTools] = useState([]);
   const [catalog, setCatalog] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -24328,6 +24328,11 @@ export function ToolsApp({ onGoHome }) {
   const toolsRef = useRef([]);
 
   useEffect(() => {
+    // Same reasoning as Receiving/Receipt Archive: no view-only mode of
+    // its own, and the landing screen hiding its tile is just a hidden
+    // button, not real protection — this screen is also reachable via a
+    // manager's own login or a crafted ?section=tools&id=... link.
+    if (!isOwner) return;
     (async () => {
       try {
         const [toolsResult, catalogResult] = await Promise.all([
@@ -24343,7 +24348,8 @@ export function ToolsApp({ onGoHome }) {
       } catch {}
       setLoading(false);
     })();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOwner]);
 
   const saveTools = (next) => {
     toolsRef.current = next;
@@ -24382,6 +24388,26 @@ export function ToolsApp({ onGoHome }) {
     .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
 
   const viewingTool = tools.find((t) => t.id === viewingToolId) || null;
+
+  if (!isOwner) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center px-4">
+        <div className="max-w-sm text-center">
+          <div className="w-12 h-12 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center mx-auto mb-4">
+            <Lock className="w-5 h-5 text-slate-400" />
+          </div>
+          <h2 className="font-semibold text-slate-100 mb-2">Owner only</h2>
+          <p className="text-sm text-slate-500 mb-5">Tools isn't available on this account.</p>
+          <button
+            onClick={onGoHome}
+            className="inline-flex items-center gap-1.5 bg-slate-800 border border-slate-700 text-slate-200 text-sm font-semibold rounded-md px-4 py-2 hover:bg-slate-700"
+          >
+            Back to home
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -27645,7 +27671,7 @@ export default function AuthGate() {
           isOwner={isOwner}
         />
       ) : appSection === "tools" ? (
-        <ToolsApp onGoHome={goToLanding} />
+        <ToolsApp onGoHome={goToLanding} isOwner={isOwner} />
       ) : appSection === "love" ? (
         <LoveListsApp
           isEditor={isOwner || isManager}
