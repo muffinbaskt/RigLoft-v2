@@ -34,7 +34,7 @@ import {
   resolveToolNameAlias,
   toolStatusLabel,
 } from "../lib/tools";
-import { uniqueId } from "../lib/utils";
+import { normalizeText, uniqueId } from "../lib/utils";
 import { formatTaskTimestamp } from "../lib/workertasks";
 import { AddToolModal, ConfirmDelete, SimpleListPickerModal, ZoomableImage } from "../components/shared";
 
@@ -568,7 +568,7 @@ function TransferTagsManagerPage({ catalog, onToggleExclude, onBack }) {
 // at once ("I have quite a few of these") — every row across every file
 // lands in one combined review list rather than needing to repeat this
 // per file.
-function ImportSerialNumbersModal({ tools, onSave, onClose }) {
+export function ImportSerialNumbersModal({ tools, onSave, onClose }) {
   const [step, setStep] = useState("upload"); // "upload" | "processing" | "review" | "error"
   const [error, setError] = useState("");
   const [rows, setRows] = useState([]);
@@ -634,6 +634,24 @@ function ImportSerialNumbersModal({ tools, onSave, onClose }) {
     setRows((prev) => prev.filter((r) => r.id !== id));
   };
 
+  // Linking one row's name is almost always about the name, not that one
+  // specific row — a file with 8 identically-named "Air Manifold" lines
+  // means 8 physical Air Pigs, and nobody wants to repeat the same pick 8
+  // times. Applies the link to every row in this batch sharing the same
+  // raw name, not just the one that opened the picker.
+  const applyLinkToAllMatching = (triggerRowId, canonicalName) => {
+    const triggerRow = rows.find((r) => r.id === triggerRowId);
+    if (!triggerRow) return;
+    const normTriggerName = normalizeText((triggerRow.name || triggerRow.nameGuess || "").trim());
+    setRows((prev) =>
+      prev.map((r) =>
+        normalizeText((r.name || r.nameGuess || "").trim()) === normTriggerName
+          ? { ...r, linkedName: canonicalName }
+          : r
+      )
+    );
+  };
+
   // Previews exactly what handleConfirm/attachSerialNumbers will actually
   // do — including the same one-to-one, first-come claim on an
   // awaiting-SME# tool by name — so this screen doesn't tell someone "will
@@ -673,6 +691,19 @@ function ImportSerialNumbersModal({ tools, onSave, onClose }) {
     });
   })();
   const newCount = rowPreviews.filter((p) => p.kind === "new").length;
+
+  // How many "new" rows share a given raw name — shown on the link button
+  // so it's clear one pick covers every row like it, not just this one.
+  const newRowNameCounts = (() => {
+    const counts = {};
+    rowPreviews.forEach(({ row, kind }) => {
+      if (kind !== "new") return;
+      const key = normalizeText((row.name || row.nameGuess || "").trim());
+      if (!key) return;
+      counts[key] = (counts[key] || 0) + 1;
+    });
+    return counts;
+  })();
 
   const handleConfirm = () => {
     const updated = attachSerialNumbers(tools, rows, nameAliases);
@@ -819,6 +850,10 @@ function ImportSerialNumbersModal({ tools, onSave, onClose }) {
                                 className="text-[11px] text-sky-400 hover:text-sky-300 underline underline-offset-2"
                               >
                                 Actually, this is the same tool as an existing name...
+                                {newRowNameCounts[normalizeText((row.name || row.nameGuess || "").trim())] > 1 &&
+                                  ` (applies to all ${
+                                    newRowNameCounts[normalizeText((row.name || row.nameGuess || "").trim())]
+                                  } "${row.nameGuess}" rows)`}
                               </button>
                             )}
                           </div>
@@ -846,7 +881,7 @@ function ImportSerialNumbersModal({ tools, onSave, onClose }) {
           title="Which existing name is this really?"
           options={distinctAwaitingNames}
           onPick={(name) => {
-            updateRow(linkingRowId, { linkedName: name });
+            applyLinkToAllMatching(linkingRowId, name);
             setLinkingRowId(null);
           }}
           onClose={() => setLinkingRowId(null)}
