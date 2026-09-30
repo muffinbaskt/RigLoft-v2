@@ -4666,8 +4666,8 @@ const REQUISITION_TEMPLATES = {
 
 
 
-function ReferenceDocsModal({ entity, entityLabel, isEditor, onUpdateEntity, onClose }) {
-  const docs = entity.referenceDocuments || [];
+function ReferenceDocsModal({ entity, entityLabel, isEditor, onUpdateEntity, onClose, field = "referenceDocuments" }) {
+  const docs = entity[field] || [];
   const photoDocs = docs.filter((d) => (d.type || "").startsWith("image/"));
   const fileDocs = docs.filter((d) => !(d.type || "").startsWith("image/"));
   const [uploading, setUploading] = useState(false);
@@ -4683,8 +4683,8 @@ function ReferenceDocsModal({ entity, entityLabel, isEditor, onUpdateEntity, onC
     const isPhoto = (result.type || "").startsWith("image/");
     onUpdateEntity((prevEntity) => ({
       ...prevEntity,
-      referenceDocuments: [
-        ...(prevEntity.referenceDocuments || []),
+      [field]: [
+        ...(prevEntity[field] || []),
         {
           id: uniqueId(),
           name: result.name,
@@ -4772,7 +4772,7 @@ function ReferenceDocsModal({ entity, entityLabel, isEditor, onUpdateEntity, onC
     await deleteReferenceDocument(doc.path);
     onUpdateEntity((prevEntity) => ({
       ...prevEntity,
-      referenceDocuments: (prevEntity.referenceDocuments || []).filter((d) => d.id !== doc.id),
+      [field]: (prevEntity[field] || []).filter((d) => d.id !== doc.id),
     }));
   };
 
@@ -5495,11 +5495,11 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => setReferenceDocsOpen(true)}
-              title="Receipt photos & reference documents"
+              title="Receipt photos (separate from the job's main reference documents)"
               className="relative w-9 h-9 flex items-center justify-center bg-slate-800 border border-slate-700 text-slate-300 rounded-md hover:bg-slate-700"
             >
               <FileText className="w-4 h-4" />
-              {(job.referenceDocuments || []).length > 0 && (
+              {(job.requisitionDocuments || []).length > 0 && (
                 <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-rose-400" />
               )}
             </button>
@@ -5523,6 +5523,11 @@ function RequisitionsPage({ job, isEditor, onUpdateJob, onBack }) {
           isEditor={isEditor}
           onUpdateEntity={onUpdateJob}
           onClose={() => setReferenceDocsOpen(false)}
+          // Its own bucket, separate from the job's main reference
+          // documents — a requisition receipt has nothing to do with the
+          // job's spec sheets/drawings, and the two shouldn't get mixed
+          // into one undifferentiated pile.
+          field="requisitionDocuments"
         />
       )}
 

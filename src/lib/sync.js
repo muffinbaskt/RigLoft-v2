@@ -211,6 +211,10 @@ export function threeWayMergeJobs(baseJobs, mineJobs, theirJobs) {
     // happened to be during a conflict, dropping anything uploaded on the
     // other side. Same union-by-id treatment as todos/activityLog fixes it.
     const referenceDocuments = unionById(theirs.referenceDocuments, mine.referenceDocuments);
+    // Requisitions' own separate receipt/document bucket — same reasoning
+    // as referenceDocuments above, so two people uploading receipts from
+    // different phones at once can't silently stomp on each other.
+    const requisitionDocuments = unionById(theirs.requisitionDocuments, mine.requisitionDocuments);
 
     itemMerge.conflicts.forEach((c) =>
       itemConflicts.push({ jobId: id, jobName: mine.name || theirs.name, ...c })
@@ -243,6 +247,7 @@ export function threeWayMergeJobs(baseJobs, mineJobs, theirJobs) {
       todos,
       activityLog,
       referenceDocuments,
+      requisitionDocuments,
     };
 
     if (metaConflict) jobConflicts.push(metaConflict);
