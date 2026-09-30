@@ -165,6 +165,49 @@ export function newReturn(jobId, jobName, date) {
   };
 }
 
+// Pre-filled item lists for a requisition category, keyed by exact category
+// name — looked up both when someone manually types one of these names into
+// "Add category" and when a new real job auto-seeds its default categories
+// below.
+export const REQUISITION_TEMPLATES = {
+  Shims: [
+    '1/16"',
+    '1/8"',
+    '1/4"',
+    '1/2"',
+    '1"',
+    "Safety Cable Washer Bar",
+    "Wedge",
+    "Tag Line Hook",
+  ],
+  // Welding rod/stick electrodes — not wire spools, even though some of
+  // these item numbers come off the same field wire requisition sheet.
+  Rod: [
+    'E6022 5/32" (50lb)',
+    'EX7018 1/8" (50lb)',
+    'EX7018 5/32" (50lb)',
+    'EX7016 5/32" (50lb)',
+    'EX7010 5/32" (50lb)',
+  ],
+  Wire: [
+    'NR232 .072" (25lb)',
+    'NR305 3/32" (50lb)',
+    'NR305 3/32" (25lb)',
+    'NR305 5/64" (25lb)',
+    'NR311NI 3/32" (50lb)',
+  ],
+  "Safety Post": ["#7 (Hook Pole)", "#9 (Rectangle)", "#10 (V)"],
+};
+
+// Every new real job starts its Requisitions with these categories already
+// there, pre-filled from REQUISITION_TEMPLATES above, instead of someone
+// having to add each one by hand every time. Quick Transfer "jobs" are a
+// different, lightweight concept (moving items between real jobs) and
+// don't get a shopping list of their own. Existing jobs created before
+// this were added are deliberately left alone — this only affects jobs
+// created from here on.
+export const DEFAULT_REQUISITION_CATEGORIES = ["Shims", "Rod", "Wire", "Safety Post"];
+
 export function newJob(name, parentId = null, color = null, isQuickTransfer = false) {
   return {
     id: uniqueId(),
@@ -180,6 +223,22 @@ export function newJob(name, parentId = null, color = null, isQuickTransfer = fa
     todos: [],
     activityLog: [{ id: uniqueId(), time: timeStamp(), message: `Job "${name}" created.` }],
     undoStack: [],
+    requisitionCategoryOrder: isQuickTransfer ? [] : [...DEFAULT_REQUISITION_CATEGORIES],
+    // uniqueId() alone is already guaranteed unique per call (a monotonic
+    // counter) — no need for a per-category index on top of it, which
+    // would actually risk colliding across categories in this same
+    // synchronous loop (each category's index restarts at 0 while the
+    // underlying counter keeps climbing).
+    requisitions: isQuickTransfer
+      ? []
+      : DEFAULT_REQUISITION_CATEGORIES.flatMap((cat) =>
+          (REQUISITION_TEMPLATES[cat] || []).map((spec) => ({
+            id: uniqueId(),
+            category: cat,
+            spec,
+            qty: 0,
+          }))
+        ),
   };
 }
 

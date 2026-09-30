@@ -103,6 +103,7 @@ import {
   csvEscape,
   copyToClipboard,
   emptyCatalogItem,
+  REQUISITION_TEMPLATES,
 } from "./lib/utils";
 import {
   ZoomableImage,
@@ -4647,22 +4648,6 @@ function SuggestionsInboxModal({
   );
 }
 
-// Standard sizes that should always be there for these specific categories,
-// so you're not retyping the same list every job — quantities always start
-// at 0 and "Add entry" still works normally for anything one-off or new.
-const REQUISITION_TEMPLATES = {
-  Shims: [
-    '1/16"',
-    '1/8"',
-    '1/4"',
-    '1/2"',
-    '1"',
-    "Safety Cable Washer Bar",
-    "Wedge",
-    "Tag Line Hook",
-  ],
-  "Safety Post": ["#7 (Hook Pole)", "#9 (Rectangle)", "#10 (V)"],
-};
 
 
 
