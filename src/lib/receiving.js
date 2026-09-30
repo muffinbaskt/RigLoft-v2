@@ -423,8 +423,29 @@ export function mergeJobItems(items, sourceId, targetId) {
   // raw numbers alone would treat them as wildly different quantities.
   const sourceHaveInTargetUnits = convertQtyForUnit(sourceHave, source.qtyUnit, target.qtyUnit);
   const absorbInTargetUnits = Math.min(sourceHaveInTargetUnits, remainingNeed);
-  if (absorbInTargetUnits <= 0) return items;
-  const absorb = convertQtyForUnit(absorbInTargetUnits, target.qtyUnit, source.qtyUnit);
+  // An imported item that showed up entirely backordered (0 shipped) has
+  // nothing to physically absorb — but the backorder note itself is still
+  // worth carrying over, otherwise the only way to merge it is to first
+  // fake a nonzero quantity. Only bail out for real when there's neither
+  // quantity nor a backorder to bring across.
+  const hasBackorderToCarry = (source.backorderQty || 0) > 0;
+  if (absorbInTargetUnits <= 0 && !hasBackorderToCarry) return items;
+  const absorb = absorbInTargetUnits > 0 ? convertQtyForUnit(absorbInTargetUnits, target.qtyUnit, source.qtyUnit) : 0;
+  // Same staleness protection as applying a receipt line directly (see
+  // applyReceiptLineToJob) — only let the source's backorder note overwrite
+  // the target's if it's at least as new, so merging an older imported
+  // duplicate can't clobber a backorder number a more recent receipt
+  // already resolved.
+  const canCompareBackorderDates = source.backorderReceiptDate && target.backorderReceiptDate;
+  const shouldUpdateBackorder =
+    hasBackorderToCarry &&
+    (!canCompareBackorderDates || source.backorderReceiptDate >= target.backorderReceiptDate);
+  const finalBackorderQty = shouldUpdateBackorder
+    ? convertQtyForUnit(source.backorderQty, source.qtyUnit, target.qtyUnit)
+    : target.backorderQty || 0;
+  const finalBackorderDate = shouldUpdateBackorder
+    ? source.backorderReceiptDate || target.backorderReceiptDate
+    : target.backorderReceiptDate;
 
   let toRemove = absorb;
   const sourceContainers = (source.containers || []).map((c) => ({ ...c }));
@@ -477,7 +498,13 @@ export function mergeJobItems(items, sourceId, targetId) {
         qtyHave: newTargetHave,
         status: computeJobItemStatus(newTargetHave, target.qtyNeeded),
         ordered: true,
-        received: computeJobItemReceived(newTargetHave, target.qtyNeeded),
+        backorderQty: finalBackorderQty,
+        backorderReceiptDate: finalBackorderDate,
+        // A backorder carried in from the merge means the target's still
+        // outstanding with the vendor even if it already has everything it
+        // needs on hand right now — same override applyReceiptLineToJob
+        // uses, so "Received" doesn't lie about what's still owed.
+        received: finalBackorderQty > 0 ? "partial" : computeJobItemReceived(newTargetHave, target.qtyNeeded),
         // Carried over from whatever's being absorbed in, even though the
         // target itself was never "Imported" — the receipt reference
         // would otherwise vanish the moment the source item (which is
@@ -493,6 +520,12 @@ export function mergeJobItems(items, sourceId, targetId) {
         status: computeJobItemStatus(newSourceHave, source.qtyNeeded),
         received: computeJobItemReceived(newSourceHave, source.qtyNeeded),
         importedViaReceiving: newSourceHave > 0 ? source.importedViaReceiving : false,
+        // Once its backorder note has actually been carried onto the
+        // target, clear it here too — otherwise a source that survives
+        // the merge (only partially absorbed) would go on showing the
+        // same outstanding backorder a second time.
+        backorderQty: shouldUpdateBackorder ? 0 : source.backorderQty,
+        backorderReceiptDate: shouldUpdateBackorder ? null : source.backorderReceiptDate,
       };
     return i;
   });
@@ -514,8 +547,25 @@ export function mergeLoveListItems(items, sourceId, targetId) {
   const remainingNeed = Math.max(0, (target.qty || 0) - targetHave);
   const sourceHaveInTargetUnits = convertQtyForUnit(sourceHave, source.qtyUnit, target.qtyUnit);
   const absorbInTargetUnits = Math.min(sourceHaveInTargetUnits, remainingNeed);
-  if (absorbInTargetUnits <= 0) return items;
-  const absorb = convertQtyForUnit(absorbInTargetUnits, target.qtyUnit, source.qtyUnit);
+  // Same fix as the Job version — an imported item that's entirely
+  // backordered has nothing to absorb, but the backorder note itself is
+  // still worth carrying over rather than leaving an unmergeable 0-qty
+  // duplicate sitting next to the real item.
+  const hasBackorderToCarry = (source.backorderQty || 0) > 0;
+  if (absorbInTargetUnits <= 0 && !hasBackorderToCarry) return items;
+  const absorb = absorbInTargetUnits > 0 ? convertQtyForUnit(absorbInTargetUnits, target.qtyUnit, source.qtyUnit) : 0;
+  // Same staleness protection as applyReceiptLineToLoveList — only let the
+  // source's backorder note overwrite the target's if it's at least as new.
+  const canCompareBackorderDates = source.backorderReceiptDate && target.backorderReceiptDate;
+  const shouldUpdateBackorder =
+    hasBackorderToCarry &&
+    (!canCompareBackorderDates || source.backorderReceiptDate >= target.backorderReceiptDate);
+  const finalBackorderQty = shouldUpdateBackorder
+    ? convertQtyForUnit(source.backorderQty, source.qtyUnit, target.qtyUnit)
+    : target.backorderQty || 0;
+  const finalBackorderDate = shouldUpdateBackorder
+    ? source.backorderReceiptDate || target.backorderReceiptDate
+    : target.backorderReceiptDate;
 
   const newSourceHave = sourceHave - absorb;
   let nextItems = items.map((i, idx) => {
@@ -523,6 +573,8 @@ export function mergeLoveListItems(items, sourceId, targetId) {
       return {
         ...target,
         qtyHave: targetHave + absorbInTargetUnits,
+        backorderQty: finalBackorderQty,
+        backorderReceiptDate: finalBackorderDate,
         // Same carry-over as the Job version — otherwise this reference
         // vanishes the moment the source item gets deleted outright,
         // even though some of its quantity now lives here.
@@ -533,6 +585,11 @@ export function mergeLoveListItems(items, sourceId, targetId) {
         ...source,
         qtyHave: newSourceHave,
         importedViaReceiving: newSourceHave > 0 ? source.importedViaReceiving : false,
+        // Once its backorder note has actually been carried onto the
+        // target, clear it here too, so a source that survives (only
+        // partially absorbed) doesn't go on showing it a second time.
+        backorderQty: shouldUpdateBackorder ? 0 : source.backorderQty,
+        backorderReceiptDate: shouldUpdateBackorder ? null : source.backorderReceiptDate,
       };
     return i;
   });
