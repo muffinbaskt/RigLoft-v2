@@ -3,8 +3,10 @@ import {
   X,
   Plus,
   Camera,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Copy,
   Lock,
   LayoutGrid,
   Briefcase,
@@ -14,9 +16,18 @@ import {
   Printer,
 } from "lucide-react";
 import QRCode from "qrcode";
-import { selectOnFocus, uniqueId } from "../lib/utils";
-import { uploadReferenceDocument } from "../lib/api";
+import { selectOnFocus, uniqueId, normalizeText, playSaveChime } from "../lib/utils";
+import { getWithRetry, saveWithRetry, uploadReferenceDocument } from "../lib/api";
 import { newTool, logToolEvent } from "../lib/tools";
+import {
+  RECEIVING_QUEUE_KEY,
+  computeUsualVendor,
+  itemReceipts,
+  attachReceiptPhotoToJob,
+  attachReceiptPhotoToLoveList,
+  applyReceiptLineToJob,
+  applyReceiptLineToLoveList,
+} from "../lib/receiving";
 
 // Small, self-contained UI pieces shared across several screens — a
 // zoomable full-screen image, a multi-photo lightbox built on top of it,
@@ -890,6 +901,757 @@ export function DeepLinkQrModal({ section, id, title, subtitle, heading, onClose
           </p>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Small, generic cross-screen pieces — used by both Job Lists and
+// Love Lists item views (purchase/receipt history, pulling an item
+// straight out of the Receiving queue, a plain labeled dropdown).
+export function Select({ value, onChange, options, labels }) {
+  return (
+    <div className="relative">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full appearance-none bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md pl-3 pr-8 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60 focus:border-amber-500/60"
+      >
+        {options.map((opt) => (
+          <option key={opt} value={opt}>
+            {labels && labels[opt] !== undefined ? labels[opt] : opt}
+          </option>
+        ))}
+      </select>
+      <ChevronDown className="w-4 h-4 text-slate-500 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+    </div>
+  );
+}
+
+// Shown from either a Job or Love List item card — the purchase history
+// lives on the catalog entry, so this reads straight off that rather
+// than anything specific to the job/list you happened to open it from.
+// Read-only look at whichever receipt most recently touched this
+// specific item — a self-contained snapshot rather than a live lookup,
+// so it still works even if the original Receiving history entry (or
+// archived receipt) it came from was since deleted or cleared.
+// One receipt's details and photos. Split out so each receipt on an item
+// can open its own photo viewer.
+export function SourceReceiptBlock({ receipt, heading }) {
+  const [viewingIndex, setViewingIndex] = useState(null);
+  const allPhotos = [receipt.photoUrl, ...(receipt.extraPhotoUrls || [])].filter(Boolean);
+  return (
+    <div>
+      {heading && (
+        <p className="text-sm text-slate-100 font-semibold mb-1">
+          {receipt.label || receipt.vendor || "Receipt"}
+        </p>
+      )}
+      <p className="text-xs text-slate-500 mb-3">
+        {[
+          receipt.vendor && (receipt.label || !heading) && `Vendor: ${receipt.vendor}`,
+          receipt.receiptDate && `Date: ${receipt.receiptDate}`,
+          receipt.poNumber && `PO: ${receipt.poNumber}`,
+        ]
+          .filter(Boolean)
+          .join(" · ") || "No further details recorded"}
+      </p>
+      {receipt.photoUrl ? (
+        <>
+          <button
+            onClick={() => setViewingIndex(0)}
+            className="w-full rounded-lg overflow-hidden border border-slate-800"
+          >
+            <img src={receipt.photoUrl} alt="Receipt" className="w-full max-h-64 object-cover" />
+          </button>
+          {(receipt.extraPhotoUrls || []).length > 0 && (
+            <div className="grid grid-cols-4 gap-1.5 mt-1.5">
+              {receipt.extraPhotoUrls.map((url, i) => (
+                <button
+                  key={i}
+                  onClick={() => setViewingIndex(i + 1)}
+                  className="rounded-md overflow-hidden border border-slate-800"
+                >
+                  <img src={url} alt={`Page ${i + 2}`} className="w-full h-14 object-cover" />
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="text-sm text-slate-500 text-center py-6">No photo saved with this receipt.</p>
+      )}
+      {viewingIndex !== null && (
+        <PhotoLightbox
+          photos={allPhotos.map((url) => ({ url, alt: "Receipt" }))}
+          index={viewingIndex}
+          onIndexChange={setViewingIndex}
+          onClose={() => setViewingIndex(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// `receipts` is everything backing one item (see itemReceipts) — an item can
+// carry several once deliveries or duplicate items have been merged together.
+export function SourceReceiptModal({ receipts, onClose }) {
+  const many = receipts.length > 1;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5 max-h-[80vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-slate-100 font-semibold text-base">
+            {many ? `${receipts.length} receipts` : receipts[0].label || receipts[0].vendor || "Receipt"}
+          </h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200 shrink-0 ml-2">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="space-y-5">
+          {receipts.map((r, i) => (
+            <div key={i} className={many && i > 0 ? "pt-5 border-t border-slate-800" : ""}>
+              <SourceReceiptBlock receipt={r} heading={many} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function VendorBreakdownModal({ catalogItem, onClose, onChange }) {
+  const [history, setHistory] = useState(catalogItem.vendorHistory || []);
+  const [showIndividual, setShowIndividual] = useState(false);
+  const [deleteRecordTarget, setDeleteRecordTarget] = useState(null);
+  const [confirmingClearAll, setConfirmingClearAll] = useState(false);
+
+  const persist = async (nextHistory) => {
+    const nextVendor = computeUsualVendor(nextHistory) || "";
+    // Tells whichever screen opened this modal right away — without
+    // this, closing and reopening (a fresh instance, since this modal
+    // fully unmounts rather than just hiding) would read the parent's
+    // still-stale catalog data and show the old entries again, even
+    // though storage was already correctly updated.
+    if (onChange) onChange(catalogItem.id, { vendorHistory: nextHistory, vendor: nextVendor });
+    const result = await getWithRetry(CATALOG_KEY);
+    if (result.ok && result.value) {
+      const next = JSON.parse(result.value).map((c) =>
+        c.id === catalogItem.id ? { ...c, vendorHistory: nextHistory, vendor: nextVendor } : c
+      );
+      await saveWithRetry(CATALOG_KEY, JSON.stringify(next));
+    }
+  };
+
+  const deleteRecord = (recordId) => {
+    const next = history.filter((r) => r.id !== recordId);
+    setHistory(next);
+    persist(next);
+  };
+
+  const clearAll = () => {
+    setHistory([]);
+    persist([]);
+  };
+
+  const grouped = {};
+  history.forEach((r) => {
+    if (!r.vendor) return;
+    if (!grouped[r.vendor]) grouped[r.vendor] = { qty: 0, amount: 0 };
+    grouped[r.vendor].qty += r.qty || 0;
+    grouped[r.vendor].amount += r.amount || 0;
+  });
+  const rows = Object.entries(grouped)
+    .map(([vendor, data]) => ({ vendor, ...data }))
+    .sort((a, b) => b.amount - a.amount);
+  const totalSpent = rows.reduce((sum, r) => sum + r.amount, 0);
+  const individualSorted = [...history].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5 max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="text-slate-100 font-semibold text-base truncate">{catalogItem.name}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200 shrink-0 ml-2">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <p className="text-xs text-slate-500 mb-4">
+          Purchase history by vendor{totalSpent > 0 ? ` · $${totalSpent.toFixed(2)} total` : ""}
+        </p>
+        <div className="flex-1 overflow-y-auto space-y-2">
+          {rows.length === 0 ? (
+            <p className="text-sm text-slate-500 text-center py-6">
+              No purchase history recorded yet — this fills in automatically as receipts linked
+              to this item get approved with a vendor and price on them.
+            </p>
+          ) : (
+            <>
+              {rows.map((r) => (
+                <div
+                  key={r.vendor}
+                  className="border border-slate-800 rounded-lg p-3 flex items-center justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm text-slate-100 truncate">
+                      {r.vendor}
+                      {catalogItem.vendor === r.vendor && (
+                        <span className="ml-1.5 text-[10px] rounded-full px-1.5 py-0.5 border bg-amber-500/15 text-amber-300 border-amber-500/40">
+                          Usual
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-xs text-slate-500">{r.qty} received</p>
+                  </div>
+                  <p className="text-sm font-semibold text-emerald-400 shrink-0">
+                    {r.amount > 0 ? `$${r.amount.toFixed(2)}` : "—"}
+                  </p>
+                </div>
+              ))}
+
+              <button
+                onClick={() => setShowIndividual((v) => !v)}
+                className="text-xs text-slate-500 hover:text-slate-300 pt-1"
+              >
+                {showIndividual ? "▲ Hide" : "▼ Show"} individual purchases ({history.length}) — for
+                removing duplicates or bad entries
+              </button>
+
+              {showIndividual && (
+                <div className="space-y-1.5 pt-1">
+                  {individualSorted.map((r) => (
+                    <div
+                      key={r.id}
+                      className="flex items-center justify-between gap-2 text-xs border border-slate-800 rounded-md px-2.5 py-2 bg-slate-900/60"
+                    >
+                      <span className="text-slate-300 truncate">
+                        {r.vendor} · {r.qty} · {r.date || "no date"}
+                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-emerald-400 font-medium">
+                          {r.amount > 0 ? `$${r.amount.toFixed(2)}` : "—"}
+                        </span>
+                        <button
+                          onClick={() => setDeleteRecordTarget(r)}
+                          className="text-slate-600 hover:text-red-400"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <button
+                onClick={() => setConfirmingClearAll(true)}
+                className="text-xs text-slate-600 hover:text-red-400 pt-2 block"
+              >
+                Clear all history for this item
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {deleteRecordTarget && (
+        <ConfirmDelete
+          title="Remove this purchase record?"
+          message={`${deleteRecordTarget.vendor} · ${deleteRecordTarget.qty} · ${
+            deleteRecordTarget.date || "no date"
+          } will be permanently removed from this item's history. This can't be undone.`}
+          onConfirm={() => {
+            deleteRecord(deleteRecordTarget.id);
+            setDeleteRecordTarget(null);
+          }}
+          onCancel={() => setDeleteRecordTarget(null)}
+        />
+      )}
+
+      {confirmingClearAll && (
+        <ConfirmDelete
+          title="Clear all history for this item?"
+          message="Every vendor purchase record for this catalog item is permanently removed, and its Usual Vendor resets until new receipts come in. This can't be undone."
+          onConfirm={() => {
+            clearAll();
+            setConfirmingClearAll(false);
+          }}
+          onCancel={() => setConfirmingClearAll(false)}
+        />
+      )}
+    </div>
+  );
+}
+export function PullFromReceivingModal({ targetType, targetLabel, target, onApplyToTarget, onClose }) {
+  const [queue, setQueue] = useState([]);
+  // Same fix as ReceivingApp's queueRef — keeps every mutation reading
+  // the truly latest state instead of whatever a given closure happened
+  // to capture, which is what was causing the debounced catalog-match
+  // update to silently revert the last character typed.
+  const queueRef = useRef([]);
+  const [catalog, setCatalog] = useState([]);
+  const [nameMemory, setNameMemory] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [selectedBatchId, setSelectedBatchId] = useState(null);
+  const [relinkingLine, setRelinkingLine] = useState(null);
+  const [catalogSearch, setCatalogSearch] = useState("");
+  const [confirmingApprove, setConfirmingApprove] = useState(false);
+  const [viewingPhoto, setViewingPhoto] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [qResult, cResult, nResult] = await Promise.all([
+          getWithRetry(RECEIVING_QUEUE_KEY),
+          getWithRetry(CATALOG_KEY),
+          getWithRetry(RECEIVING_NAME_MEMORY_KEY),
+        ]);
+        if (qResult.ok && qResult.value) {
+          const loaded = JSON.parse(qResult.value);
+          setQueue(loaded);
+          queueRef.current = loaded;
+        }
+        if (cResult.ok && cResult.value) setCatalog(JSON.parse(cResult.value));
+        if (nResult.ok && nResult.value) setNameMemory(JSON.parse(nResult.value));
+      } catch {}
+      setLoading(false);
+    })();
+  }, []);
+
+  // Local state updates immediately on every call (typing stays
+  // responsive, and queueRef.current is always the true latest for
+  // anything that reads it mid-typing, like approve()). The actual write
+  // to Supabase is debounced instead of firing per call — a name or
+  // quantity field calls this on every keystroke, and with no debounce,
+  // each keystroke fired its own independent save with no ordering
+  // guarantee; a slow connection could let an earlier, half-typed request
+  // land *after* the final one and silently overwrite it, so the value
+  // that actually persisted was a mid-typing snapshot, not what was last
+  // on screen. Waiting for a pause means exactly one save goes out, with
+  // whatever queueRef.current holds by then — always the final value.
+  const queueSaveTimer = useRef(null);
+  const saveQueue = (next) => {
+    queueRef.current = next;
+    setQueue(next);
+    if (queueSaveTimer.current) clearTimeout(queueSaveTimer.current);
+    queueSaveTimer.current = setTimeout(() => {
+      saveWithRetry(RECEIVING_QUEUE_KEY, JSON.stringify(queueRef.current)).catch(() => {});
+    }, 600);
+  };
+
+  const learnAlias = (catalogId, aliasText) => {
+    if (!catalogId || !aliasText || !aliasText.trim()) return;
+    setCatalog((prev) => {
+      const next = withLearnedAlias(prev, catalogId, aliasText);
+      if (next !== prev) saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
+  // Same vendor-spend logging as the standalone Receiving screen — see
+  // that one for the full explanation.
+  const recordVendorPurchases = (lines) => {
+    const eligible = lines.filter((l) => l.catalogId && l.vendor && l.vendor.trim() && l.shippedQty > 0);
+    if (eligible.length === 0) return;
+    setCatalog((prev) => {
+      const next = prev.map((c) => {
+        const linesForThis = eligible.filter((l) => l.catalogId === c.id);
+        if (linesForThis.length === 0) return c;
+        const newRecords = linesForThis.map((l) => ({
+          id: uniqueId(),
+          vendor: l.vendor.trim(),
+          qty: l.shippedQty,
+          amount: Math.round((l.unitPrice || 0) * l.shippedQty * 100) / 100,
+          date: l.receiptDate || new Date().toISOString().slice(0, 10),
+        }));
+        const updatedHistory = [...(c.vendorHistory || []), ...newRecords];
+        return { ...c, vendorHistory: updatedHistory, vendor: computeUsualVendor(updatedHistory) || c.vendor };
+      });
+      saveWithRetry(CATALOG_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
+  const pending = queue.filter((b) => b.status === "pending");
+  const selectedBatch = queue.find((b) => b.id === selectedBatchId) || null;
+
+  const updateSelectedBatch = (changes) => {
+    // Looked up fresh from queueRef rather than closing over the
+    // `selectedBatch` derived value — same fix as ReceivingApp's
+    // updateBatch, and for the same reason: a debounced callback can
+    // hold onto a closure from before the most recent keystroke landed.
+    const current = queueRef.current.find((b) => b.id === selectedBatchId);
+    if (!current) return;
+    const updated = { ...current, ...changes };
+    saveQueue(queueRef.current.map((b) => (b.id === updated.id ? updated : b)));
+  };
+  const updateLine = (lineId, changes) => {
+    const current = queueRef.current.find((b) => b.id === selectedBatchId);
+    if (!current) return;
+    updateSelectedBatch({
+      lines: current.lines.map((l) => (l.id === lineId ? { ...l, ...changes } : l)),
+    });
+  };
+
+  // Catalog matching waits for a pause in typing instead of re-checking on
+  // every keystroke — matching off just the first letter or two almost
+  // never finds the right thing, and locking onto that first guess made
+  // it impossible to ever find a better one later. Each pause re-evaluates
+  // fresh against the *current* full text, and only ever touches an
+  // auto-found link — a deliberate pick from the catalog picker
+  // (catalogLinkedManually) is never silently replaced or cleared.
+  const nameDebounceTimers = useRef({});
+
+  const handleNameChange = (lineId, newName) => {
+    updateLine(lineId, { name: newName });
+    if (nameDebounceTimers.current[lineId]) clearTimeout(nameDebounceTimers.current[lineId]);
+    nameDebounceTimers.current[lineId] = setTimeout(() => {
+      const currentBatch = queueRef.current.find((b) => b.id === selectedBatchId);
+      const currentLine = currentBatch && currentBatch.lines.find((l) => l.id === lineId);
+      if (!currentLine || currentLine.catalogLinkedManually) return;
+      const found = findCatalogMatch(currentLine.name, catalog);
+      if (found && found.id !== currentLine.catalogId) {
+        updateLine(lineId, { catalogId: found.id });
+      } else if (!found && currentLine.catalogId) {
+        updateLine(lineId, { catalogId: null });
+      }
+    }, 900);
+  };
+
+  const removeLine = (lineId) => {
+    updateSelectedBatch({ lines: selectedBatch.lines.filter((l) => l.id !== lineId) });
+  };
+  const cloneLine = (lineId) => {
+    const idx = selectedBatch.lines.findIndex((l) => l.id === lineId);
+    if (idx === -1) return;
+    const clone = { ...selectedBatch.lines[idx], id: uniqueId() };
+    const nextLines = [
+      ...selectedBatch.lines.slice(0, idx + 1),
+      clone,
+      ...selectedBatch.lines.slice(idx + 1),
+    ];
+    updateSelectedBatch({ lines: nextLines });
+  };
+
+  // Only lines nobody's already claimed for a different job/list, and
+  // that haven't already been processed, show up here — this is a
+  // claiming action scoped to whatever job/list you opened this from,
+  // not a takeover of the whole receipt.
+  const availableLines = selectedBatch ? selectedBatch.lines.filter((l) => !l.targetId && !l.approved) : [];
+
+  const approve = () => {
+    const validLines = availableLines.filter((l) => l.name.trim());
+    recordVendorPurchases(validLines);
+    let updatedTarget = target;
+    validLines.forEach((line) => {
+      updatedTarget =
+        targetType === "job"
+          ? applyReceiptLineToJob(updatedTarget, line, catalog, selectedBatch)
+          : applyReceiptLineToLoveList(updatedTarget, line, catalog, selectedBatch);
+    });
+    if (validLines.length > 0) {
+      updatedTarget =
+        targetType === "job"
+          ? attachReceiptPhotoToJob(updatedTarget, selectedBatch)
+          : attachReceiptPhotoToLoveList(updatedTarget, selectedBatch);
+    }
+    onApplyToTarget(updatedTarget);
+
+    const nextMemory = { ...nameMemory };
+    validLines.forEach((line) => {
+      if (line.rawName) nextMemory[normalizeText(line.rawName)] = line.name.trim();
+    });
+    saveWithRetry(RECEIVING_NAME_MEMORY_KEY, JSON.stringify(nextMemory)).catch(() => {});
+
+    playSaveChime();
+    // Claimed lines stay on the batch, marked done with exactly which
+    // target claimed them — an approved receipt keeps its real contents
+    // on record this way, instead of the claimed lines just vanishing.
+    const updatedLines = selectedBatch.lines.map((l) =>
+      validLines.includes(l) ? { ...l, targetType, targetId: target.id, approved: true } : l
+    );
+    const stillPending = updatedLines.some((l) => l.name.trim() && !l.approved);
+    const updatedBatch = stillPending
+      ? { ...selectedBatch, lines: updatedLines }
+      : { ...selectedBatch, lines: updatedLines, status: "approved", approvedAt: new Date().toISOString() };
+    saveQueue(queueRef.current.map((b) => (b.id === selectedBatch.id ? updatedBatch : b)));
+    setConfirmingApprove(false);
+    onClose();
+  };
+
+  if (loading) {
+    return (
+      <div className="fixed inset-0 z-[70] bg-black/70 flex items-center justify-center">
+        <div className="w-4 h-4 border-2 border-slate-700 border-t-amber-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  // Step 1 — pick which pending receipt this is
+  if (!selectedBatch) {
+    return (
+      <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4 py-8">
+        <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+            <h2 className="text-slate-100 font-semibold text-base">Pull from Receiving</h2>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            {pending.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-8">
+                Nothing waiting in Receiving right now.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {pending.map((b) => (
+                  <button
+                    key={b.id}
+                    onClick={() => setSelectedBatchId(b.id)}
+                    className="w-full text-left bg-slate-800/40 border border-slate-800 rounded-lg p-3 hover:border-slate-700 flex items-center gap-3"
+                  >
+                    {b.photoUrl && (
+                      <img src={b.photoUrl} alt="" className="w-11 h-11 rounded-md object-cover border border-slate-800 shrink-0" />
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-sm text-slate-100 truncate">
+                        {b.label ? b.label : `${b.lines.length} item${b.lines.length === 1 ? "" : "s"} scanned`}
+                      </p>
+                      <p className="text-xs text-slate-500">{formatTaskTimestamp(b.scannedAt)}</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Step 2 — edit lines, then approve straight into this job/list
+  return (
+    <div className="fixed inset-0 z-[70] bg-slate-950 text-slate-100 overflow-y-auto">
+      <header className="border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 bg-slate-950/90 backdrop-blur z-10">
+        <button
+          onClick={() => setSelectedBatchId(null)}
+          className="text-slate-400 hover:text-slate-200 flex items-center gap-1.5"
+        >
+          <ChevronLeft className="w-5 h-5" />
+          <span className="text-sm">Back</span>
+        </button>
+        <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+          <X className="w-5 h-5" />
+        </button>
+      </header>
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        <p className="text-xs text-slate-500 mb-4">
+          Adding to <span className="text-slate-300">{targetLabel}</span> — nothing's added
+          until you approve below.
+        </p>
+        {selectedBatch.photoUrl && (
+          <button
+            onClick={() => setViewingPhoto(selectedBatch.photoUrl)}
+            className="w-full mb-4 rounded-lg overflow-hidden border border-slate-800"
+          >
+            <img src={selectedBatch.photoUrl} alt="Receipt" className="w-full max-h-48 object-cover" />
+          </button>
+        )}
+        <div className="space-y-2 mb-6">
+          {availableLines.map((line) => {
+            const match = line.catalogId ? catalog.find((c) => c.id === line.catalogId) : null;
+            return (
+              <div key={line.id} className="border border-slate-800 rounded-lg p-2.5 bg-slate-900/60">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <input
+                    value={line.name}
+                    onChange={(e) => handleNameChange(line.id, e.target.value)}
+                    className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+                  />
+                  <button
+                    onClick={() => cloneLine(line.id)}
+                    title="Clone this line"
+                    className="text-slate-500 hover:text-amber-400 shrink-0 p-1"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => removeLine(line.id)}
+                    className="text-slate-500 hover:text-red-400 shrink-0 p-1"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <div className="flex-1">
+                    <label className="block text-[10px] text-slate-500 mb-0.5">Shipped</label>
+                    <input
+                      type="number"
+                      min="0"
+                      onFocus={selectOnFocus}
+                      onClick={selectOnFocus}
+                      value={line.shippedQty}
+                      onChange={(e) => updateLine(line.id, { shippedQty: Number(e.target.value) || 0 })}
+                      className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-emerald-500/60"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-[10px] text-slate-500 mb-0.5">Backorder</label>
+                    <input
+                      type="number"
+                      min="0"
+                      onFocus={selectOnFocus}
+                      onClick={selectOnFocus}
+                      value={line.backorderQty}
+                      onChange={(e) => updateLine(line.id, { backorderQty: Number(e.target.value) || 0 })}
+                      className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-red-500/60"
+                    />
+                  </div>
+                </div>
+                {match ? (
+                  <button
+                    onClick={() => {
+                      setRelinkingLine(line);
+                      setCatalogSearch("");
+                    }}
+                    className="text-[11px] text-emerald-400 hover:underline decoration-dotted"
+                  >
+                    🔗 linked to "{match.name}" · Change
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setRelinkingLine(line);
+                      setCatalogSearch("");
+                    }}
+                    className="text-[11px] text-slate-500 hover:text-slate-300 hover:underline decoration-dotted"
+                  >
+                    No catalog match — 🔍 link manually
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </main>
+
+      <div className="sticky bottom-0 bg-slate-950/95 backdrop-blur border-t border-slate-800 px-4 py-4">
+        <div className="max-w-2xl mx-auto">
+          <button
+            onClick={() => setConfirmingApprove(true)}
+            disabled={!availableLines.some((l) => l.name.trim())}
+            className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-40"
+          >
+            Approve &amp; add to {targetLabel}
+          </button>
+        </div>
+      </div>
+
+      {relinkingLine && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 px-4 py-8">
+          <div className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg max-h-full flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+              <h3 className="text-slate-100 font-semibold text-sm truncate">
+                Link "{relinkingLine.name}" to...
+              </h3>
+              <button
+                onClick={() => {
+                  setRelinkingLine(null);
+                  setCatalogSearch("");
+                }}
+                className="text-slate-400 hover:text-slate-200 shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-5 pt-4 shrink-0">
+              <input
+                autoFocus
+                value={catalogSearch}
+                onChange={(e) => setCatalogSearch(e.target.value)}
+                placeholder="Search catalog..."
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+              />
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {relinkingLine.catalogId && (
+                <button
+                  onClick={() => {
+                    updateLine(relinkingLine.id, { catalogId: null, catalogLinkedManually: false });
+                    setRelinkingLine(null);
+                    setCatalogSearch("");
+                  }}
+                  className="w-full text-left text-sm rounded-md px-3 py-2 border border-red-800/40 text-red-400 hover:bg-red-500/10 mb-2"
+                >
+                  Unlink from catalog
+                </button>
+              )}
+              {catalog
+                .filter((c) => c.name.toLowerCase().includes(catalogSearch.trim().toLowerCase()))
+                .slice(0, 50)
+                .map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => {
+                      updateLine(relinkingLine.id, { catalogId: c.id, catalogLinkedManually: true });
+                      learnAlias(c.id, relinkingLine.rawName);
+                      setRelinkingLine(null);
+                      setCatalogSearch("");
+                    }}
+                    className="w-full text-left text-sm rounded-md px-3 py-2 border border-slate-800 hover:border-slate-700 mb-1.5"
+                  >
+                    <p className="text-slate-100">{c.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {c.storage}
+                      {c.needsTransfer ? " · 🚚 needs transfer" : ""}
+                    </p>
+                  </button>
+                ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {viewingPhoto && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
+          onClick={() => setViewingPhoto(null)}
+        >
+          <button
+            onClick={() => setViewingPhoto(null)}
+            className="absolute top-4 right-4 text-slate-300 hover:text-white"
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <ZoomableImage key={viewingPhoto} src={viewingPhoto} alt="Receipt" />
+        </div>
+      )}
+
+      {confirmingApprove && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-1.5">Approve this receipt?</h3>
+            <p className="text-slate-400 text-sm mb-5">
+              {availableLines.filter((l) => l.name.trim()).length} item(s) will be added to{" "}
+              {targetLabel}. Review carefully — this writes real inventory changes.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmingApprove(false)}
+                className="flex-1 text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={approve}
+                className="flex-1 text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Approve
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
