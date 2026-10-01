@@ -177,6 +177,8 @@ import {
   LOVE_STATUSES,
   nextLoveStatus,
   prevLoveStatus,
+  stepLoveItemStatus,
+  walkLoveItemToStatus,
   loveStatusMeta,
   loveItemDisplayMeta,
   listDisplayLabel,
@@ -16267,6 +16269,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [nicknameDraft, setNicknameDraft] = useState("");
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
+  const [statusPicking, setStatusPicking] = useState(false);
   const [assigningItem, setAssigningItem] = useState(null); // single item, or "bulk"
   const [editingSmeFor, setEditingSmeFor] = useState(null); // item, while editing its SME#s
   const [clearBatchesTarget, setClearBatchesTarget] = useState(null); // item, while confirming a batch history reset
@@ -16705,142 +16708,28 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
     setCatalogSearch("");
   };
 
+  // stepLoveItemStatus/walkLoveItemToStatus live in lib/lovelists.js (pure,
+  // independently unit-tested) — these are just the thin, app-wired
+  // callers.
   const advanceStatus = (itemId, direction) => {
     if (!isEditor) return;
     playSoftTap();
     onUpdateList({
       ...list,
-      items: list.items.map((i) => {
-        if (i.id !== itemId) return i;
-        const newStatus = direction === "forward" ? nextLoveStatus(i) : prevLoveStatus(i);
-        if (!newStatus) return i;
-        const today = new Date().toISOString().slice(0, 10);
-
-        if (newStatus === "ordered" && direction === "forward") {
-          // Defaults to the full requested amount — if only part of it
-          // actually got ordered, that's set afterward via the "Ordered:
-          // X of Y" tap-to-edit control rather than asked for right here,
-          // so tapping forward for the common full-order case still Just
-          // Works with no extra step. A value already set beforehand
-          // (edited before ever advancing) is respected as-is, same idea
-          // as Received's effectiveHave below.
-          return {
-            ...i,
-            status: newStatus,
-            statusDates: { ...i.statusDates, ordered: today },
-            qtyOrdered: i.qtyOrdered != null ? i.qtyOrdered : i.qty,
-          };
-        }
-
-        if (newStatus === "sent" && direction === "forward") {
-          // Every prior batch is a locked, historical record — figure out
-          // what's actually NEW since the last one, so the same SME#
-          // never gets recorded (and shows on a transfer list) twice.
-          // This is what actually prevents double-transferring: once a
-          // number's in a batch, it stays there permanently, even if the
-          // item's live serials list later gets edited or cleared.
-          const priorBatches = i.sentBatches || [];
-          const priorSentQty = priorBatches.reduce((sum, b) => sum + b.sentQty, 0);
-          const priorSerials = new Set(priorBatches.flatMap((b) => b.serials || []));
-          const deltaQty = Math.max(0, (i.qtyHave || 0) - priorSentQty);
-          const deltaSerials = (i.serials || []).filter((s) => !priorSerials.has(s));
-          // Nothing actually new since the last batch — e.g. tapping
-          // forward again after already recording this delivery, or
-          // toggling back and forth without the quantity changing. Don't
-          // stamp a fresh empty entry just because the button got tapped.
-          const hasNewContent = deltaQty > 0 || deltaSerials.length > 0;
-          const sentBatches = hasNewContent
-            ? [...priorBatches, { sentQty: deltaQty, serials: deltaSerials, timestamp: new Date().toISOString() }]
-            : priorBatches;
-
-          if (i.qtyHave < i.qty) {
-            // Still short overall — lock this batch in, but keep the
-            // stepper active so the remainder can keep moving.
-            return { ...i, sentBatches };
-          }
-          // Fully caught up now — lock the final batch and actually
-          // complete the status for real.
-          return {
-            ...i,
-            status: newStatus,
-            statusDates: { ...i.statusDates, [newStatus]: today },
-            sentBatches,
-          };
-        }
-
-        if (newStatus === "received" && direction === "forward") {
-          // Nothing marked in-hand yet — assume the whole order showed up,
-          // since that's the common case and this saves a manual "bump Have
-          // to match Qty" step every time. If a partial amount's already
-          // sitting there (someone logged some SME#s, or set Have by hand),
-          // that's respected instead of getting clobbered.
-          const effectiveHave = (i.qtyHave || 0) > 0 ? i.qtyHave : i.qty;
-
-          // Same idea as Sent — supplier deliveries often trickle in
-          // partial, and each delivery deserves its own locked, permanent
-          // record of exactly how much showed up and when, rather than
-          // one number that keeps getting silently overwritten.
-          const priorBatches = i.receivedBatches || [];
-          const priorReceivedQty = priorBatches.reduce((sum, b) => sum + b.receivedQty, 0);
-          const priorSerials = new Set(priorBatches.flatMap((b) => b.serials || []));
-          const deltaQty = Math.max(0, effectiveHave - priorReceivedQty);
-          const deltaSerials = (i.serials || []).filter((s) => !priorSerials.has(s));
-          const hasNewContent = deltaQty > 0 || deltaSerials.length > 0;
-          const receivedBatches = hasNewContent
-            ? [...priorBatches, { receivedQty: deltaQty, serials: deltaSerials, timestamp: new Date().toISOString() }]
-            : priorBatches;
-
-          // Unlike Sent (the final stage), Received sits in the middle of
-          // the pipeline — staying "stuck" here would block moving a
-          // partial delivery on to Staged/Sent, which genuinely happens
-          // (shipping partial amounts to the job before the rest of the
-          // order arrives). So this always actually advances the status;
-          // the batch history is what keeps an honest record of exactly
-          // how much showed up and when, without blocking progress.
-          return {
-            ...i,
-            status: newStatus,
-            statusDates: { ...i.statusDates, [newStatus]: today },
-            qtyHave: effectiveHave,
-            receivedBatches,
-          };
-        }
-
-        if (newStatus === "staged" && direction === "forward") {
-          // Same idea as Received — items often get physically staged as
-          // they become ready, before the rest of the order has shown up.
-          const priorBatches = i.stagedBatches || [];
-          const priorStagedQty = priorBatches.reduce((sum, b) => sum + b.stagedQty, 0);
-          const priorSerials = new Set(priorBatches.flatMap((b) => b.serials || []));
-          const deltaQty = Math.max(0, (i.qtyHave || 0) - priorStagedQty);
-          const deltaSerials = (i.serials || []).filter((s) => !priorSerials.has(s));
-          const hasNewContent = deltaQty > 0 || deltaSerials.length > 0;
-          const stagedBatches = hasNewContent
-            ? [...priorBatches, { stagedQty: deltaQty, serials: deltaSerials, timestamp: new Date().toISOString() }]
-            : priorBatches;
-
-          // Staged sits in the middle of the pipeline too — blocking here
-          // would stop a partial staging batch from moving on toward
-          // Sent, so this always actually advances the status the same
-          // way Received does.
-          return {
-            ...i,
-            status: newStatus,
-            statusDates: { ...i.statusDates, [newStatus]: today },
-            stagedBatches,
-          };
-        }
-
-        return {
-          ...i,
-          status: newStatus,
-          statusDates: {
-            ...i.statusDates,
-            [newStatus]: direction === "forward" ? today : i.statusDates[newStatus],
-          },
-        };
-      }),
+      items: list.items.map((i) => (i.id === itemId ? stepLoveItemStatus(i, direction) : i)),
     });
+  };
+
+  const bulkChangeStatus = (targetKey) => {
+    if (!isEditor) return;
+    onUpdateList({
+      ...list,
+      items: list.items.map((i) => (selectedIds.has(i.id) ? walkLoveItemToStatus(i, targetKey) : i)),
+    });
+    playSoftTap();
+    setStatusPicking(false);
+    setSelectMode(false);
+    setSelectedIds(new Set());
   };
 
   const addItem = (item) => {
@@ -17129,6 +17018,13 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
                 >
                   <ShoppingCart className="w-3.5 h-3.5" />
                   Mark as Ordered
+                </button>
+                <button
+                  onClick={() => setStatusPicking(true)}
+                  className="text-xs flex items-center gap-1 bg-sky-500 text-slate-950 font-semibold rounded-md px-2.5 py-1.5 hover:bg-sky-400"
+                >
+                  <ListChecks className="w-3.5 h-3.5" />
+                  Change status...
                 </button>
                 <button
                   onClick={() => setAssigningItem("bulk")}
@@ -17747,6 +17643,43 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
           onConfirm={() => onDeleteList(list.id)}
           onCancel={() => setDeleteListConfirm(false)}
         />
+      )}
+
+      {statusPicking && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+          onClick={() => setStatusPicking(false)}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-slate-100 font-semibold mb-1">
+              Set status for {selectedIds.size} item{selectedIds.size === 1 ? "" : "s"}
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Each item moves there the same way the arrows do — an item that's short of its
+              full qty may not be able to reach Sent yet, and in-stock items skip Ordered.
+            </p>
+            <div className="flex flex-wrap gap-1.5 mb-4">
+              {LOVE_STATUSES.map((s) => (
+                <button
+                  key={s.key}
+                  onClick={() => bulkChangeStatus(s.key)}
+                  className={`text-xs rounded-full px-3 py-1.5 border ${s.color} hover:brightness-125`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setStatusPicking(false)}
+              className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
 
       {showTransferList && (

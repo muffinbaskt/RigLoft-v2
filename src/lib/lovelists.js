@@ -31,6 +31,165 @@ export const prevLoveStatus = (item) => {
 };
 export const loveStatusMeta = (key) => LOVE_STATUSES.find((s) => s.key === key) || LOVE_STATUSES[0];
 
+// Steps one Love List item exactly one status forward/backward — shared by
+// the per-item arrows and the bulk status-change picker in App.jsx. Carries
+// every side effect (qtyOrdered default, shipped/received/staged batch
+// history, qtyHave sync) tapping the arrow button already relies on.
+// Returns the exact same item reference when there's nowhere to go, or
+// (Sent specifically) when a partial batch gets recorded but the status
+// itself can't actually complete until the full qty's caught up.
+export function stepLoveItemStatus(i, direction) {
+  const newStatus = direction === "forward" ? nextLoveStatus(i) : prevLoveStatus(i);
+  if (!newStatus) return i;
+  const today = new Date().toISOString().slice(0, 10);
+
+  if (newStatus === "ordered" && direction === "forward") {
+    // Defaults to the full requested amount — if only part of it actually
+    // got ordered, that's set afterward via the "Ordered: X of Y"
+    // tap-to-edit control rather than asked for right here, so tapping
+    // forward for the common full-order case still Just Works with no
+    // extra step. A value already set beforehand (edited before ever
+    // advancing) is respected as-is, same idea as Received's
+    // effectiveHave below.
+    return {
+      ...i,
+      status: newStatus,
+      statusDates: { ...i.statusDates, ordered: today },
+      qtyOrdered: i.qtyOrdered != null ? i.qtyOrdered : i.qty,
+    };
+  }
+
+  if (newStatus === "sent" && direction === "forward") {
+    // Every prior batch is a locked, historical record — figure out
+    // what's actually NEW since the last one, so the same SME# never
+    // gets recorded (and shows on a transfer list) twice. This is what
+    // actually prevents double-transferring: once a number's in a
+    // batch, it stays there permanently, even if the item's live
+    // serials list later gets edited or cleared.
+    const priorBatches = i.sentBatches || [];
+    const priorSentQty = priorBatches.reduce((sum, b) => sum + b.sentQty, 0);
+    const priorSerials = new Set(priorBatches.flatMap((b) => b.serials || []));
+    const deltaQty = Math.max(0, (i.qtyHave || 0) - priorSentQty);
+    const deltaSerials = (i.serials || []).filter((s) => !priorSerials.has(s));
+    // Nothing actually new since the last batch — e.g. tapping forward
+    // again after already recording this delivery, or toggling back and
+    // forth without the quantity changing. Don't stamp a fresh empty
+    // entry just because the button got tapped.
+    const hasNewContent = deltaQty > 0 || deltaSerials.length > 0;
+    const sentBatches = hasNewContent
+      ? [...priorBatches, { sentQty: deltaQty, serials: deltaSerials, timestamp: new Date().toISOString() }]
+      : priorBatches;
+
+    if (i.qtyHave < i.qty) {
+      // Still short overall — lock this batch in, but keep the stepper
+      // active so the remainder can keep moving.
+      return { ...i, sentBatches };
+    }
+    // Fully caught up now — lock the final batch and actually complete
+    // the status for real.
+    return {
+      ...i,
+      status: newStatus,
+      statusDates: { ...i.statusDates, [newStatus]: today },
+      sentBatches,
+    };
+  }
+
+  if (newStatus === "received" && direction === "forward") {
+    // Nothing marked in-hand yet — assume the whole order showed up,
+    // since that's the common case and this saves a manual "bump Have
+    // to match Qty" step every time. If a partial amount's already
+    // sitting there (someone logged some SME#s, or set Have by hand),
+    // that's respected instead of getting clobbered.
+    const effectiveHave = (i.qtyHave || 0) > 0 ? i.qtyHave : i.qty;
+
+    // Same idea as Sent — supplier deliveries often trickle in partial,
+    // and each delivery deserves its own locked, permanent record of
+    // exactly how much showed up and when, rather than one number that
+    // keeps getting silently overwritten.
+    const priorBatches = i.receivedBatches || [];
+    const priorReceivedQty = priorBatches.reduce((sum, b) => sum + b.receivedQty, 0);
+    const priorSerials = new Set(priorBatches.flatMap((b) => b.serials || []));
+    const deltaQty = Math.max(0, effectiveHave - priorReceivedQty);
+    const deltaSerials = (i.serials || []).filter((s) => !priorSerials.has(s));
+    const hasNewContent = deltaQty > 0 || deltaSerials.length > 0;
+    const receivedBatches = hasNewContent
+      ? [...priorBatches, { receivedQty: deltaQty, serials: deltaSerials, timestamp: new Date().toISOString() }]
+      : priorBatches;
+
+    // Unlike Sent (the final stage), Received sits in the middle of the
+    // pipeline — staying "stuck" here would block moving a partial
+    // delivery on to Staged/Sent, which genuinely happens (shipping
+    // partial amounts to the job before the rest of the order
+    // arrives). So this always actually advances the status; the batch
+    // history is what keeps an honest record of exactly how much
+    // showed up and when, without blocking progress.
+    return {
+      ...i,
+      status: newStatus,
+      statusDates: { ...i.statusDates, [newStatus]: today },
+      qtyHave: effectiveHave,
+      receivedBatches,
+    };
+  }
+
+  if (newStatus === "staged" && direction === "forward") {
+    // Same idea as Received — items often get physically staged as
+    // they become ready, before the rest of the order has shown up.
+    const priorBatches = i.stagedBatches || [];
+    const priorStagedQty = priorBatches.reduce((sum, b) => sum + b.stagedQty, 0);
+    const priorSerials = new Set(priorBatches.flatMap((b) => b.serials || []));
+    const deltaQty = Math.max(0, (i.qtyHave || 0) - priorStagedQty);
+    const deltaSerials = (i.serials || []).filter((s) => !priorSerials.has(s));
+    const hasNewContent = deltaQty > 0 || deltaSerials.length > 0;
+    const stagedBatches = hasNewContent
+      ? [...priorBatches, { stagedQty: deltaQty, serials: deltaSerials, timestamp: new Date().toISOString() }]
+      : priorBatches;
+
+    // Staged sits in the middle of the pipeline too — blocking here
+    // would stop a partial staging batch from moving on toward Sent, so
+    // this always actually advances the status the same way Received
+    // does.
+    return {
+      ...i,
+      status: newStatus,
+      statusDates: { ...i.statusDates, [newStatus]: today },
+      stagedBatches,
+    };
+  }
+
+  return {
+    ...i,
+    status: newStatus,
+    statusDates: {
+      ...i.statusDates,
+      [newStatus]: direction === "forward" ? today : i.statusDates[newStatus],
+    },
+  };
+}
+
+// Walks one item toward targetKey, one status step at a time, reusing
+// stepLoveItemStatus so a bulk status change does everything tapping the
+// arrow N times would — not a blind overwrite that could leave qty
+// tracking silently out of sync. Capped at one pass per possible status so
+// an item that genuinely can't reach the target yet (short of its full
+// qty, so Sent won't complete — see stepLoveItemStatus) can never loop
+// forever; it just goes as far as it honestly can and stops. Skips
+// in-stock items entirely when the target is "ordered", since they never
+// pass through that status by design (same guard the single-item arrows
+// get for free from nextLoveStatus/prevLoveStatus).
+export function walkLoveItemToStatus(item, targetKey) {
+  if (targetKey === "ordered" && item.needsOrdering === false) return item;
+  const order = LOVE_STATUSES.map((s) => s.key);
+  const targetIdx = order.indexOf(targetKey);
+  let current = item;
+  for (let step = 0; step < LOVE_STATUSES.length && current.status !== targetKey; step++) {
+    const direction = order.indexOf(current.status) < targetIdx ? "forward" : "backward";
+    current = stepLoveItemStatus(current, direction);
+  }
+  return current;
+}
+
 // The plain status label ("Staged to send") is only accurate when the
 // whole quantity is in that state together. Once some of it has actually
 // shipped (locked into sentBatches) but the item's still short of the
