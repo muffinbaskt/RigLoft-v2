@@ -98,4 +98,41 @@ describe("ReceivingApp", () => {
     fireEvent.click(container.querySelector("header button"));
     expect(onGoHome).toHaveBeenCalled();
   });
+
+  it("history search matches vendor, PO#, and order #, not just the label/items", async () => {
+    // Different line counts so the resulting "N items" text itself proves
+    // which batch survived the filter, without needing any label.
+    const approved1 = {
+      ...pendingBatch,
+      id: 2,
+      status: "approved",
+      label: "",
+      lines: [{ id: 10, name: "Gloves", rawName: "gloves" }],
+      vendor: "Industrial Supply",
+      approvedAt: "2026-09-02T00:00:00.000Z",
+    };
+    const approved2 = {
+      ...pendingBatch,
+      id: 3,
+      status: "approved",
+      label: "",
+      lines: [{ id: 11, name: "Hammers", rawName: "hammers" }, { id: 12, name: "Nails", rawName: "nails" }],
+      poNumber: "1112-2998-1234",
+      approvedAt: "2026-09-02T00:00:00.000Z",
+    };
+    mockData({ queue: [approved1, approved2] });
+    render(<ReceivingApp onGoHome={() => {}} isOwner />);
+
+    fireEvent.click(await screen.findByText(/History/));
+    expect(await screen.findByText(/1 item ·/)).toBeInTheDocument();
+    expect(screen.getByText(/2 items ·/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Search history — item, vendor, PO#, reference..."), {
+      target: { value: "1112-2998" },
+    });
+
+    // Only the PO#-matching batch (2 items) should remain.
+    expect(screen.getByText(/2 items ·/)).toBeInTheDocument();
+    expect(screen.queryByText(/1 item ·/)).not.toBeInTheDocument();
+  });
 });

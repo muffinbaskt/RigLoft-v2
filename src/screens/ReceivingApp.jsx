@@ -889,7 +889,11 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
     .filter((b) => {
       const q = historySearch.trim().toLowerCase();
       if (!q) return true;
-      const haystack = [b.label, ...b.lines.map((l) => l.name)]
+      // The placeholder promises "item, vendor, PO#, reference" — vendor,
+      // poNumber, and orderNumber were missing entirely, so a search for
+      // any of those silently matched nothing even though the field was
+      // sitting right there on the batch.
+      const haystack = [b.label, b.vendor, b.poNumber, b.orderNumber, ...b.lines.map((l) => l.name)]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
@@ -1115,6 +1119,7 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
                   )}
                   <p className="text-xs text-slate-500">
                     {formatTaskTimestamp(b.scannedAt)}
+                    {b.poNumber && ` · PO#${b.poNumber}`}
                     {b.totalPages > 1 && ` · Page ${b.pageNumber} of ${b.totalPages}`}
                     {b.totalPages > 1 && (b.orderNumber ? ` · Order #${b.orderNumber}` : " · no order # found")}
                   </p>
@@ -1183,7 +1188,10 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
                         {b.status === "approved" ? "Approved" : "Discarded"}
                       </span>
                     </p>
-                    <p className="text-xs text-slate-500">{formatTaskTimestamp(b.approvedAt || b.scannedAt)}</p>
+                    <p className="text-xs text-slate-500">
+                      {formatTaskTimestamp(b.approvedAt || b.scannedAt)}
+                      {b.poNumber && ` · PO#${b.poNumber}`}
+                    </p>
                   </div>
                   <span
                     onClick={(e) => {
@@ -1470,6 +1478,10 @@ export function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPending
               </div>
             )}
           </div>
+        )}
+
+        {batch.poNumber && (
+          <p className="text-xs text-slate-500 text-center mb-4">PO#{batch.poNumber}</p>
         )}
 
         <button

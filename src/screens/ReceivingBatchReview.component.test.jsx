@@ -68,4 +68,14 @@ describe("ReceivingBatchReview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(onDiscard).toHaveBeenCalledWith(batch);
   });
+
+  it("shows the PO# when the batch has one", () => {
+    render(<ReceivingBatchReview {...baseProps({ batch: { ...batch, poNumber: "1112-2998-1234" } })} />);
+    expect(screen.getByText("PO#1112-2998-1234")).toBeInTheDocument();
+  });
+
+  it("shows nothing PO-related when the batch has no PO#", () => {
+    render(<ReceivingBatchReview {...baseProps()} />);
+    expect(screen.queryByText(/^PO#/)).not.toBeInTheDocument();
+  });
 });
