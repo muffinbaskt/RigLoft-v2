@@ -3,6 +3,7 @@ import {
   X,
   Archive,
   Camera,
+  CheckSquare,
   ChevronLeft,
   Download,
   History,
@@ -11,6 +12,7 @@ import {
   Plus,
   RotateCcw,
   Search,
+  Square,
   Trash2,
   Upload,
   Wrench,
@@ -55,6 +57,9 @@ export function ToolsApp({ onGoHome, isOwner }) {
   const [managingTransferTags, setManagingTransferTags] = useState(false);
   const [importingSerials, setImportingSerials] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [bulkStatusPicking, setBulkStatusPicking] = useState(false);
   const toolsRef = useRef([]);
 
   useEffect(() => {
@@ -103,6 +108,33 @@ export function ToolsApp({ onGoHome, isOwner }) {
 
   const deleteTool = (id) => {
     saveTools(toolsRef.current.filter((t) => t.id !== id));
+  };
+
+  const toggleSelected = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const bulkChangeStatus = (newStatus) => {
+    const label = TOOL_STATUSES[newStatus]?.label || newStatus;
+    saveTools(
+      toolsRef.current.map((t) =>
+        selectedIds.has(t.id) && t.status !== newStatus
+          ? logToolEvent({ ...t, status: newStatus }, "status_change", `Status changed to "${label}" (bulk update)`)
+          : t
+      )
+    );
+    setBulkStatusPicking(false);
+    exitSelectMode();
   };
 
   const searchLower = search.trim().toLowerCase();
@@ -194,6 +226,17 @@ export function ToolsApp({ onGoHome, isOwner }) {
         </div>
         <div className="w-full sm:w-auto flex items-center gap-2 flex-wrap">
           <button
+            onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+            className={`flex items-center gap-1.5 text-sm rounded-md px-3 py-2 border ${
+              selectMode
+                ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
+                : "border-slate-700 text-slate-300 hover:bg-slate-800"
+            }`}
+          >
+            <CheckSquare className="w-4 h-4" />
+            {selectMode ? "Cancel" : "Select"}
+          </button>
+          <button
             onClick={() => setImportingSerials(true)}
             className="flex items-center gap-1.5 text-sm rounded-md px-3 py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
           >
@@ -262,6 +305,22 @@ export function ToolsApp({ onGoHome, isOwner }) {
           })}
         </div>
 
+        {selectMode && filtered.length > 0 && (
+          <div className="flex items-center justify-between mb-3 text-xs">
+            <button
+              onClick={() =>
+                setSelectedIds((prev) =>
+                  filtered.every((t) => prev.has(t.id)) ? new Set() : new Set(filtered.map((t) => t.id))
+                )
+              }
+              className="text-slate-400 hover:text-slate-200 underline underline-offset-2"
+            >
+              {filtered.every((t) => selectedIds.has(t.id)) ? "Deselect all" : `Select all ${filtered.length}`}
+            </button>
+            <span className="text-slate-500">{selectedIds.size} selected</span>
+          </div>
+        )}
+
         {filtered.length === 0 ? (
           <p className="text-sm text-slate-500 text-center py-12">
             {tools.length === 0
@@ -273,30 +332,88 @@ export function ToolsApp({ onGoHome, isOwner }) {
             {filtered.map((tool) => (
               <button
                 key={tool.id}
-                onClick={() => setViewingToolId(tool.id)}
-                className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700 flex items-center justify-between gap-3"
+                onClick={() => (selectMode ? toggleSelected(tool.id) : setViewingToolId(tool.id))}
+                className={`w-full text-left bg-slate-900 border rounded-lg p-3 hover:border-slate-700 flex items-center gap-3 ${
+                  selectMode && selectedIds.has(tool.id) ? "border-amber-500/60 bg-amber-500/5" : "border-slate-800"
+                }`}
               >
-                <div className="min-w-0">
-                  <p className="text-sm text-slate-100 truncate">
-                    {tool.name || "Unnamed tool"}
-                  </p>
-                  <p className="text-xs text-slate-500 font-mono">
-                    {tool.sme ? `SME# ${tool.sme}` : "No SME# yet"}
-                    {tool.currentJobName && tool.status !== "staged" && tool.status !== "on_job"
-                      ? ` · ${tool.currentJobName}`
-                      : ""}
-                  </p>
+                {selectMode &&
+                  (selectedIds.has(tool.id) ? (
+                    <CheckSquare className="w-4.5 h-4.5 text-amber-400 shrink-0" />
+                  ) : (
+                    <Square className="w-4.5 h-4.5 text-slate-600 shrink-0" />
+                  ))}
+                <div className="min-w-0 flex-1 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm text-slate-100 truncate">
+                      {tool.name || "Unnamed tool"}
+                    </p>
+                    <p className="text-xs text-slate-500 font-mono">
+                      {tool.sme ? `SME# ${tool.sme}` : "No SME# yet"}
+                      {tool.currentJobName && tool.status !== "staged" && tool.status !== "on_job"
+                        ? ` · ${tool.currentJobName}`
+                        : ""}
+                    </p>
+                  </div>
+                  <span
+                    className={`text-[10px] rounded-full px-2 py-1 border shrink-0 ${TOOL_STATUSES[tool.status]?.color || ""}`}
+                  >
+                    {toolStatusLabel(tool)}
+                  </span>
                 </div>
-                <span
-                  className={`text-[10px] rounded-full px-2 py-1 border shrink-0 ${TOOL_STATUSES[tool.status]?.color || ""}`}
-                >
-                  {toolStatusLabel(tool)}
-                </span>
               </button>
             ))}
           </div>
         )}
       </main>
+
+      {selectMode && selectedIds.size > 0 && (
+        <div className="fixed bottom-0 inset-x-0 bg-slate-900 border-t border-slate-800 px-4 py-3 z-20">
+          <div className="max-w-2xl mx-auto flex items-center justify-between gap-3">
+            <span className="text-sm text-slate-300">{selectedIds.size} selected</span>
+            <button
+              onClick={() => setBulkStatusPicking(true)}
+              className="text-sm rounded-md px-3.5 py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+            >
+              Change status...
+            </button>
+          </div>
+        </div>
+      )}
+
+      {bulkStatusPicking && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+          onClick={() => setBulkStatusPicking(false)}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-slate-100 font-semibold mb-1">
+              Set status for {selectedIds.size} tool{selectedIds.size === 1 ? "" : "s"}
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">This replaces each selected tool's current status.</p>
+            <div className="flex flex-wrap gap-1.5 mb-4">
+              {Object.entries(TOOL_STATUSES).map(([key, meta]) => (
+                <button
+                  key={key}
+                  onClick={() => bulkChangeStatus(key)}
+                  className={`text-xs rounded-full px-3 py-1.5 border ${meta.color} hover:brightness-125`}
+                >
+                  {meta.label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setBulkStatusPicking(false)}
+              className="w-full text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {addingTool && (
         <AddToolModal

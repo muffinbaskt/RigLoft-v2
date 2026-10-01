@@ -15,7 +15,7 @@ vi.mock("../lib/api", () => ({
   saveWithRetry: vi.fn().mockResolvedValue({ ok: true, updatedAt: new Date().toISOString() }),
 }));
 
-import { getWithRetry } from "../lib/api";
+import { getWithRetry, saveWithRetry } from "../lib/api";
 
 const tool = {
   id: 1,
@@ -87,5 +87,52 @@ describe("ToolsApp", () => {
 
     fireEvent.click(container.querySelector("header button"));
     expect(onGoHome).toHaveBeenCalled();
+  });
+
+  it("bulk-changes the status of every selected tool at once", async () => {
+    const tools = [
+      { id: 1, name: "Ramset Gun", sme: "10001", status: "storage", history: [] },
+      { id: 2, name: "Impact Wrench", sme: "10002", status: "storage", history: [] },
+      { id: 3, name: "Torch", sme: "10003", status: "storage", history: [] },
+    ];
+    mockData({ tools });
+    render(<ToolsApp onGoHome={() => {}} isOwner />);
+    await screen.findByText("Ramset Gun");
+
+    fireEvent.click(screen.getByText("Select"));
+    fireEvent.click(screen.getByText("Ramset Gun"));
+    fireEvent.click(screen.getByText("Impact Wrench"));
+    // Torch is deliberately left unselected.
+
+    fireEvent.click(screen.getByText("Change status..."));
+    fireEvent.click(screen.getByText("Retired"));
+
+    const [savedKey, savedValue] = saveWithRetry.mock.calls[0];
+    expect(savedKey).toBe(TOOLS_KEY);
+    const saved = JSON.parse(savedValue);
+    expect(saved.find((t) => t.id === 1).status).toBe("retired");
+    expect(saved.find((t) => t.id === 2).status).toBe("retired");
+    // Not selected — untouched.
+    expect(saved.find((t) => t.id === 3).status).toBe("storage");
+
+    // Select mode exits automatically once applied.
+    expect(screen.queryByText("Change status...")).not.toBeInTheDocument();
+  });
+
+  it("select all / deselect all toggles every currently-filtered tool", async () => {
+    const tools = [
+      { id: 1, name: "Ramset Gun", sme: "10001", status: "storage", history: [] },
+      { id: 2, name: "Impact Wrench", sme: "10002", status: "storage", history: [] },
+    ];
+    mockData({ tools });
+    render(<ToolsApp onGoHome={() => {}} isOwner />);
+    await screen.findByText("Ramset Gun");
+
+    fireEvent.click(screen.getByText("Select"));
+    fireEvent.click(screen.getByText("Select all 2"));
+    expect(screen.getAllByText("2 selected").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByText("Deselect all"));
+    expect(screen.queryByText("Change status...")).not.toBeInTheDocument();
   });
 });
