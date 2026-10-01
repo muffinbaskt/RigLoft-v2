@@ -16242,7 +16242,7 @@ function DeepLinkQrModal({ section, id, title, subtitle, heading, onClose }) {
   );
 }
 
-function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onSyncToolsFromItem, onAddToLoveTaskList, onUndoLastAction, onBack, onQuickNav, locked = false }) {
+function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, workers = [], workerTasks = [], staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onAssignToWorker, onUnassignWorkerTask, onUpdateList, onDeleteList, onLearnAlias, onSyncToolsFromItem, onAddToLoveTaskList, onUndoLastAction, onBack, onQuickNav, locked = false, initialItemSearch = "" }) {
   const undoStack = list.undoStack || [];
   const [undoOpen, setUndoOpen] = useState(false);
   const [addingItem, setAddingItem] = useState(false);
@@ -16281,7 +16281,7 @@ function LoveListDetailPage({ list, catalog, allLists = [], isEditor, isOwner, w
   const [smeDraft, setSmeDraft] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [statusFilter, setStatusFilter] = useState(null); // null = off, or a LOVE_STATUSES key
-  const [itemSearch, setItemSearch] = useState("");
+  const [itemSearch, setItemSearch] = useState(initialItemSearch);
   const [importedOnlyFilter, setImportedOnlyFilter] = useState(false);
 
   const archiveItem = (id) => {
@@ -18177,7 +18177,105 @@ function StaleThresholdsModal({ thresholds, onSave, onClose }) {
   );
 }
 
-function LoveListsDashboard({ lists, isEditor, isOwner, staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onSaveThresholds, onOpenList, onAddList, onScanList, onOpenWorkerTasks, onOpenTaskList, taskListCount = 0, onBulkArchiveLists, onRestoreBackup, restoreError, restoreSuccessCount, onGoHome, onQuickNav }) {
+// Aggregates every item requested/needed for one job number across every
+// Love List tied to it — a job routinely spans several lists (different
+// dates, sub-jobs sent separately), and there was previously no way to see
+// everything asked for without opening each one in turn. Clicking an item
+// jumps straight to the specific list it's actually on (via onOpenItem),
+// which also prefills that list's own search so the item's easy to spot
+// amongst everything else there. Intentionally doesn't filter out archived
+// lists/items — the whole point here is completeness, not a working list.
+function LoveListJobOverviewPage({ jobLabel, lists, onOpenItem, onBack, onQuickNav }) {
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState(null);
+
+  const jobLists = lists.filter((l) => l.jobLabel === jobLabel);
+
+  const rows = jobLists
+    .flatMap((list) => (list.items || []).map((item) => ({ item, list })))
+    .filter(({ item }) => !statusFilter || item.status === statusFilter)
+    .filter(
+      ({ item }) => !search.trim() || item.name.toLowerCase().includes(search.trim().toLowerCase())
+    )
+    .sort((a, b) => a.item.name.localeCompare(b.item.name));
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <SectionHeader
+        onBack={onBack}
+        icon={Briefcase}
+        title={jobLabel}
+        subtitle={`${rows.length} item${rows.length === 1 ? "" : "s"} across ${jobLists.length} list${
+          jobLists.length === 1 ? "" : "s"
+        }`}
+        maxWidthClass="max-w-2xl"
+        current="love"
+        onQuickNav={onQuickNav}
+      />
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search items on this job..."
+          className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-3 focus:outline-none focus:ring-2 focus:ring-rose-500/60"
+        />
+        <div className="flex flex-wrap gap-1.5 mb-4">
+          {LOVE_STATUSES.map((s) => (
+            <button
+              key={s.key}
+              onClick={() => setStatusFilter((prev) => (prev === s.key ? null : s.key))}
+              className={`text-xs rounded-full px-2.5 py-1 border transition-all ${s.color} ${
+                statusFilter && statusFilter !== s.key
+                  ? "opacity-40"
+                  : statusFilter === s.key
+                  ? "ring-2 ring-offset-1 ring-offset-slate-950 ring-white/60"
+                  : ""
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+        {rows.length === 0 ? (
+          <p className="text-sm text-slate-500 text-center py-12">
+            {search.trim()
+              ? `Nothing matches "${search.trim()}".`
+              : "No items on any list for this job yet."}
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {rows.map(({ item, list }) => {
+              const meta = loveItemDisplayMeta(item);
+              return (
+                <button
+                  key={`${list.id}-${item.id}`}
+                  onClick={() => onOpenItem(list, item)}
+                  className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700 flex items-center justify-between gap-3"
+                >
+                  <div className="min-w-0">
+                    <p className={`text-sm truncate ${item.archived ? "text-slate-500 line-through" : "text-slate-100"}`}>
+                      {item.name}
+                    </p>
+                    <p className="text-xs text-slate-500 truncate">
+                      {item.qty ?? "—"}
+                      {item.qtyUnit ? ` ${item.qtyUnit}` : ""} · on {listDisplayLabel(list)}
+                      {list.archived ? " (archived list)" : ""}
+                    </p>
+                  </div>
+                  <span className={`text-[10px] rounded-full px-2 py-1 border shrink-0 ${meta.color}`}>
+                    {meta.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function LoveListsDashboard({ lists, isEditor, isOwner, staleThresholds = DEFAULT_STALE_THRESHOLD_DAYS, onSaveThresholds, onOpenList, onAddList, onScanList, onOpenWorkerTasks, onOpenTaskList, taskListCount = 0, onBulkArchiveLists, onRestoreBackup, restoreError, restoreSuccessCount, onGoHome, onQuickNav, onViewJobOverview }) {
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("active"); // "active" | "ready"
   const [showThresholdSettings, setShowThresholdSettings] = useState(false);
@@ -18609,7 +18707,17 @@ function LoveListsDashboard({ lists, isEditor, isOwner, staleThresholds = DEFAUL
                   )}
                   {jobGroups.map((jobLabel) => (
                     <div key={jobLabel}>
-                      <p className="font-semibold text-slate-100 mb-2">{jobLabel}</p>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <p className="font-semibold text-slate-100">{jobLabel}</p>
+                        {onViewJobOverview && (
+                          <button
+                            onClick={() => onViewJobOverview(jobLabel)}
+                            className="text-xs text-rose-400 hover:text-rose-300 underline underline-offset-2 shrink-0"
+                          >
+                            View all items →
+                          </button>
+                        )}
+                      </div>
                       <div className="space-y-2">
                         {visibleLists
                           .filter((l) => l.jobLabel === jobLabel)
@@ -20771,6 +20879,14 @@ function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDee
   // above) so a later, unrelated remount of this screen starts at the
   // dashboard instead of forcing the same list open again.
   const [activeListId, setActiveListId] = useState(initialListId);
+  // The "every item for this job number, regardless of which Love List
+  // it's actually on" view — a job label, not a list id, since the whole
+  // point is aggregating across potentially several lists for one job.
+  const [viewingJobLabel, setViewingJobLabel] = useState(null);
+  // Prefilled into the destination list's own item search once an item's
+  // "open the list it's actually on" link is followed, so it's easy to
+  // immediately spot amongst everything else on that list.
+  const [jobOverviewReturnSearch, setJobOverviewReturnSearch] = useState("");
   useEffect(() => {
     if (initialListId != null) onDeepLinkConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -21355,8 +21471,25 @@ function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDee
         onBack={() => setActiveListId(null)}
         onQuickNav={onQuickNav}
         locked={lockedToDeepLink}
+        initialItemSearch={jobOverviewReturnSearch}
       />
       </>
+    );
+  }
+
+  if (viewingJobLabel) {
+    return (
+      <LoveListJobOverviewPage
+        jobLabel={viewingJobLabel}
+        lists={lists}
+        onBack={() => setViewingJobLabel(null)}
+        onOpenItem={(list, item) => {
+          setJobOverviewReturnSearch(item.name);
+          setActiveListId(list.id);
+          setViewingJobLabel(null);
+        }}
+        onQuickNav={onQuickNav}
+      />
     );
   }
 
@@ -21386,6 +21519,7 @@ function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null, onDee
         restoreSuccessCount={restoreSuccessCount}
         onGoHome={onGoHome}
         onQuickNav={onQuickNav}
+        onViewJobOverview={setViewingJobLabel}
       />
       {showAddForm && isEditor && (
         <LoveListAddForm catalog={catalog} allLists={lists} onLearnAlias={learnCatalogAlias} onSave={handleSaveNewList} onCancel={() => setShowAddForm(false)} />
