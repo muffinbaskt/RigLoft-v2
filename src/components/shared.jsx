@@ -11,7 +11,9 @@ import {
   Heart,
   Inbox,
   BookOpen,
+  Printer,
 } from "lucide-react";
+import QRCode from "qrcode";
 import { selectOnFocus, uniqueId } from "../lib/utils";
 import { uploadReferenceDocument } from "../lib/api";
 import { newTool, logToolEvent } from "../lib/tools";
@@ -821,6 +823,71 @@ export function AddToolModal({ onSave, onClose, initialRows, existingReceipt, ti
           >
             {saving ? "Adding..." : `Add ${totalCount} tool${totalCount === 1 ? "" : "s"}`}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Generic deep-link QR code — shared by Job Lists and Love Lists (both
+// pass their own section/id/title/subtitle/heading), since the actual QR
+// generation and print styling has nothing specific to either one.
+export function DeepLinkQrModal({ section, id, title, subtitle, heading, onClose }) {
+  const canvasRef = useRef(null);
+  const url = `${window.location.origin}${window.location.pathname}?section=${section}&id=${id}`;
+  useEffect(() => {
+    if (canvasRef.current) {
+      QRCode.toCanvas(canvasRef.current, url, { width: 240, margin: 1 }, () => {});
+    }
+  }, [url]);
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center px-4 py-8 print:static print:block print:bg-white print:p-0">
+      <style>{`
+        @media print {
+          body * {
+            visibility: hidden;
+            height: 0 !important;
+            overflow: hidden !important;
+          }
+          #deep-link-qr-print-area, #deep-link-qr-print-area * {
+            visibility: visible;
+            height: auto !important;
+            overflow: visible !important;
+          }
+          #deep-link-qr-print-area {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 0.5in;
+          }
+        }
+      `}</style>
+      <div className="bg-white text-slate-900 w-full max-w-sm rounded-lg flex flex-col print:static print:block print:max-w-none print:rounded-none">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 shrink-0 print:hidden">
+          <h3 className="font-semibold text-base">{heading}</h3>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => window.print()}
+              className="text-sm rounded-md px-3 py-1.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 flex items-center gap-1.5"
+            >
+              <Printer className="w-4 h-4" />
+              Print
+            </button>
+            <button onClick={onClose} className="text-slate-500 hover:text-slate-800">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+        <div id="deep-link-qr-print-area" className="p-6 flex flex-col items-center text-center">
+          <h2 className="text-lg font-bold mb-1">{title}</h2>
+          <p className="text-sm text-slate-600 mb-4">
+            {subtitle || " "}
+          </p>
+          <canvas ref={canvasRef} />
+          <p className="text-xs text-slate-500 mt-4 print:hidden">
+            Scanning this opens it directly — no login needed to view it.
+          </p>
         </div>
       </div>
     </div>
