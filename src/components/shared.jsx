@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  FileText,
   Lock,
   LayoutGrid,
   Briefcase,
@@ -14,13 +15,24 @@ import {
   Inbox,
   BookOpen,
   Printer,
+  Trash2,
+  Upload,
 } from "lucide-react";
 import QRCode from "qrcode";
-import { selectOnFocus, uniqueId, normalizeText, playSaveChime } from "../lib/utils";
-import { getWithRetry, saveWithRetry, uploadReferenceDocument } from "../lib/api";
+import { selectOnFocus, uniqueId, normalizeText, playSaveChime, timeStamp, findCatalogMatch, withLearnedAlias } from "../lib/utils";
+import {
+  getWithRetry,
+  saveWithRetry,
+  uploadReferenceDocument,
+  deleteReferenceDocument,
+  pdfToImageFiles,
+  CATALOG_KEY,
+} from "../lib/api";
 import { newTool, logToolEvent } from "../lib/tools";
+import { formatTaskTimestamp } from "../lib/workertasks";
 import {
   RECEIVING_QUEUE_KEY,
+  RECEIVING_NAME_MEMORY_KEY,
   computeUsualVendor,
   itemReceipts,
   attachReceiptPhotoToJob,
@@ -1653,5 +1665,297 @@ export function PullFromReceivingModal({ targetType, targetLabel, target, onAppl
         </div>
       )}
     </div>
+  );
+}
+
+// Receipt photos and reference documents (PDFs, submittals) attached to
+// a job, a Requisitions category, or a Love List — 'entity'/'field' make
+// this generic across whichever record actually owns the document array.
+export function ReferenceDocsModal({ entity, entityLabel, isEditor, onUpdateEntity, onClose, field = "referenceDocuments" }) {
+  const docs = entity[field] || [];
+  const photoDocs = docs.filter((d) => (d.type || "").startsWith("image/"));
+  const fileDocs = docs.filter((d) => !(d.type || "").startsWith("image/"));
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [viewingIndex, setViewingIndex] = useState(null);
+  const [pdfQueue, setPdfQueue] = useState([]); // PDFs still waiting on a convert-vs-keep decision
+  const pdfPrompt = pdfQueue[0] || null;
+  const photoInputRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  const addDoc = (result) => {
+    const isPhoto = (result.type || "").startsWith("image/");
+    onUpdateEntity((prevEntity) => ({
+      ...prevEntity,
+      [field]: [
+        ...(prevEntity[field] || []),
+        {
+          id: uniqueId(),
+          name: result.name,
+          url: result.url,
+          path: result.path,
+          type: result.type || "",
+          uploadedAt: timeStamp(),
+        },
+      ],
+      activityLog: [
+        {
+          id: uniqueId(),
+          time: timeStamp(),
+          message: isPhoto ? "Added a photo" : `Uploaded reference document "${result.name}"`,
+        },
+        ...(prevEntity.activityLog || []),
+      ].slice(0, 50),
+    }));
+  };
+
+  const doUpload = async (file) => {
+    const result = await uploadReferenceDocument(entity.id, file);
+    if (!result.ok) {
+      setUploadError((prev) => (prev ? `${prev} · ${result.error}` : result.error || "Upload failed"));
+      return;
+    }
+    addDoc(result);
+  };
+
+  // Handles any number of selected files at once — images upload straight
+  // away in sequence, and any PDFs get queued up for their own
+  // convert-vs-keep decision, one at a time, since that choice genuinely
+  // depends on what each specific PDF actually is.
+  const handleFilesChosen = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = ""; // allow choosing the same files again later
+    if (files.length === 0) return;
+
+    const pdfs = files.filter((f) => f.type === "application/pdf");
+    const others = files.filter((f) => f.type !== "application/pdf");
+
+    if (others.length > 0) {
+      setUploadError(null);
+      setUploading(true);
+      for (const file of others) {
+        await doUpload(file);
+      }
+      setUploading(false);
+    }
+    if (pdfs.length > 0) setPdfQueue((prev) => [...prev, ...pdfs]);
+  };
+
+  const keepPdfAsIs = async () => {
+    if (!pdfPrompt) return;
+    setPdfQueue((prev) => prev.slice(1));
+    setUploadError(null);
+    setUploading(true);
+    await doUpload(pdfPrompt);
+    setUploading(false);
+  };
+
+  const convertPdfToPhotos = async () => {
+    if (!pdfPrompt) return;
+    const file = pdfPrompt;
+    setPdfQueue((prev) => prev.slice(1));
+    setUploadError(null);
+    setUploading(true);
+    try {
+      const imageFiles = await pdfToImageFiles(file);
+      for (const imgFile of imageFiles) {
+        const result = await uploadReferenceDocument(entity.id, imgFile);
+        if (result.ok) addDoc(result);
+      }
+    } catch (err) {
+      setUploadError(
+        "Couldn't convert that PDF — " + (err && err.message ? err.message : String(err))
+      );
+    }
+    setUploading(false);
+  };
+
+  const confirmDelete = async () => {
+    const doc = deleteTarget;
+    setDeleteTarget(null);
+    await deleteReferenceDocument(doc.path);
+    onUpdateEntity((prevEntity) => ({
+      ...prevEntity,
+      [field]: (prevEntity[field] || []).filter((d) => d.id !== doc.id),
+    }));
+  };
+
+  if (viewingIndex !== null) {
+    return (
+      <PhotoLightbox
+        photos={photoDocs.map((d) => ({ url: d.url, alt: "Reference photo" }))}
+        index={viewingIndex}
+        onIndexChange={setViewingIndex}
+        onClose={() => setViewingIndex(null)}
+      />
+    );
+  }
+
+  return (
+    <>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 pt-8 pb-40" onClick={onClose}>
+        <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-md rounded-lg max-h-full flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+            <div>
+              <h2 className="text-slate-100 font-semibold text-base">Reference documents</h2>
+              <p className="text-xs text-slate-500">
+                Original sheets, orders, drawings, or receipts for {entityLabel}
+              </p>
+            </div>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            {docs.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-10">
+                Nothing here yet — attach the original PDF {entityLabel} came from, or snap
+                a photo of a receipt, so it's easy to reference later.
+              </p>
+            ) : (
+              <>
+                {fileDocs.length > 0 && (
+                  <div className="space-y-2 mb-4">
+                    {fileDocs.map((doc) => (
+                      <div
+                        key={doc.id}
+                        className="flex items-center justify-between gap-2 border border-slate-800 rounded-md p-3"
+                      >
+                        <a
+                          href={doc.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 min-w-0 flex-1 hover:text-amber-400"
+                        >
+                          <FileText className="w-4 h-4 text-slate-500 shrink-0" />
+                          <span className="text-sm text-slate-100 truncate">{doc.name}</span>
+                        </a>
+                        {isEditor && (
+                          <button
+                            onClick={() => setDeleteTarget(doc)}
+                            className="text-slate-600 hover:text-red-400 shrink-0"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {photoDocs.length > 0 && (
+                  <div className="grid grid-cols-2 gap-2.5 mb-4">
+                    {photoDocs.map((doc) => (
+                      <div key={doc.id} className="relative group">
+                        <button
+                          onClick={() => setViewingIndex(photoDocs.findIndex((d) => d.id === doc.id))}
+                          className="block w-full aspect-square rounded-lg overflow-hidden border border-slate-800"
+                        >
+                          <img src={doc.url} alt="" className="w-full h-full object-cover" />
+                        </button>
+                        {isEditor && (
+                          <button
+                            onClick={() => setDeleteTarget(doc)}
+                            className="absolute top-1.5 right-1.5 bg-slate-950/80 text-slate-300 hover:text-red-400 rounded-full p-1"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+            {uploadError && (
+              <p className="text-xs text-red-400 mt-3">Couldn't upload: {uploadError}</p>
+            )}
+          </div>
+
+          {isEditor && (
+            <div className="px-5 py-4 border-t border-slate-800 shrink-0 space-y-2">
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleFilesChosen}
+                className="hidden"
+              />
+              <button
+                onClick={() => photoInputRef.current && photoInputRef.current.click()}
+                disabled={uploading}
+                className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400 disabled:opacity-50"
+              >
+                <Camera className="w-4 h-4" />
+                {uploading ? "Uploading..." : "Take a photo"}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/pdf,image/*"
+                multiple
+                onChange={handleFilesChosen}
+                className="hidden"
+              />
+              <button
+                onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                disabled={uploading}
+                className="w-full flex items-center justify-center gap-1.5 text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+              >
+                <Upload className="w-4 h-4" />
+                {uploading ? "Uploading..." : "Upload a file"}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {deleteTarget && (
+        <ConfirmDelete
+          title="Remove this document?"
+          message={`"${deleteTarget.name}" will be removed. This can't be undone.`}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+
+      {pdfPrompt && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-sm p-5">
+            <h3 className="text-slate-100 font-semibold mb-1">
+              That's a PDF{pdfQueue.length > 1 ? ` (1 of ${pdfQueue.length})` : ""}
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              A phone's "scan to PDF" is usually just a photo wrapped in a PDF — converting
+              keeps it easy to zoom into and cuts the file size, with one photo per page. If
+              this is a real multi-page document, keeping it as a PDF makes more sense.
+              {pdfQueue.length > 1 && " You'll get this same choice for each PDF you picked."}
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={convertPdfToPhotos}
+                className="w-full text-sm rounded-md py-2.5 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Convert to photo(s)
+              </button>
+              <button
+                onClick={keepPdfAsIs}
+                className="w-full text-sm rounded-md py-2.5 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Keep as PDF
+              </button>
+              <button
+                onClick={() => setPdfQueue((prev) => prev.slice(1))}
+                className="w-full text-xs text-slate-500 hover:text-slate-300"
+              >
+                Skip this one
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
