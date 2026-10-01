@@ -135,4 +135,17 @@ describe("ToolsApp", () => {
     fireEvent.click(screen.getByText("Deselect all"));
     expect(screen.queryByText("Change status...")).not.toBeInTheDocument();
   });
+
+  it("adds bottom padding to the list while the bulk bar is showing, so it doesn't cover the last row", async () => {
+    mockData();
+    const { container } = render(<ToolsApp onGoHome={() => {}} isOwner />);
+    await screen.findByText("Ramset Gun");
+
+    expect(container.querySelector("main").className).not.toContain("pb-20");
+
+    fireEvent.click(screen.getByText("Select"));
+    fireEvent.click(screen.getByText("Ramset Gun"));
+
+    expect(container.querySelector("main").className).toContain("pb-20");
+  });
 });

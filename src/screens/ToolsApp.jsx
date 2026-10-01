@@ -267,7 +267,7 @@ export function ToolsApp({ onGoHome, isOwner }) {
         </div>
       </header>
 
-      <main className="max-w-2xl mx-auto px-4 py-5">
+      <main className={`max-w-2xl mx-auto px-4 py-5 ${selectMode && selectedIds.size > 0 ? "pb-20" : ""}`}>
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
