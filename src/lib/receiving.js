@@ -1,4 +1,4 @@
-import { uniqueId, timeStamp, normalizeText, totalHave, emptyItem, newLoveListItem } from "./utils";
+import { uniqueId, timeStamp, looseNameMatch, totalHave, emptyItem, newLoveListItem } from "./utils";
 
 // Shared business logic for applying a scanned/approved receipt line to a
 // Job or Love List item — used by the standalone Receiving screen, by
@@ -233,8 +233,14 @@ export function applyReceiptLineToJob(job, line, catalog, batch) {
   // on catalogId alone would silently merge two unrelated items' numbers
   // together. The catalog link only ever supplies defaults for a brand
   // new item below, never decides what counts as "the same item."
-  const normLineName = normalizeText(line.name);
-  const idx = items.findIndex((i) => normalizeText(i.name) === normLineName);
+  //
+  // allowSubset is off here specifically — tolerating word order ("24
+  // Foot Extension Ladder" vs "Extension Ladder, 24'") is safe since both
+  // names have the exact same words either way, but subset matching
+  // ("Porta Pump" containing "Porta Pump, Large") would reintroduce the
+  // exact generic-vs-specific collision this whole name-based approach
+  // exists to avoid.
+  const idx = items.findIndex((i) => looseNameMatch(i.name, line.name, { allowSubset: false }));
 
   if (idx !== -1) {
     const existing = items[idx];
@@ -323,8 +329,10 @@ export function applyReceiptLineToLoveList(list, line, catalog, batch) {
   const items = list.items || [];
   // Same fix as the Job version — match by name, not catalog link, since
   // several differently-sized items can share one generic catalog entry.
-  const normLineName = normalizeText(line.name);
-  const idx = items.findIndex((i) => normalizeText(i.name) === normLineName);
+  // allowSubset off for the same reason: word order is always safe, but
+  // subset matching would let a generic name ("Porta Pump") swallow a
+  // receipt line meant for a more specific sibling ("Porta Pump, Large").
+  const idx = items.findIndex((i) => looseNameMatch(i.name, line.name, { allowSubset: false }));
 
   if (idx !== -1) {
     const existing = items[idx];

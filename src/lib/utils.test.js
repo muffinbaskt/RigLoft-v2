@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { combineNotes, newJob, REQUISITION_TEMPLATES, DEFAULT_REQUISITION_CATEGORIES } from "./utils";
+import { combineNotes, looseNameMatch, newJob, REQUISITION_TEMPLATES, DEFAULT_REQUISITION_CATEGORIES } from "./utils";
 
 describe("combineNotes", () => {
   it("uses the addition when there's no existing note", () => {
@@ -50,5 +50,35 @@ describe("newJob", () => {
     const job = newJob("Transfer", null, null, true);
     expect(job.requisitionCategoryOrder).toEqual([]);
     expect(job.requisitions).toEqual([]);
+  });
+});
+
+describe("looseNameMatch", () => {
+  it("matches identical names", () => {
+    expect(looseNameMatch("Die Grinder", "Die Grinder")).toBe(true);
+  });
+
+  it("matches regardless of word order", () => {
+    expect(looseNameMatch("Extension Ladder, 24'", "24 Foot Extension Ladder")).toBe(true);
+  });
+
+  it("matches a superset by default (allowSubset defaults on)", () => {
+    expect(looseNameMatch("Porta Pump, Large", "Porta Pump")).toBe(true);
+  });
+
+  it("does not match a superset when allowSubset is off", () => {
+    expect(looseNameMatch("Porta Pump, Large", "Porta Pump", { allowSubset: false })).toBe(false);
+  });
+
+  it("still matches word-order-only variations when allowSubset is off", () => {
+    expect(looseNameMatch("Extension Ladder, 24'", "24 Foot Extension Ladder", { allowSubset: false })).toBe(true);
+  });
+
+  it("does not match a true synonym sharing only one generic word", () => {
+    expect(looseNameMatch("Air Pig", "Air Manifold")).toBe(false);
+  });
+
+  it("handles blank names safely", () => {
+    expect(looseNameMatch("", "Die Grinder")).toBe(false);
   });
 });

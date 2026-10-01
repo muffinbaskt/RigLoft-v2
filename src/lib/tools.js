@@ -10,35 +10,15 @@
 // separate data-entry pass. Backfilling everything already sitting on
 // current jobs from before this existed is its own later phase, still
 // not part of this one.
-import { normalizeText, tokenSet } from "./utils";
+import { looseNameMatch, normalizeText } from "./utils";
 
 // Matches an imported row's name guess to an existing "awaiting_sme"
-// tool's name for automatic SME#/serial linking — looser than a plain
-// normalized-string comparison, but only in ways that are genuinely just
-// wording variations, not different words:
-//  - word order: "Extension Ladder, 24'" vs "24 Foot Extension Ladder"
-//  - one name being the other's words plus a bit more context:
-//    "Porta Ram, 4\"" vs "Ram, 4\""; "Porta Pump, Large" vs "Porta Pump"
-// A true synonym sharing only a short, generic word ("Air" in "Air Pig"
-// vs "Air Manifold") is deliberately NOT treated as a match — that isn't
-// a wording variation, it's a different name for the same thing, and
-// guessing there risks silently attaching a serial to the wrong physical
-// tool. That needs an actual alias or a matching rename, not fuzzier text
-// matching.
-export function awaitingSmeNamesMatch(toolName, rowName) {
-  const toolTokens = tokenSet(toolName || "");
-  const rowTokens = tokenSet(rowName || "");
-  if (toolTokens.size === 0 || rowTokens.size === 0) return false;
-  const isSubset = (a, b) => [...a].every((t) => b.has(t));
-  // Same words, any order.
-  if (toolTokens.size === rowTokens.size) return isSubset(toolTokens, rowTokens);
-  // One side's words are fully contained in the other's — but only once
-  // the shorter side has at least 2 words, so a single generic word can't
-  // match anything that happens to contain it.
-  const [smaller, larger] =
-    toolTokens.size < rowTokens.size ? [toolTokens, rowTokens] : [rowTokens, toolTokens];
-  return smaller.size >= 2 && isSubset(smaller, larger);
-}
+// tool's name for automatic SME#/serial linking. See looseNameMatch in
+// utils.js for exactly what counts as a match and why — this is also used
+// for Receiving's apply-line-to-existing-item matching and Love Lists'
+// possible-duplicate detection, so the same wording-tolerance rules apply
+// consistently everywhere an item/tool name gets matched against another.
+export const awaitingSmeNamesMatch = looseNameMatch;
 
 export const TOOLS_KEY = "warehub-tools";
 

@@ -538,6 +538,45 @@ export function tokenSet(str) {
   return new Set(normalizeText(str).split(" ").filter(Boolean));
 }
 
+// Shared by Tools' awaiting_sme matching, Receiving's apply-line-to-
+// existing-item matching, and Love Lists' possible-duplicate detection —
+// looser than a plain normalized-string comparison, but only in ways that
+// are genuinely just wording variations, not different words:
+//  - word order: "Extension Ladder, 24'" vs "24 Foot Extension Ladder"
+//  - one name being the other's words plus a bit more context:
+//    "Porta Ram, 4\"" vs "Ram, 4\""; "Porta Pump, Large" vs "Porta Pump"
+// A true synonym sharing only a short, generic word ("Air" in "Air Pig"
+// vs "Air Manifold") is deliberately NOT treated as a match — that isn't
+// a wording variation, it's a different name for the same thing, and
+// guessing there risks silently merging into (or attaching a serial to)
+// the wrong physical item. That needs an actual alias or a matching
+// rename, not fuzzier text matching.
+// allowSubset defaults on (Tools' awaiting_sme matching, Love Lists'
+// duplicate-item warning — both fine with "Porta Pump" matching "Porta
+// Pump, Large"). Receiving's apply-line-to-existing-item matching turns it
+// off: a generic job item name ("Porta Pump") accidentally swallowing a
+// receipt line meant for a more specific, differently-sized sibling item
+// ("Porta Pump, Large") would silently misallocate real inventory between
+// two distinct items — exactly the kind of collision this function's own
+// callers in receiving.js were already written to avoid by matching on
+// name instead of catalogId in the first place. Word-order differences
+// (same words either way) are always safe regardless, since there's no
+// size/generic ambiguity possible when both sides have the exact same words.
+export function looseNameMatch(nameA, nameB, { allowSubset = true } = {}) {
+  const tokensA = tokenSet(nameA || "");
+  const tokensB = tokenSet(nameB || "");
+  if (tokensA.size === 0 || tokensB.size === 0) return false;
+  const isSubset = (a, b) => [...a].every((t) => b.has(t));
+  // Same words, any order.
+  if (tokensA.size === tokensB.size) return isSubset(tokensA, tokensB);
+  if (!allowSubset) return false;
+  // One side's words are fully contained in the other's — but only once
+  // the shorter side has at least 2 words, so a single generic word can't
+  // match anything that happens to contain it.
+  const [smaller, larger] = tokensA.size < tokensB.size ? [tokensA, tokensB] : [tokensB, tokensA];
+  return smaller.size >= 2 && isSubset(smaller, larger);
+}
+
 export function findCatalogMatch(name, catalog) {
   const normName = normalizeText(name);
   if (!normName) return null;

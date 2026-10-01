@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { describeListChange, loveItemDisplayMeta } from "./lovelists";
+import { describeListChange, findPossibleDuplicates, loveItemDisplayMeta } from "./lovelists";
 
 const baseList = {
   id: 1,
@@ -98,5 +98,30 @@ describe("loveItemDisplayMeta", () => {
   it("still shows 'Received' for an item that was actually ordered", () => {
     const item = { status: "received", needsOrdering: true, qty: 3 };
     expect(loveItemDisplayMeta(item).label).toBe("Received");
+  });
+});
+
+describe("findPossibleDuplicates", () => {
+  const listA = { id: "a", jobLabel: "3052", items: [{ id: "a1", name: "Shims 1/4\"" }] };
+  const listB = { id: "b", jobLabel: "3097", items: [{ id: "b1", name: "Shims, 1/4 inch" }] };
+
+  it("finds a same-named item on another list", () => {
+    const result = findPossibleDuplicates('Shims 1/4"', null, [], [listA, listB]);
+    expect(result.map((r) => r.list.id)).toContain("b");
+  });
+
+  it("excludeListId actually excludes that list (regression - was accepted but ignored)", () => {
+    const result = findPossibleDuplicates('Shims 1/4"', null, [], [listA, listB], {
+      excludeListId: "a",
+    });
+    expect(result.map((r) => r.list.id)).not.toContain("a");
+    expect(result.map((r) => r.list.id)).toContain("b");
+  });
+
+  it("excludeItemId excludes just that one item", () => {
+    const result = findPossibleDuplicates('Shims 1/4"', null, [], [listA], {
+      excludeItemId: "a1",
+    });
+    expect(result.length).toBe(0);
   });
 });

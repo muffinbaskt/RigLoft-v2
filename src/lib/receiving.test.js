@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mergeJobItems, mergeLoveListItems } from "./receiving";
+import { applyReceiptLineToJob, applyReceiptLineToLoveList, mergeJobItems, mergeLoveListItems } from "./receiving";
 
 describe("mergeJobItems", () => {
   const target = {
@@ -134,5 +134,54 @@ describe("mergeLoveListItems", () => {
     expect(merged.backorderQty).toBe(5);
     expect(merged.backorderReceiptDate).toBe("2026-09-30");
     expect(merged.qtyHave).toBe(3);
+  });
+});
+
+describe("applyReceiptLineToJob", () => {
+  it("merges into an existing item whose name is just reordered, instead of creating a duplicate", () => {
+    const job = {
+      items: [
+        { id: "ladder", name: "Extension Ladder, 24'", qtyNeeded: "2", qtyUnit: "", containers: [], qtyHave: 0 },
+      ],
+    };
+    const line = { name: "24 Foot Extension Ladder", shippedQty: 2, backorderQty: 0, unit: "" };
+
+    const result = applyReceiptLineToJob(job, line, [], null);
+
+    expect(result.items.length).toBe(1);
+    expect(result.items[0].id).toBe("ladder");
+    expect(result.items[0].qtyHave).toBe(2);
+  });
+
+  it("does NOT merge a generic name into a more specific sibling (no subset matching here)", () => {
+    const job = {
+      items: [
+        { id: "large", name: "Porta Pump, Large", qtyNeeded: "2", qtyUnit: "", containers: [], qtyHave: 0 },
+      ],
+    };
+    const line = { name: "Porta Pump", shippedQty: 1, backorderQty: 0, unit: "" };
+
+    const result = applyReceiptLineToJob(job, line, [], null);
+
+    // A new item gets created rather than silently landing on the
+    // differently-sized sibling.
+    expect(result.items.length).toBe(2);
+    expect(result.items.find((i) => i.id === "large").qtyHave).toBe(0);
+    expect(result.items.find((i) => i.name === "Porta Pump").qtyHave).toBe(1);
+  });
+});
+
+describe("applyReceiptLineToLoveList", () => {
+  it("merges into an existing item whose name is just reordered, instead of creating a duplicate", () => {
+    const list = {
+      items: [{ id: "ladder", name: "Extension Ladder, 24'", qty: 2, qtyUnit: "", qtyHave: 0, status: "requested" }],
+    };
+    const line = { name: "24 Foot Extension Ladder", shippedQty: 2, backorderQty: 0, unit: "" };
+
+    const result = applyReceiptLineToLoveList(list, line, [], null);
+
+    expect(result.items.length).toBe(1);
+    expect(result.items[0].id).toBe("ladder");
+    expect(result.items[0].qtyHave).toBe(2);
   });
 });

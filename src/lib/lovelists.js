@@ -1,4 +1,4 @@
-import { normalizeText, uniqueId } from "./utils";
+import { looseNameMatch, uniqueId } from "./utils";
 
 // Pure Love List domain logic — status progression, stale/duplicate
 // detection, and display-label formatting. Nothing here touches React;
@@ -140,7 +140,6 @@ export function isStale(item, thresholds = DEFAULT_STALE_THRESHOLD_DAYS) {
 // Love List with a matching name — the actual fix for the "job never got
 // told this was already coming, so they re-requested it" problem.
 export function findPossibleDuplicates(name, catalogId, catalog = [], allLists = [], { excludeListId, excludeItemId } = {}) {
-  const normName = normalizeText(name).replace(/\s+/g, "");
   const catalogEntry = catalogId ? catalog.find((c) => c.id === catalogId) : null;
   // Catalog-ID matching is reliable duplicate detection — it catches the
   // "field wrote the same item five different inconsistent ways" case
@@ -149,9 +148,14 @@ export function findPossibleDuplicates(name, catalogId, catalog = [], allLists =
   // multiple sizes), since a shared link there doesn't mean the same
   // physical item — those fall back to name matching only.
   const useCatalogMatch = !!catalogEntry && !catalogEntry.multiSize;
-  if (!normName && !useCatalogMatch) return [];
+  if (!name.trim() && !useCatalogMatch) return [];
   const matches = [];
   allLists.forEach((l) => {
+    // This was accepted and documented but never actually applied — the
+    // "also pending on" warning could misfire against a same-named sibling
+    // sitting on this very list, reporting it as if it were some other
+    // job's duplicate.
+    if (l.id === excludeListId) return;
     l.items.forEach((i) => {
       if (i.id === excludeItemId) return;
       if (i.archived) return;
@@ -160,9 +164,8 @@ export function findPossibleDuplicates(name, catalogId, catalog = [], allLists =
         matches.push({ list: l, item: i });
         return;
       }
-      if (!normName) return;
-      const normOther = normalizeText(i.name).replace(/\s+/g, "");
-      if (normOther === normName) matches.push({ list: l, item: i });
+      if (!name.trim()) return;
+      if (looseNameMatch(i.name, name)) matches.push({ list: l, item: i });
     });
   });
   return matches;
