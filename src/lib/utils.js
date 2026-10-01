@@ -368,6 +368,8 @@ export function emptyItem(defaultStorage) {
 let sharedAudioCtx = null;
 export function getAudioCtx() {
   if (!sharedAudioCtx) {
+    // @ts-expect-error — webkitAudioContext is the old Safari-prefixed
+    // fallback, never standardized into TypeScript's DOM lib typings.
     sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
   if (sharedAudioCtx.state === "suspended") {

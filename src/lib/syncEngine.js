@@ -17,17 +17,32 @@ import { sameInstant } from "./sync";
 //  - checkRemote() only pulls in a newer server copy when there is no
 //    unsaved local work at all, and never swaps in unreadable/empty data.
 //  - Data that can't be read is never merged into and then overwritten.
+/**
+ * @param {object} config
+ * @param {() => Promise<{ok: boolean, value?: string|null, updatedAt?: string|null}>} config.read
+ * @param {(json: string, expectedUpdatedAt: string|null) => Promise<{ok: boolean, updatedAt?: string, conflict?: boolean, error?: string}>} config.write
+ * @param {() => Promise<{ok: boolean, updatedAt?: string|null}>} config.peek
+ * @param {(base: any[], mine: any[], theirs: any[]) => {lists: any[], conflicts: any[]}} config.merge
+ * @param {(mergedLists: any[], conflictsWithResolution: any[]) => any[]} config.applyResolutions
+ * @param {() => any[]} config.getLocal - current local array (must be the SAME reference as setLocal last stored)
+ * @param {(next: any[]) => void} config.setLocal - stores it so getLocal returns the same reference
+ * @param {(pending: any|null) => void} [config.onPrompt]
+ * @param {(message: string) => void} [config.onNotice]
+ * @param {(submitting: boolean) => void} [config.onSubmitting] - true while submitResolutions is in flight
+ * @param {number} [config.quietMs]
+ * @param {() => number} [config.now]
+ */
 export function createSyncEngine({
-  read, // () => Promise<{ ok, value: string|null, updatedAt }>
-  write, // (json, expectedUpdatedAt) => Promise<{ ok, updatedAt?, conflict?, error? }>
-  peek, // () => Promise<{ ok, updatedAt: string|null }>
-  merge, // (base, mine, theirs) => { lists, conflicts }
-  applyResolutions, // (mergedLists, conflictsWithResolution) => finalLists
-  getLocal, // () => current local array (must be the SAME reference as setLocal last stored)
-  setLocal, // (array) => void, stores it so getLocal returns the same reference
-  onPrompt = () => {}, // (pending | null) => void
-  onNotice = () => {}, // (message) => void
-  onSubmitting = () => {}, // (bool) => void — true while submitResolutions is in flight
+  read,
+  write,
+  peek,
+  merge,
+  applyResolutions,
+  getLocal,
+  setLocal,
+  onPrompt = () => {},
+  onNotice = () => {},
+  onSubmitting = () => {},
   quietMs = 8000,
   now = () => Date.now(),
 }) {

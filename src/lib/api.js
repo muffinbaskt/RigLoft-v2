@@ -279,9 +279,11 @@ export function storagePathFromPublicUrl(url) {
 let pdfjsLibPromise = null;
 export function loadPdfJs() {
   if (!pdfjsLibPromise) {
-    pdfjsLibPromise = import(
-      "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.min.mjs"
-    ).then((lib) => {
+    // A genuine runtime URL import (loading pdf.js lazily from a CDN
+    // rather than bundling it), not a resolvable module specifier
+    // TypeScript can check.
+    // @ts-expect-error
+    pdfjsLibPromise = import("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.min.mjs").then((lib) => {
       lib.GlobalWorkerOptions.workerSrc =
         "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.worker.min.mjs";
       return lib;

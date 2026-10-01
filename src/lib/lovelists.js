@@ -298,7 +298,11 @@ export function isStale(item, thresholds = DEFAULT_STALE_THRESHOLD_DAYS) {
 // Finds other still-pending items (not yet sent, not archived) across every
 // Love List with a matching name — the actual fix for the "job never got
 // told this was already coming, so they re-requested it" problem.
-export function findPossibleDuplicates(name, catalogId, catalog = [], allLists = [], { excludeListId, excludeItemId } = {}) {
+/**
+ * @param {{ excludeListId?: string|number, excludeItemId?: string|number }} [options]
+ */
+export function findPossibleDuplicates(name, catalogId, catalog = [], allLists = [], options = {}) {
+  const { excludeListId, excludeItemId } = options;
   const catalogEntry = catalogId ? catalog.find((c) => c.id === catalogId) : null;
   // Catalog-ID matching is reliable duplicate detection — it catches the
   // "field wrote the same item five different inconsistent ways" case

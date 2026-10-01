@@ -1,0 +1,25 @@
+{
+  // Type-checks src/lib's plain JS via JSDoc + inference — no .ts files, no
+  // build step changes, nothing else in the app affected. Deliberately
+  // scoped to lib/ for now rather than the whole app: it's already pure,
+  // already unit-tested, and the most "typeable" part of the codebase,
+  // which makes it a low-risk starting point. A meaningful fraction of
+  // real bugs found this session (a search filter silently missing a
+  // promised field, a function parameter accepted but never wired up,
+  // matching logic checking the wrong condition) are exactly the class of
+  // mistake this catches automatically, with no audit pass required.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/lib/**/*.js"],
+  "exclude": ["src/lib/**/*.test.js", "node_modules"]
+}

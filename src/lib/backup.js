@@ -64,6 +64,7 @@ export function openBackupPrefsDB() {
   });
 }
 
+/** @returns {Promise<void>} */
 export async function saveBackupDirectoryHandle(handle) {
   const db = await openBackupPrefsDB();
   return new Promise((resolve, reject) => {
@@ -103,6 +104,9 @@ export async function chooseBackupFolder() {
     return { ok: false, error: "Not supported in this browser." };
   }
   try {
+    // @ts-expect-error — File System Access API, Chromium-only and not yet
+    // in TypeScript's standard DOM lib typings. FS_ACCESS_SUPPORTED above
+    // already gates this to browsers that actually have it.
     const handle = await window.showDirectoryPicker({ mode: "readwrite" });
     await saveBackupDirectoryHandle(handle);
     return { ok: true, name: handle.name };
