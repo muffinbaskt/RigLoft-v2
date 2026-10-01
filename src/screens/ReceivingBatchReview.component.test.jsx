@@ -78,4 +78,24 @@ describe("ReceivingBatchReview", () => {
     render(<ReceivingBatchReview {...baseProps()} />);
     expect(screen.queryByText(/^PO#/)).not.toBeInTheDocument();
   });
+
+  it("arrow-down from one line's name field moves focus to the next line's", () => {
+    const twoLineBatch = {
+      ...batch,
+      lines: [
+        { id: 10, name: "Gloves", rawName: "gloves", shippedQty: 5, backorderQty: 0 },
+        { id: 11, name: "Hammers", rawName: "hammers", shippedQty: 2, backorderQty: 0 },
+      ],
+    };
+    render(<ReceivingBatchReview {...baseProps({ batch: twoLineBatch })} />);
+
+    const glovesInput = screen.getByDisplayValue("Gloves");
+    glovesInput.focus();
+    fireEvent.keyDown(glovesInput, { key: "ArrowDown" });
+
+    expect(document.activeElement).toBe(screen.getByDisplayValue("Hammers"));
+
+    fireEvent.keyDown(document.activeElement, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(glovesInput);
+  });
 });

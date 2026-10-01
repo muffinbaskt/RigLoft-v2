@@ -3,7 +3,10 @@ import {
   X,
   Archive,
   Camera,
+  ChevronDown,
   ChevronLeft,
+  ChevronRight,
+  ChevronUp,
   Copy,
   History,
   Inbox,
@@ -170,6 +173,12 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
   const [pendingSearch, setPendingSearch] = useState("");
+  // Left/right navigation through the pending queue — an id, not an
+  // index, so it stays pointed at the same receipt if the list itself
+  // reorders/shrinks (search narrowing it, say) while it's active.
+  const [highlightedPendingId, setHighlightedPendingId] = useState(null);
+  const pendingRowRefs = useRef({});
+  const pendingListRef = useRef(null);
   const [dismissedPageGroups, setDismissedPageGroups] = useState(new Set());
   // Persist across renders (not React state — nothing here needs to
   // trigger a re-render on its own, it just needs to remember what it
@@ -808,6 +817,18 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
     return haystack.includes(q);
   });
 
+  const goToPending = (delta) => {
+    if (pending.length === 0) return;
+    const currentIdx = pending.findIndex((b) => b.id === highlightedPendingId);
+    // Nothing highlighted yet — either direction just starts at the top,
+    // rather than skipping straight to the second entry.
+    const nextIdx = currentIdx === -1 ? 0 : Math.max(0, Math.min(currentIdx + delta, pending.length - 1));
+    const next = pending[nextIdx];
+    setHighlightedPendingId(next.id);
+    const el = pendingRowRefs.current[next.id];
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
+
   // Groups pending receipts that printed their own "Page X of Y" —
   // walked in the order they were actually scanned, not just bucketed by
   // matching totalPages. That distinction matters the moment you bulk-
@@ -1084,7 +1105,23 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
           placeholder="Search pending receipts — item, label..."
           className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
         />
-        <div className="space-y-2 mb-6">
+        <div
+          ref={pendingListRef}
+          tabIndex={pending.length > 0 ? 0 : undefined}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowRight") {
+              e.preventDefault();
+              goToPending(1);
+            } else if (e.key === "ArrowLeft") {
+              e.preventDefault();
+              goToPending(-1);
+            } else if (e.key === "Enter" && highlightedPendingId) {
+              e.preventDefault();
+              setActiveBatchId(highlightedPendingId);
+            }
+          }}
+          className="space-y-2 mb-6 focus:outline-none"
+        >
           {pending.length === 0 ? (
             <p className="text-sm text-slate-500 text-center py-8">
               {pendingSearch.trim()
@@ -1095,8 +1132,14 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
             pending.map((b) => (
               <button
                 key={b.id}
-                onClick={() => setActiveBatchId(b.id)}
-                className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700 flex items-center gap-3"
+                ref={(el) => (pendingRowRefs.current[b.id] = el)}
+                onClick={() => {
+                  setHighlightedPendingId(b.id);
+                  setActiveBatchId(b.id);
+                }}
+                className={`w-full text-left bg-slate-900 border rounded-lg p-3 hover:border-slate-700 flex items-center gap-3 ${
+                  highlightedPendingId === b.id ? "border-amber-500/60" : "border-slate-800"
+                }`}
               >
                 {b.photoUrl && (
                   <div className="relative shrink-0">
@@ -1250,6 +1293,33 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
       {viewingGroupPhotos && (
         <GroupPhotoStepper photos={viewingGroupPhotos} onClose={() => setViewingGroupPhotos(null)} />
       )}
+
+      {pending.length > 1 && (
+        <div className="fixed bottom-4 right-4 z-30 flex rounded-lg border border-slate-700 bg-slate-800 shadow-lg overflow-hidden">
+          <button
+            onClick={() => {
+              goToPending(-1);
+              pendingListRef.current && pendingListRef.current.focus();
+            }}
+            disabled={pending.findIndex((b) => b.id === highlightedPendingId) === 0}
+            title="Previous pending receipt (←)"
+            className="p-2.5 text-slate-300 hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent border-r border-slate-700"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => {
+              goToPending(1);
+              pendingListRef.current && pendingListRef.current.focus();
+            }}
+            disabled={pending.findIndex((b) => b.id === highlightedPendingId) === pending.length - 1}
+            title="Next pending receipt (→)"
+            className="p-2.5 text-slate-300 hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1262,6 +1332,12 @@ export function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPending
   const [confirmingApprove, setConfirmingApprove] = useState(false);
   const [relinkingLine, setRelinkingLine] = useState(null);
   const [catalogSearch, setCatalogSearch] = useState("");
+  // Up/down navigation between line items — keyboard arrows (bound to each
+  // line's name field specifically, not globally, so they don't fight the
+  // qty fields' own native up/down-to-increment behavior) and the on-
+  // screen arrow buttons both move this same pointer.
+  const [currentLineIdx, setCurrentLineIdx] = useState(0);
+  const lineNameRefs = useRef({});
   // Assigning a target opens the same picker whether it's for one line or
   // "everything unassigned" — this tracks which mode/line it's currently
   // working on.
@@ -1336,6 +1412,22 @@ export function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPending
   // never belong in this picker. Sealed jobs are excluded too, since
   // they're locked/read-only by design — adding new items there would
   // fight that on purpose.
+  // Only still-editable lines are navigable — an approved one is locked
+  // and has no name field to focus anyway.
+  const activeLines = batch.lines.filter((l) => !l.approved);
+
+  const goToLine = (idx) => {
+    if (activeLines.length === 0) return;
+    const clamped = Math.max(0, Math.min(idx, activeLines.length - 1));
+    setCurrentLineIdx(clamped);
+    const target = lineNameRefs.current[activeLines[clamped].id];
+    if (target) {
+      target.focus();
+      target.select();
+      if (target.scrollIntoView) target.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  };
+
   const jobOptions = jobs.filter((j) => !j.archived && !j.isQuickTransfer && !j.sealed);
   const listOptions = lists.filter((l) => !l.archived);
 
@@ -1538,12 +1630,29 @@ export function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPending
                 </div>
               );
             }
+            const activeIdx = activeLines.findIndex((l) => l.id === line.id);
             return (
-              <div key={line.id} className="border border-slate-800 rounded-lg p-2.5 bg-slate-900/60">
+              <div
+                key={line.id}
+                className={`border rounded-lg p-2.5 bg-slate-900/60 ${
+                  activeIdx === currentLineIdx ? "border-amber-500/60" : "border-slate-800"
+                }`}
+              >
                 <div className="flex items-center gap-2 mb-1.5">
                   <input
+                    ref={(el) => (lineNameRefs.current[line.id] = el)}
                     value={line.name}
                     onChange={(e) => handleNameChange(line.id, e.target.value)}
+                    onFocus={() => setCurrentLineIdx(activeIdx)}
+                    onKeyDown={(e) => {
+                      if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        goToLine(activeIdx + 1);
+                      } else if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        goToLine(activeIdx - 1);
+                      }
+                    }}
                     className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
                   />
                   <button
@@ -1923,6 +2032,27 @@ export function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPending
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {activeLines.length > 1 && (
+        <div className="fixed bottom-4 right-4 z-30 flex flex-col rounded-lg border border-slate-700 bg-slate-800 shadow-lg overflow-hidden">
+          <button
+            onClick={() => goToLine(currentLineIdx - 1)}
+            disabled={currentLineIdx <= 0}
+            title="Previous line item (↑)"
+            className="p-2.5 text-slate-300 hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent border-b border-slate-700"
+          >
+            <ChevronUp className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => goToLine(currentLineIdx + 1)}
+            disabled={currentLineIdx >= activeLines.length - 1}
+            title="Next line item (↓)"
+            className="p-2.5 text-slate-300 hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            <ChevronDown className="w-4 h-4" />
+          </button>
         </div>
       )}
     </div>

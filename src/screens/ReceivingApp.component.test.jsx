@@ -135,4 +135,20 @@ describe("ReceivingApp", () => {
     expect(screen.getByText(/2 items ·/)).toBeInTheDocument();
     expect(screen.queryByText(/1 item ·/)).not.toBeInTheDocument();
   });
+
+  it("arrow-right then Enter opens the next pending receipt in the queue", async () => {
+    mockData({
+      queue: [pendingBatch, { ...pendingBatch, id: 2, label: "Second Receipt", lines: [] }],
+    });
+    const { container } = render(<ReceivingApp onGoHome={() => {}} isOwner />);
+    await screen.findByText("Acme Supply");
+
+    const list = container.querySelector('[tabindex="0"]');
+    fireEvent.keyDown(list, { key: "ArrowRight" });
+    fireEvent.keyDown(list, { key: "ArrowRight" });
+    fireEvent.keyDown(list, { key: "Enter" });
+
+    // Lands on the review screen for "Second Receipt", not the first one.
+    expect(await screen.findByText("Second Receipt")).toBeInTheDocument();
+  });
 });
