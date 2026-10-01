@@ -136,19 +136,18 @@ describe("ReceivingApp", () => {
     expect(screen.queryByText(/1 item ·/)).not.toBeInTheDocument();
   });
 
-  it("arrow-right then Enter opens the next pending receipt in the queue", async () => {
+  it("right-arrow key while reviewing a receipt flips to the next pending one", async () => {
     mockData({
       queue: [pendingBatch, { ...pendingBatch, id: 2, label: "Second Receipt", lines: [] }],
     });
-    const { container } = render(<ReceivingApp onGoHome={() => {}} isOwner />);
+    render(<ReceivingApp onGoHome={() => {}} isOwner />);
     await screen.findByText("Acme Supply");
 
-    const list = container.querySelector('[tabindex="0"]');
-    fireEvent.keyDown(list, { key: "ArrowRight" });
-    fireEvent.keyDown(list, { key: "ArrowRight" });
-    fireEvent.keyDown(list, { key: "Enter" });
+    fireEvent.click(screen.getByText("Acme Supply"));
+    await screen.findByText("Saves automatically");
 
-    // Lands on the review screen for "Second Receipt", not the first one.
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+
     expect(await screen.findByText("Second Receipt")).toBeInTheDocument();
   });
 });

@@ -173,12 +173,6 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
   const [pendingSearch, setPendingSearch] = useState("");
-  // Left/right navigation through the pending queue — an id, not an
-  // index, so it stays pointed at the same receipt if the list itself
-  // reorders/shrinks (search narrowing it, say) while it's active.
-  const [highlightedPendingId, setHighlightedPendingId] = useState(null);
-  const pendingRowRefs = useRef({});
-  const pendingListRef = useRef(null);
   const [dismissedPageGroups, setDismissedPageGroups] = useState(new Set());
   // Persist across renders (not React state — nothing here needs to
   // trigger a re-render on its own, it just needs to remember what it
@@ -817,18 +811,6 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
     return haystack.includes(q);
   });
 
-  const goToPending = (delta) => {
-    if (pending.length === 0) return;
-    const currentIdx = pending.findIndex((b) => b.id === highlightedPendingId);
-    // Nothing highlighted yet — either direction just starts at the top,
-    // rather than skipping straight to the second entry.
-    const nextIdx = currentIdx === -1 ? 0 : Math.max(0, Math.min(currentIdx + delta, pending.length - 1));
-    const next = pending[nextIdx];
-    setHighlightedPendingId(next.id);
-    const el = pendingRowRefs.current[next.id];
-    if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  };
-
   // Groups pending receipts that printed their own "Page X of Y" —
   // walked in the order they were actually scanned, not just bucketed by
   // matching totalPages. That distinction matters the moment you bulk-
@@ -951,6 +933,10 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
   }
 
   if (activeBatch) {
+    // Left/right flips straight to the adjacent pending receipt's own
+    // review page — the order it was already in on the list screen,
+    // search-narrowed or not, same breadcrumb either way.
+    const activeIdxInPending = pending.findIndex((b) => b.id === activeBatch.id);
     return (
       <>
         <ReceivingBatchReview
@@ -959,6 +945,16 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
           lists={lists}
           catalog={catalog}
           otherPendingBatches={queue.filter((b) => b.status === "pending" && b.id !== activeBatch.id)}
+          onNavigateBatch={
+            activeIdxInPending === -1
+              ? undefined
+              : (delta) => {
+                  const nextIdx = activeIdxInPending + delta;
+                  if (nextIdx >= 0 && nextIdx < pending.length) setActiveBatchId(pending[nextIdx].id);
+                }
+          }
+          canNavigatePrev={activeIdxInPending > 0}
+          canNavigateNext={activeIdxInPending !== -1 && activeIdxInPending < pending.length - 1}
           onUpdateBatch={updateBatch}
           onLearnAlias={learnAlias}
           onApprove={approveBatch}
@@ -1105,23 +1101,7 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
           placeholder="Search pending receipts — item, label..."
           className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-sm rounded-md px-3 py-2 mb-2 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
         />
-        <div
-          ref={pendingListRef}
-          tabIndex={pending.length > 0 ? 0 : undefined}
-          onKeyDown={(e) => {
-            if (e.key === "ArrowRight") {
-              e.preventDefault();
-              goToPending(1);
-            } else if (e.key === "ArrowLeft") {
-              e.preventDefault();
-              goToPending(-1);
-            } else if (e.key === "Enter" && highlightedPendingId) {
-              e.preventDefault();
-              setActiveBatchId(highlightedPendingId);
-            }
-          }}
-          className="space-y-2 mb-6 focus:outline-none"
-        >
+        <div className="space-y-2 mb-6">
           {pending.length === 0 ? (
             <p className="text-sm text-slate-500 text-center py-8">
               {pendingSearch.trim()
@@ -1132,14 +1112,8 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
             pending.map((b) => (
               <button
                 key={b.id}
-                ref={(el) => (pendingRowRefs.current[b.id] = el)}
-                onClick={() => {
-                  setHighlightedPendingId(b.id);
-                  setActiveBatchId(b.id);
-                }}
-                className={`w-full text-left bg-slate-900 border rounded-lg p-3 hover:border-slate-700 flex items-center gap-3 ${
-                  highlightedPendingId === b.id ? "border-amber-500/60" : "border-slate-800"
-                }`}
+                onClick={() => setActiveBatchId(b.id)}
+                className="w-full text-left bg-slate-900 border border-slate-800 rounded-lg p-3 hover:border-slate-700 flex items-center gap-3"
               >
                 {b.photoUrl && (
                   <div className="relative shrink-0">
@@ -1294,32 +1268,6 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
         <GroupPhotoStepper photos={viewingGroupPhotos} onClose={() => setViewingGroupPhotos(null)} />
       )}
 
-      {pending.length > 1 && (
-        <div className="fixed bottom-4 right-4 z-30 flex rounded-lg border border-slate-700 bg-slate-800 shadow-lg overflow-hidden">
-          <button
-            onClick={() => {
-              goToPending(-1);
-              pendingListRef.current && pendingListRef.current.focus();
-            }}
-            disabled={pending.findIndex((b) => b.id === highlightedPendingId) === 0}
-            title="Previous pending receipt (←)"
-            className="p-2.5 text-slate-300 hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent border-r border-slate-700"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => {
-              goToPending(1);
-              pendingListRef.current && pendingListRef.current.focus();
-            }}
-            disabled={pending.findIndex((b) => b.id === highlightedPendingId) === pending.length - 1}
-            title="Next pending receipt (→)"
-            className="p-2.5 text-slate-300 hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -1327,7 +1275,7 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
 // The review screen for one scanned receipt — verify against the pallet,
 // fix up anything OCR misread, link unmatched names to the catalog, pick
 // which Job or Love List this shipment belongs to, then approve.
-export function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches, onUpdateBatch, onLearnAlias, onApprove, onDiscard, onCombine, onViewPhoto, onBack, onQuickNav }) {
+export function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPendingBatches, onNavigateBatch, canNavigatePrev, canNavigateNext, onUpdateBatch, onLearnAlias, onApprove, onDiscard, onCombine, onViewPhoto, onBack, onQuickNav }) {
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const [confirmingApprove, setConfirmingApprove] = useState(false);
   const [relinkingLine, setRelinkingLine] = useState(null);
@@ -1362,6 +1310,29 @@ export function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPending
   useEffect(() => {
     batchRef.current = batch;
   }, [batch]);
+
+  // Left/right flips to the previous/next pending receipt's own review
+  // page — same always-on, global-listener pattern PhotoLightbox uses for
+  // its own left/right photo navigation, no need to click into anything
+  // first. Scoped off while a text field (a line's name, the label, a
+  // search box in one of this screen's own pickers) is actually focused,
+  // so normal cursor movement there isn't hijacked.
+  useEffect(() => {
+    if (!onNavigateBatch) return;
+    const handleKey = (e) => {
+      const tag = document.activeElement && document.activeElement.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.key === "ArrowRight" && canNavigateNext) {
+        e.preventDefault();
+        onNavigateBatch(1);
+      } else if (e.key === "ArrowLeft" && canNavigatePrev) {
+        e.preventDefault();
+        onNavigateBatch(-1);
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onNavigateBatch, canNavigatePrev, canNavigateNext]);
 
   const updateLine = (lineId, changes) => {
     const currentBatch = batchRef.current;
@@ -2052,6 +2023,27 @@ export function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPending
             className="p-2.5 text-slate-300 hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent"
           >
             <ChevronDown className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {onNavigateBatch && (canNavigatePrev || canNavigateNext) && (
+        <div className="fixed bottom-4 left-4 z-30 flex rounded-lg border border-slate-700 bg-slate-800 shadow-lg overflow-hidden">
+          <button
+            onClick={() => onNavigateBatch(-1)}
+            disabled={!canNavigatePrev}
+            title="Previous pending receipt (←)"
+            className="p-2.5 text-slate-300 hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent border-r border-slate-700"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => onNavigateBatch(1)}
+            disabled={!canNavigateNext}
+            title="Next pending receipt (→)"
+            className="p-2.5 text-slate-300 hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            <ChevronRight className="w-4 h-4" />
           </button>
         </div>
       )}

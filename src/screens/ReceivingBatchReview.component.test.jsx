@@ -98,4 +98,34 @@ describe("ReceivingBatchReview", () => {
     fireEvent.keyDown(document.activeElement, { key: "ArrowUp" });
     expect(document.activeElement).toBe(glovesInput);
   });
+
+  it("left/right arrow keys call onNavigateBatch, respecting the boundary flags", () => {
+    const onNavigateBatch = vi.fn();
+    render(
+      <ReceivingBatchReview
+        {...baseProps({ onNavigateBatch, canNavigatePrev: false, canNavigateNext: true })}
+      />
+    );
+
+    fireEvent.keyDown(window, { key: "ArrowLeft" }); // blocked — no previous
+    expect(onNavigateBatch).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(onNavigateBatch).toHaveBeenCalledWith(1);
+  });
+
+  it("doesn't hijack arrow keys while actually typing in a line's name field", () => {
+    const onNavigateBatch = vi.fn();
+    render(
+      <ReceivingBatchReview
+        {...baseProps({ onNavigateBatch, canNavigatePrev: true, canNavigateNext: true })}
+      />
+    );
+
+    const nameInput = screen.getByDisplayValue("Gloves");
+    nameInput.focus();
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+
+    expect(onNavigateBatch).not.toHaveBeenCalled();
+  });
 });
