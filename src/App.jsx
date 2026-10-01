@@ -15881,7 +15881,7 @@ function LoveListAddForm({ catalog, allLists, onLearnAlias, onSave, onCancel }) 
 function LoveListPhotosModal({ list, isEditor, onAddPhoto, onRemovePhoto, onClose }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
-  const [viewingUrl, setViewingUrl] = useState(null);
+  const [viewingIndex, setViewingIndex] = useState(null);
   const fileInputRef = useRef(null);
 
   // The original scan (if this list came from the scan feature) shown
@@ -15908,20 +15908,14 @@ function LoveListPhotosModal({ list, isEditor, onAddPhoto, onRemovePhoto, onClos
     setUploading(false);
   };
 
-  if (viewingUrl) {
+  if (viewingIndex !== null) {
     return (
-      <div
-        className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center px-4 py-8"
-        onClick={() => setViewingUrl(null)}
-      >
-        <button
-          onClick={() => setViewingUrl(null)}
-          className="absolute top-4 right-4 text-slate-300 hover:text-white"
-        >
-          <X className="w-6 h-6" />
-        </button>
-        <ZoomableImage key={viewingUrl} src={viewingUrl} alt="Reference photo" />
-      </div>
+      <PhotoLightbox
+        photos={allPhotos.map((p) => ({ url: p.url, alt: "Reference photo" }))}
+        index={viewingIndex}
+        onIndexChange={setViewingIndex}
+        onClose={() => setViewingIndex(null)}
+      />
     );
   }
 
@@ -15947,7 +15941,7 @@ function LoveListPhotosModal({ list, isEditor, onAddPhoto, onRemovePhoto, onClos
               {allPhotos.map((photo, idx) => (
                 <div key={idx} className="relative group">
                   <button
-                    onClick={() => setViewingUrl(photo.url)}
+                    onClick={() => setViewingIndex(idx)}
                     className="block w-full aspect-square rounded-lg overflow-hidden border border-slate-800"
                   >
                     <img src={photo.url} alt="" className="w-full h-full object-cover" />
