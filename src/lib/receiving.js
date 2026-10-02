@@ -631,6 +631,11 @@ export function newReceiptBatch(photoUrl, path, lines, meta = {}) {
     vendor: meta.vendor || "",
     poNumber: meta.poNumber || "",
     receiptDate: meta.receiptDate || "",
+    // The uploaded file's own name (e.g. "AirGas 10-2-26_13.jpeg") —
+    // useful for matching a queue entry back to a specific physical scan
+    // when several get taken in one session, shown small/secondary in
+    // the UI rather than as a real label.
+    originalFileName: meta.originalFileName || "",
     scannedAt: new Date().toISOString(),
     status: "pending", // "pending" | "approved" | "discarded" — approved once every line's been applied somewhere
     lines,

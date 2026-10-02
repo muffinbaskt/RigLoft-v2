@@ -445,6 +445,7 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
       vendor: data.vendor,
       poNumber: data.poNumber,
       receiptDate: data.receiptDate,
+      originalFileName: file.name || "",
     });
   };
 
@@ -1215,6 +1216,11 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
                     {b.totalPages > 1 && ` · Page ${b.pageNumber} of ${b.totalPages}`}
                     {b.totalPages > 1 && (b.orderNumber ? ` · Order #${b.orderNumber}` : " · no order # found")}
                   </p>
+                  {b.originalFileName && (
+                    <p className="text-xs text-slate-600 truncate" title={b.originalFileName}>
+                      {b.originalFileName}
+                    </p>
+                  )}
                 </div>
               </button>
             ))
@@ -1618,8 +1624,14 @@ export function ReceivingBatchReview({ batch, jobs, lists, catalog, otherPending
           </div>
         )}
 
-        {batch.poNumber && (
-          <p className="text-xs text-slate-500 text-center mb-4">PO#{batch.poNumber}</p>
+        {(batch.poNumber || batch.originalFileName) && (
+          <p className="text-xs text-slate-500 text-center mb-4">
+            {batch.poNumber && <>PO#{batch.poNumber}</>}
+            {batch.poNumber && batch.originalFileName && " · "}
+            {batch.originalFileName && (
+              <span title="Original uploaded file name">{batch.originalFileName}</span>
+            )}
+          </p>
         )}
 
         <button

@@ -635,6 +635,7 @@ export function ReceiptArchive({ onGoHome, onQuickNav, isOwner }) {
       id: uniqueId(),
       photoUrl,
       photoPath,
+      originalFileName: file.name || "",
       fullText: data.fullText || "",
       vendor: data.vendor || "",
       vendorAddress: data.vendorAddress || "",
@@ -706,6 +707,7 @@ export function ReceiptArchive({ onGoHome, onQuickNav, isOwner }) {
       vendor: entry.vendor,
       poNumber: entry.poNumber,
       receiptDate: entry.receiptDate,
+      originalFileName: entry.originalFileName || "",
     });
     newBatch.label = entry.vendor ? `${entry.vendor} (from Archive)` : "";
 
@@ -1084,6 +1086,11 @@ export function ReceiptArchive({ onGoHome, onQuickNav, isOwner }) {
                       .filter(Boolean)
                       .join(" · ")}
                   </p>
+                  {e.originalFileName && (
+                    <p className="text-xs text-slate-600 truncate" title={e.originalFileName}>
+                      {e.originalFileName}
+                    </p>
+                  )}
                 </div>
                 {!selectMode && (
                   <span
@@ -1174,6 +1181,14 @@ export function ReceiptArchive({ onGoHome, onQuickNav, isOwner }) {
                   .filter(Boolean)
                   .join(" · ") || "No date or PO number found"}
               </p>
+              {viewingEntry.originalFileName && (
+                <p
+                  className="text-xs text-slate-600 mt-0.5 truncate"
+                  title="Original uploaded file name"
+                >
+                  {viewingEntry.originalFileName}
+                </p>
+              )}
               {viewingEntry.sentToReceiving && (
                 <p className="text-xs text-sky-400 mt-1.5">📥 Already sent to Receiving</p>
               )}
