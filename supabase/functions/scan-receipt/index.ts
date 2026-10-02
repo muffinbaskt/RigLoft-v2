@@ -65,10 +65,10 @@ Extract every line item on it. For each line, return:
 
 Some receipts label these columns differently (e.g. "B/O", "Ord Qty", "Ship Qty", "Qty Shipped") — use your best judgment to map them to backorderQty and shippedQty. If a line only has a single quantity column with no backorder/shipped distinction, treat that number as shippedQty and set backorderQty to 0.
 
-Finally, also produce "fullText" — a plain-text transcription of everything readable on the document: every line item, every header field, notes, addresses, terms, anything printed anywhere on it. This doesn't need to be structured or formatted, just a complete text dump good enough that someone could search it later and find this document by any word that appears on it.
+Finally, also produce "fullText" — a plain-text transcription of the document's header fields, notes, addresses, terms, and anything else printed on it that ISN'T already one of the line items above (those are already captured individually in "items", so don't re-list each one's full description/material#/bin location/pricing again here — that's pure duplication, not an additional source of information, and this document can have a lot of lines). A short mention that line items are present is fine if useful context, but the exhaustive per-item detail belongs only in "items". This doesn't need to be structured or formatted, just enough of a text dump that someone could search it later and find this document by any header word, vendor name, or note that appears on it.
 
-Respond with ONLY a JSON object in this exact shape, no other text, no markdown fences:
-{"pageNumber":1,"totalPages":1,"orderNumber":"","vendor":"","vendorAddress":"","poNumber":"","receiptDate":"","fullText":"","items":[{"name":"...","backorderQty":0,"shippedQty":0,"unit":"EACH","unitPrice":0}]}`;
+Respond with ONLY a JSON object in this exact shape, no other text, no markdown fences. "items" is listed before "fullText" deliberately — if you ever run low on room, it's far more important that every line item comes through complete than that fullText does:
+{"pageNumber":1,"totalPages":1,"orderNumber":"","vendor":"","vendorAddress":"","poNumber":"","receiptDate":"","items":[{"name":"...","backorderQty":0,"shippedQty":0,"unit":"EACH","unitPrice":0}],"fullText":""}`;
 
     // A single vision call occasionally comes back malformed — not because
     // the photo is unclear, but because an LLM's output is inherently a
@@ -91,11 +91,14 @@ Respond with ONLY a JSON object in this exact shape, no other text, no markdown 
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-6",
-          // Was 2000 — tight enough that a verbose fullText transcription
-          // plus a longer items array could truncate the JSON mid-string
-          // on some attempts, which then failed to parse below. 4096 gives
-          // real headroom without meaningfully changing cost or latency.
-          max_tokens: 4096,
+          // Was 2000, then 4096 — still not enough on its own for a dense
+          // multi-page receipt (confirmed live: a 12-line-item page kept
+          // truncating mid-JSON even at 4096, succeeding only on roughly
+          // 1 retry in 3-4). The real fix was trimming fullText's
+          // redundant full re-transcription of every line item above —
+          // this headroom is now a safety margin on top of that, not
+          // the only thing standing between success and truncation.
+          max_tokens: 8192,
           messages: [
             {
               role: "user",
