@@ -10,7 +10,7 @@ export const WORKER_TASK_STATUSES = [
   { key: "not_started", label: "Not Started", color: "bg-slate-700 text-slate-200 border-slate-600" },
   { key: "in_progress", label: "In Progress", color: "bg-amber-500/15 text-amber-300 border-amber-500/40" },
   { key: "completed", label: "Completed", color: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40" },
-  { key: "failed", label: "Failed", color: "bg-red-500/15 text-red-300 border-red-500/40" },
+  { key: "failed", label: "Unable to Complete", color: "bg-red-500/15 text-red-300 border-red-500/40" },
 ];
 export const workerTaskStatusMeta = (key) =>
   WORKER_TASK_STATUSES.find((s) => s.key === key) || WORKER_TASK_STATUSES[0];

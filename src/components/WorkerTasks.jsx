@@ -889,7 +889,7 @@ export function WorkerDetailPage({ worker, tasks, allWorkers = [], onUpdateTask,
                 disabled={!failReasonDraft.trim()}
                 className="flex-1 text-sm rounded-md py-2.5 bg-red-500 text-slate-950 font-semibold hover:bg-red-400 disabled:opacity-40"
               >
-                Mark Failed
+                Mark Unable to Complete
               </button>
             </div>
           </div>

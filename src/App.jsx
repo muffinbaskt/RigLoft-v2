@@ -524,7 +524,7 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
     logWorkerActivity({
       id: uniqueId(),
       time: nowIso,
-      message: `${selectedWorker.name} marked "${failingTask.title}" Failed — ${failReasonDraft.trim()}`,
+      message: `${selectedWorker.name} marked "${failingTask.title}" Unable to Complete — ${failReasonDraft.trim()}`,
     }).catch(() => {});
     setFailingTask(null);
   };
@@ -714,7 +714,7 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
                 onClick={() => setStatus(task, "failed")}
                 className="flex-1 text-xs rounded-md py-2 bg-red-500/15 border border-red-500/40 text-red-300 hover:bg-red-500/25"
               >
-                Failed
+                Unable to Complete
               </button>
             </div>
             <button
@@ -788,7 +788,7 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
                 disabled={!failReasonDraft.trim()}
                 className="flex-1 text-sm rounded-md py-2.5 bg-red-500 text-slate-950 font-semibold hover:bg-red-400 disabled:opacity-40"
               >
-                Mark Failed
+                Mark Unable to Complete
               </button>
             </div>
           </div>
