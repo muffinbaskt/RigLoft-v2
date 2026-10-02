@@ -69,8 +69,14 @@ export function newSharedWorkerTask({ title, jobLabel, capacity, assignedWorkers
     jobLabel: jobLabel || "",
     urgency: urgency || "normal",
     dueDate: dueDate || null,
-    status: workers.length > 0 ? "in_progress" : "not_started",
-    startedAt: workers.length > 0 ? new Date().toISOString() : null,
+    // Being assigned isn't the same as having actually started — this
+    // used to jump straight to "In Progress" the moment someone was
+    // picked at creation time, before they'd done anything. Matches
+    // newWorkerTask above, which already always starts "not_started"
+    // regardless of assignment; startedAt gets set for real later, the
+    // one place that already exists for it (WorkerDetailPage's setStatus).
+    status: "not_started",
+    startedAt: null,
     failReason: "",
     createdAt: new Date().toISOString().slice(0, 10),
     resolvedAt: null,

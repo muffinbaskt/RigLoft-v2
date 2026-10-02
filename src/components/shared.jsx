@@ -857,7 +857,11 @@ export function AddToolModal({ onSave, onClose, initialRows, existingReceipt, ti
 // generation and print styling has nothing specific to either one.
 export function DeepLinkQrModal({ section, id, title, subtitle, heading, onClose }) {
   const canvasRef = useRef(null);
-  const url = `${window.location.origin}${window.location.pathname}?section=${section}&id=${id}`;
+  // id is optional — Kiosk isn't a specific record, so there's nothing for
+  // an id to point at; every other section still gets one.
+  const url = `${window.location.origin}${window.location.pathname}?section=${section}${
+    id != null ? `&id=${id}` : ""
+  }`;
   useEffect(() => {
     if (canvasRef.current) {
       QRCode.toCanvas(canvasRef.current, url, { width: 240, margin: 1 }, () => {});

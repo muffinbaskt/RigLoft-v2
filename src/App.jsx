@@ -22,6 +22,7 @@ import {
 import { uniqueId, playSaveChime, playSoftTap } from "./lib/utils";
 import { maybeAutoBackupWorkerTasks } from "./lib/backup";
 import { TaskMetaBadges } from "./components/WorkerTasks";
+import { DeepLinkQrModal } from "./components/shared";
 // Lazy-loaded: each of these only downloads once someone actually opens
 // that section, instead of every visit shipping all of Receiving/Receipt
 // Archive/Tools/Backorders/Love Lists/Job Lists whether or not that session
@@ -77,6 +78,7 @@ function SectionLoadingFallback() {
 }
 
 function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onSelectKiosk, onSelectReceiving, onSelectBackorders, onSelectArchive, onSelectTools, onCheckForUpdate, pendingSuggestionCount = 0, toolsAlertCount = 0, onRequestLogin, onSignOut }) {
+  const [showKioskQr, setShowKioskQr] = useState(false);
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/60 sticky top-0 z-10 backdrop-blur">
@@ -234,13 +236,34 @@ function AppLandingScreen({ isEditor, isManager, onSelectLove, onSelectJobs, onS
             </div>
           )}
         </div>
-        <button
-          onClick={onSelectKiosk}
-          className="w-full mt-4 flex items-center justify-center gap-2 bg-slate-900 border-2 border-slate-800 hover:border-slate-600 rounded-xl p-4 text-center transition-colors"
-        >
-          <Users className="w-5 h-5 text-slate-400" />
-          <span className="text-sm font-semibold text-slate-300">Worker Kiosk</span>
-        </button>
+        <div className="w-full mt-4 flex gap-2">
+          <button
+            onClick={onSelectKiosk}
+            className="flex-1 flex items-center justify-center gap-2 bg-slate-900 border-2 border-slate-800 hover:border-slate-600 rounded-xl p-4 text-center transition-colors"
+          >
+            <Users className="w-5 h-5 text-slate-400" />
+            <span className="text-sm font-semibold text-slate-300">Worker Kiosk</span>
+          </button>
+          {isEditor && (
+            <button
+              onClick={() => setShowKioskQr(true)}
+              title="QR code to open Worker Kiosk directly — print it or put it up for the crew"
+              className="shrink-0 flex items-center justify-center bg-slate-900 border-2 border-slate-800 hover:border-slate-600 rounded-xl px-4 transition-colors"
+            >
+              <QrCode className="w-5 h-5 text-slate-400" />
+            </button>
+          )}
+        </div>
+        {showKioskQr && (
+          <DeepLinkQrModal
+            section="kiosk"
+            id={null}
+            heading="Worker Kiosk QR code"
+            title="Worker Kiosk"
+            subtitle="Scan to open the kiosk directly — no login needed"
+            onClose={() => setShowKioskQr(false)}
+          />
+        )}
         {isEditor && (
           <button
             onClick={onSelectBackorders}
@@ -786,9 +809,13 @@ export default function AuthGate() {
   const initialDeepLink = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
     const section = params.get("section");
+    if (!section) return null;
+    // Kiosk isn't a record you deep-link INTO — there's nothing an id
+    // could point at — so it's the one section allowed with no id at all.
+    if (section === "kiosk") return { section: "kiosk", id: null };
     const rawId = params.get("id");
     const validSections = ["jobs", "love", "receiving", "backorders", "archive", "tools"];
-    if (!section || !rawId || !validSections.includes(section)) return null;
+    if (!rawId || !validSections.includes(section)) return null;
     // Every id in this app comes from uniqueId() (a number), but a URL
     // query param is always a string — comparing the two with === (as the
     // list/job lookup does) silently never matches without this coercion.
@@ -838,6 +865,10 @@ export default function AuthGate() {
   useEffect(() => {
     if (!initialDeepLink || session === undefined || deepLinkHistorySetup.current) return;
     deepLinkHistorySetup.current = true;
+    // Tapping the Worker Kiosk tile signs out first — no privileged access
+    // should be live on a device sitting in kiosk mode. A deep link bypasses
+    // that tap entirely, so it needs the same safeguard here instead.
+    if (initialDeepLink.section === "kiosk" && session) supabase.auth.signOut();
     const authenticated = !!session;
     // Captured before replaceState touches window.location — otherwise
     // the search string read for the pushState just below is already
