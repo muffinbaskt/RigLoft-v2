@@ -56,4 +56,28 @@ export default defineConfig({
       },
     }),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        // Vendor code (React, Supabase, icons, the QR library) changes far
+        // less often than our own app code and is identical across every
+        // deploy that doesn't touch a dependency — splitting it into its
+        // own chunk(s) means a normal app-only deploy only invalidates the
+        // browser's cache for the small app chunk, not this much bigger,
+        // rarely-changing one. Split further by package rather than one
+        // single "vendor" blob so, e.g., a lucide-react version bump
+        // doesn't also force everyone to re-download Supabase's client.
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return;
+          if (id.includes("react-dom") || id.includes("/react/") || id.includes("scheduler")) {
+            return "vendor-react";
+          }
+          if (id.includes("@supabase")) return "vendor-supabase";
+          if (id.includes("lucide-react")) return "vendor-icons";
+          if (id.includes("qrcode")) return "vendor-qrcode";
+          return "vendor";
+        },
+      },
+    },
+  },
 });
