@@ -70,77 +70,97 @@ Finally, also produce "fullText" — a plain-text transcription of everything re
 Respond with ONLY a JSON object in this exact shape, no other text, no markdown fences:
 {"pageNumber":1,"totalPages":1,"orderNumber":"","vendor":"","vendorAddress":"","poNumber":"","receiptDate":"","fullText":"","items":[{"name":"...","backorderQty":0,"shippedQty":0,"unit":"EACH","unitPrice":0}]}`;
 
-    const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 2000,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: mediaType || "image/jpeg",
-                  data: imageBase64,
+    // A single vision call occasionally comes back malformed — not because
+    // the photo is unclear, but because an LLM's output is inherently a
+    // little stochastic, and a long, line-item-heavy document pushes the
+    // response close enough to the token budget that it can get cut off
+    // mid-JSON on some attempts and not others. There was no retry at all
+    // before, so any one bad roll of the dice was a hard failure — and the
+    // error message blamed the photo, which is actively misleading when a
+    // second identical attempt against the very same bytes succeeds fine.
+    // Two tries total, both against the unmodified image, before giving up.
+    const maxAttempts = 2;
+    let lastError = "Couldn't read this receipt after a couple of tries. Try again.";
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          // Was 2000 — tight enough that a verbose fullText transcription
+          // plus a longer items array could truncate the JSON mid-string
+          // on some attempts, which then failed to parse below. 4096 gives
+          // real headroom without meaningfully changing cost or latency.
+          max_tokens: 4096,
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: mediaType || "image/jpeg",
+                    data: imageBase64,
+                  },
                 },
-              },
-              { type: "text", text: prompt },
-            ],
-          },
-        ],
-      }),
+                { type: "text", text: prompt },
+              ],
+            },
+          ],
+        }),
+      });
+
+      if (!anthropicRes.ok) {
+        lastError = `Vision API error: ${await anthropicRes.text()}`;
+        continue;
+      }
+
+      const data = await anthropicRes.json();
+      const textBlock = (data.content || []).find((b: any) => b.type === "text");
+      const rawText = textBlock ? textBlock.text : "";
+
+      // Strip markdown fences if the model added them despite instructions,
+      // then parse — same defensive pattern used elsewhere in this app for
+      // any model output that's supposed to be pure JSON.
+      const cleaned = rawText.replace(/```json|```/g, "").trim();
+      let parsed;
+      try {
+        parsed = JSON.parse(cleaned);
+      } catch {
+        // Likely truncated (check data.stop_reason === "max_tokens" if this
+        // still recurs after the bump above) or just a bad-JSON roll —
+        // either way, worth one more attempt before reporting failure.
+        lastError = "Couldn't read this receipt after a couple of tries. Try again.";
+        continue;
+      }
+
+      const items = Array.isArray(parsed.items) ? parsed.items : [];
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          items,
+          pageNumber: Number(parsed.pageNumber) > 0 ? Number(parsed.pageNumber) : 1,
+          totalPages: Number(parsed.totalPages) > 0 ? Number(parsed.totalPages) : 1,
+          orderNumber: typeof parsed.orderNumber === "string" ? parsed.orderNumber : "",
+          vendor: typeof parsed.vendor === "string" ? parsed.vendor : "",
+          poNumber: typeof parsed.poNumber === "string" ? parsed.poNumber : "",
+          receiptDate: typeof parsed.receiptDate === "string" ? parsed.receiptDate : "",
+          fullText: typeof parsed.fullText === "string" ? parsed.fullText : "",
+          vendorAddress: typeof parsed.vendorAddress === "string" ? parsed.vendorAddress : "",
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    return new Response(JSON.stringify({ ok: false, error: lastError }), {
+      status: 200,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-
-    if (!anthropicRes.ok) {
-      const errText = await anthropicRes.text();
-      return new Response(
-        JSON.stringify({ ok: false, error: `Vision API error: ${errText}` }),
-        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const data = await anthropicRes.json();
-    const textBlock = (data.content || []).find((b: any) => b.type === "text");
-    const rawText = textBlock ? textBlock.text : "";
-
-    // Strip markdown fences if the model added them despite instructions,
-    // then parse — same defensive pattern used elsewhere in this app for
-    // any model output that's supposed to be pure JSON.
-    const cleaned = rawText.replace(/```json|```/g, "").trim();
-    let parsed;
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch {
-      return new Response(
-        JSON.stringify({ ok: false, error: "Couldn't parse the receipt — try a clearer photo." }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const items = Array.isArray(parsed.items) ? parsed.items : [];
-    return new Response(
-      JSON.stringify({
-        ok: true,
-        items,
-        pageNumber: Number(parsed.pageNumber) > 0 ? Number(parsed.pageNumber) : 1,
-        totalPages: Number(parsed.totalPages) > 0 ? Number(parsed.totalPages) : 1,
-        orderNumber: typeof parsed.orderNumber === "string" ? parsed.orderNumber : "",
-        vendor: typeof parsed.vendor === "string" ? parsed.vendor : "",
-        poNumber: typeof parsed.poNumber === "string" ? parsed.poNumber : "",
-        receiptDate: typeof parsed.receiptDate === "string" ? parsed.receiptDate : "",
-        fullText: typeof parsed.fullText === "string" ? parsed.fullText : "",
-        vendorAddress: typeof parsed.vendorAddress === "string" ? parsed.vendorAddress : "",
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
   } catch (err) {
     return new Response(
       JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }),
