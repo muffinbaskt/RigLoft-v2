@@ -865,12 +865,15 @@ export default function AuthGate() {
   // leaving a section can't get out of sync with each other.
   const goToLanding = () => window.history.back();
 
-  // Only the owner's account can create new Supabase Auth users (the app
+  // Only an owner's account can create new Supabase Auth users (the app
   // itself never exposes sign-up), so any *other* real, logged-in account
   // is safely assumed to be the manager — no separate roles table needed
-  // for a single manager account.
-  const OWNER_EMAIL = "muffinbaskt@gmail.com";
-  const isOwner = !!session && session.user?.email?.toLowerCase() === OWNER_EMAIL;
+  // for a single manager account. A short list rather than one email so a
+  // second account (e.g. for live-testing owner-only screens) can have
+  // full owner access without using the primary account's own credentials.
+  const OWNER_EMAILS = ["muffinbaskt@gmail.com"];
+  const isOwner =
+    !!session && OWNER_EMAILS.includes(session.user?.email?.toLowerCase());
   const isManager = !!session && !isOwner;
   const managerName = isManager
     ? session.user?.user_metadata?.name || session.user?.email || "Manager"
