@@ -7,6 +7,13 @@ import react from "@vitejs/plugin-react";
 // down every other test file that doesn't need a browser environment.
 export default defineConfig({
   plugins: [react()],
+  // Mirrors vite.config.js's own `define` — JobPicker reads __BUILD_TIME__
+  // directly, so without this any test that renders it crashes with a real
+  // ReferenceError the actual build never hits (Vite injects the real
+  // value at build time; Vitest doesn't share that config automatically).
+  define: {
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+  },
   test: {
     environment: "node",
     environmentMatchGlobs: [["**/*.component.test.jsx", "jsdom"]],
