@@ -88,8 +88,15 @@ import {
   pdfToImageFiles,
 } from "../lib/api";
 import { syncSmesIntoRegistry, TOOLS_KEY } from "../lib/tools";
-import { downloadLoveListsBackupFile, maybeAutoBackupLoveLists } from "../lib/backup";
 import {
+  downloadLoveListsBackupFile,
+  maybeAutoBackupLoveLists,
+  downloadLoveTaskListBackupFile,
+  maybeAutoBackupLoveTaskList,
+  parseLoveTaskListBackup,
+} from "../lib/backup";
+import {
+  BackupRestoreBar,
   ConfirmDelete,
   DeepLinkQrModal,
   PhotoLightbox,
@@ -4087,7 +4094,24 @@ export function LoveListsDashboard({ lists, isEditor, isOwner, staleThresholds =
 // updates this list too, with no extra step. Falls back to the original
 // snapshot qty if the source list or item is gone (deleted, merged away),
 // so a stale entry never shows a wrong "0" just because it can't be found.
-export function LoveTaskListModal({ entries, lists, isEditor, onToggleDone, onRemove, onClearDone, onClearAll, onClose }) {
+export function LoveTaskListModal({
+  entries,
+  lists,
+  isEditor,
+  onToggleDone,
+  onRemove,
+  onClearDone,
+  onClearAll,
+  onClose,
+  onBackUp,
+  onRestoreFileChosen,
+  backupNotice,
+  restoreError,
+  onDismissRestoreError,
+  restorePending,
+  onCancelRestore,
+  onConfirmRestore,
+}) {
   const [copied, setCopied] = useState(false);
   const [confirmingClearAll, setConfirmingClearAll] = useState(false);
   const liveEntries = entries.map((e) => {
@@ -4142,6 +4166,31 @@ export function LoveTaskListModal({ entries, lists, isEditor, onToggleDone, onRe
       </header>
 
       <main className="max-w-2xl mx-auto px-4 py-5">
+        {isEditor && onBackUp && (
+          <div className="mb-4">
+            <BackupRestoreBar
+              onBackUp={onBackUp}
+              backupDisabled={entries.length === 0}
+              backupTitle="Saves this task list to a file"
+              onRestoreFileChosen={onRestoreFileChosen}
+              backupNotice={backupNotice}
+              restoreError={restoreError}
+              onDismissRestoreError={onDismissRestoreError}
+              restorePending={
+                restorePending && {
+                  summary: `This file has ${restorePending.loveTaskList.length} item${
+                    restorePending.loveTaskList.length === 1 ? "" : "s"
+                  }${restorePending.exportedAt ? `, backed up ${new Date(restorePending.exportedAt).toLocaleString()}` : ""}.`,
+                  warning: `This replaces everything currently on the list (${entries.length} item${
+                    entries.length === 1 ? "" : "s"
+                  } right now). Your current list is saved to a file first, so you can undo this.`,
+                  onCancel: onCancelRestore,
+                  onConfirm: onConfirmRestore,
+                }
+              }
+            />
+          </div>
+        )}
         {entries.length === 0 ? (
           <p className="text-sm text-slate-500 text-center py-10">
             Nothing here yet — select items on a Love List and add them to the Task List.
@@ -4339,14 +4388,21 @@ export function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null
     } catch {
       // custom thresholds just won't be available this session — defaults still work fine
     }
+    let loadedTaskList = null;
     try {
       const taskListResult = await getWithRetry(LOVE_TASK_LIST_KEY);
-      if (taskListResult.ok && taskListResult.value) setLoveTaskList(JSON.parse(taskListResult.value));
+      if (taskListResult.ok && taskListResult.value) {
+        loadedTaskList = JSON.parse(taskListResult.value);
+        setLoveTaskList(loadedTaskList);
+      }
     } catch {
       // just starts empty — nothing else depends on this loading successfully
     }
     setLoading(false);
-    if (isEditor) maybeAutoBackupLoveLists(loadedLists);
+    if (isEditor) {
+      maybeAutoBackupLoveLists(loadedLists);
+      if (loadedTaskList) maybeAutoBackupLoveTaskList(loadedTaskList);
+    }
   };
 
   useEffect(() => {
@@ -4365,8 +4421,45 @@ export function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null
     setLoveTaskList((prev) => {
       const next = updater(prev);
       saveWithRetry(LOVE_TASK_LIST_KEY, JSON.stringify(next)).catch(() => {});
+      maybeAutoBackupLoveTaskList(next);
       return next;
     });
+  };
+
+  const [taskListBackupNotice, setTaskListBackupNotice] = useState(null);
+  const [taskListRestoreError, setTaskListRestoreError] = useState(null);
+  const [taskListRestorePending, setTaskListRestorePending] = useState(null); // { loveTaskList, exportedAt }
+
+  const backUpTaskListNow = async () => {
+    const ok = await downloadLoveTaskListBackupFile(loveTaskList, { force: true });
+    const n = loveTaskList.length;
+    setTaskListBackupNotice(ok ? `✅ Backup saved (${n} item${n === 1 ? "" : "s"})` : "Couldn't create the backup file");
+    setTimeout(() => setTaskListBackupNotice(null), 4000);
+  };
+  const handleTaskListRestoreFileChosen = (file) => {
+    setTaskListRestoreError(null);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = parseLoveTaskListBackup(e.target.result);
+      if (!result.ok) {
+        setTaskListRestoreError(result.error);
+        return;
+      }
+      setTaskListRestorePending({ loveTaskList: result.loveTaskList, exportedAt: result.exportedAt });
+    };
+    reader.onerror = () => setTaskListRestoreError("Couldn't read that file off the device.");
+    reader.readAsText(file);
+  };
+  const confirmTaskListRestore = async () => {
+    if (!taskListRestorePending) return;
+    const incoming = taskListRestorePending.loveTaskList;
+    setTaskListRestorePending(null);
+    if (loveTaskList.length > 0) {
+      await downloadLoveTaskListBackupFile(loveTaskList, { force: true, label: "love-task-list-before-restore" });
+    }
+    updateLoveTaskList(() => incoming);
+    setTaskListBackupNotice(`✅ Restored ${incoming.length} item${incoming.length === 1 ? "" : "s"}`);
+    setTimeout(() => setTaskListBackupNotice(null), 4000);
   };
   const addToLoveTaskList = (list, addedItems) => {
     if (!isEditor || addedItems.length === 0) return;
@@ -4910,6 +5003,14 @@ export function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null
           onClearDone={clearDoneLoveTasks}
           onClearAll={clearAllLoveTasks}
           onClose={() => setShowLoveTaskList(false)}
+          onBackUp={backUpTaskListNow}
+          onRestoreFileChosen={handleTaskListRestoreFileChosen}
+          backupNotice={taskListBackupNotice}
+          restoreError={taskListRestoreError}
+          onDismissRestoreError={() => setTaskListRestoreError(null)}
+          restorePending={taskListRestorePending}
+          onCancelRestore={() => setTaskListRestorePending(null)}
+          onConfirmRestore={confirmTaskListRestore}
         />
       )}
       {restorePending && (

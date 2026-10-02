@@ -90,6 +90,7 @@ import {
 import {
   ZoomableImage,
   SimpleListPickerModal,
+  BackupRestoreBar,
   ConfirmDelete,
   QuickNavMenu,
   DeepLinkQrModal,
@@ -134,6 +135,13 @@ import {
   downloadBackupFile,
   downloadOfflineBackup,
   maybeAutoBackup,
+  maybeAutoBackupReturns,
+  downloadReturnsBackupFile,
+  parseReturnsBackup,
+  maybeAutoBackupGeneralTodos,
+  downloadGeneralTodosBackupFile,
+  parseGeneralTodosBackup,
+  maybeAutoBackupWorkerTasks,
 } from "../lib/backup";
 import {
   JOBS_KEY,
@@ -3933,7 +3941,22 @@ export function ContainerDetailModal({
   );
 }
 
-export function GeneralTodoModal({ todos, onAdd, onToggle, onDelete, onClearFinished, onClose }) {
+export function GeneralTodoModal({
+  todos,
+  onAdd,
+  onToggle,
+  onDelete,
+  onClearFinished,
+  onClose,
+  onBackUp,
+  onRestoreFileChosen,
+  backupNotice,
+  restoreError,
+  onDismissRestoreError,
+  restorePending,
+  onCancelRestore,
+  onConfirmRestore,
+}) {
   const [newText, setNewText] = useState("");
 
   const pending = [...todos]
@@ -4062,6 +4085,31 @@ export function GeneralTodoModal({ todos, onAdd, onToggle, onDelete, onClearFini
             </>
           )}
         </div>
+        {onBackUp && (
+          <div className="px-5 py-3 border-t border-slate-800 shrink-0">
+            <BackupRestoreBar
+              onBackUp={onBackUp}
+              backupDisabled={todos.length === 0}
+              backupTitle="Saves this list to a file"
+              onRestoreFileChosen={onRestoreFileChosen}
+              backupNotice={backupNotice}
+              restoreError={restoreError}
+              onDismissRestoreError={onDismissRestoreError}
+              restorePending={
+                restorePending && {
+                  summary: `This file has ${restorePending.generalTodos.length} item${
+                    restorePending.generalTodos.length === 1 ? "" : "s"
+                  }${restorePending.exportedAt ? `, backed up ${new Date(restorePending.exportedAt).toLocaleString()}` : ""}.`,
+                  warning: `This replaces everything currently on the list (${todos.length} item${
+                    todos.length === 1 ? "" : "s"
+                  } right now). Your current list is saved to a file first, so you can undo this.`,
+                  onCancel: onCancelRestore,
+                  onConfirm: onConfirmRestore,
+                }
+              }
+            />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -4828,7 +4876,20 @@ export function ReturnDetailPage({ ret, onUpdate, onSyncToolsFromItem, onBack, o
 }
 
 
-export function ReturnsListPage({ returns, onOpenReturn, onBack, onGoHome }) {
+export function ReturnsListPage({
+  returns,
+  onOpenReturn,
+  onBack,
+  onGoHome,
+  onBackUp,
+  onRestoreFileChosen,
+  backupNotice,
+  restoreError,
+  onDismissRestoreError,
+  restorePending,
+  onCancelRestore,
+  onConfirmRestore,
+}) {
   const [collapsed, setCollapsed] = useState({});
 
   const jobGroups = [...new Map(returns.map((r) => [r.jobId, r.jobName])).entries()].sort(
@@ -4853,6 +4914,31 @@ export function ReturnsListPage({ returns, onOpenReturn, onBack, onGoHome }) {
       </header>
 
       <main className="max-w-3xl mx-auto px-4 py-5">
+        {onBackUp && (
+          <div className="mb-4">
+            <BackupRestoreBar
+              onBackUp={onBackUp}
+              backupDisabled={returns.length === 0}
+              backupTitle="Saves every logged return to a file"
+              onRestoreFileChosen={onRestoreFileChosen}
+              backupNotice={backupNotice}
+              restoreError={restoreError}
+              onDismissRestoreError={onDismissRestoreError}
+              restorePending={
+                restorePending && {
+                  summary: `This file has ${restorePending.returns.length} return${
+                    restorePending.returns.length === 1 ? "" : "s"
+                  }${restorePending.exportedAt ? `, backed up ${new Date(restorePending.exportedAt).toLocaleString()}` : ""}.`,
+                  warning: `This replaces everything currently logged (${returns.length} return${
+                    returns.length === 1 ? "" : "s"
+                  } right now). Your current list is saved to a file first, so you can undo this.`,
+                  onCancel: onCancelRestore,
+                  onConfirm: onConfirmRestore,
+                }
+              }
+            />
+          </div>
+        )}
         {jobGroups.length === 0 ? (
           <p className="text-sm text-slate-500 text-center py-10">
             No returns logged yet — start one from "+ Quick Transfer" on the job picker screen.
@@ -11793,6 +11879,12 @@ export function WareHub({ isEditor, isManager, managerName, onSignOut, onRequest
     typeof navigator === "undefined" ? true : navigator.onLine
   );
   const [pendingSync, setPendingSync] = useState(false);
+  const [returnsBackupNotice, setReturnsBackupNotice] = useState(null);
+  const [returnsRestoreError, setReturnsRestoreError] = useState(null);
+  const [returnsRestorePending, setReturnsRestorePending] = useState(null); // { returns, exportedAt }
+  const [generalTodosBackupNotice, setGeneralTodosBackupNotice] = useState(null);
+  const [generalTodosRestoreError, setGeneralTodosRestoreError] = useState(null);
+  const [generalTodosRestorePending, setGeneralTodosRestorePending] = useState(null); // { generalTodos, exportedAt }
   const jobsSaveTimer = useRef(null);
   const jobsRef = useRef([]);
   const jobsUpdatedAtRef = useRef(null);
@@ -12070,30 +12162,40 @@ export function WareHub({ isEditor, isManager, managerName, onSignOut, onRequest
 
     // Returns are lower-stakes than jobs/catalog — don't block the whole
     // app from loading if this one specifically fails for some reason.
+    let loadedReturns = null;
     try {
       if (returnsResult.ok && returnsResult.value) {
-        setReturns(JSON.parse(returnsResult.value));
+        loadedReturns = JSON.parse(returnsResult.value);
+        setReturns(loadedReturns);
       }
     } catch {
       // corrupted stored data — just start with an empty list
     }
+    let loadedGeneralTodos = null;
     try {
       if (generalTodosResult.ok && generalTodosResult.value) {
-        setGeneralTodos(JSON.parse(generalTodosResult.value));
+        loadedGeneralTodos = JSON.parse(generalTodosResult.value);
+        setGeneralTodos(loadedGeneralTodos);
       }
     } catch {
       // corrupted stored data — just start with an empty list
     }
+    let loadedWorkers = null;
     try {
       const workersResult = await getWithRetry(WORKERS_KEY);
-      if (workersResult.ok && workersResult.value) setWorkers(JSON.parse(workersResult.value));
+      if (workersResult.ok && workersResult.value) {
+        loadedWorkers = JSON.parse(workersResult.value);
+        setWorkers(loadedWorkers);
+      }
     } catch {
       // corrupted stored data — just start with an empty roster
     }
+    let loadedWorkerTasks = null;
     try {
       const workerTasksResult = await getWithRetry(WORKER_TASKS_KEY);
       if (workerTasksResult.ok && workerTasksResult.value) {
-        setWorkerTasks(JSON.parse(workerTasksResult.value).map(migrateWorkerTask));
+        loadedWorkerTasks = JSON.parse(workerTasksResult.value).map(migrateWorkerTask);
+        setWorkerTasks(loadedWorkerTasks);
       }
     } catch {
       // corrupted stored data — just start empty
@@ -12148,7 +12250,14 @@ export function WareHub({ isEditor, isManager, managerName, onSignOut, onRequest
     catalogBaseRef.current = finalCatalog;
     setConflictWarning(false);
 
-    if (isEditor) maybeAutoBackup(finalJobs, loadedCatalog);
+    if (isEditor) {
+      maybeAutoBackup(finalJobs, loadedCatalog);
+      if (loadedReturns) maybeAutoBackupReturns(loadedReturns);
+      if (loadedGeneralTodos) maybeAutoBackupGeneralTodos(loadedGeneralTodos);
+      if (loadedWorkers || loadedWorkerTasks) {
+        maybeAutoBackupWorkerTasks(loadedWorkers || [], loadedWorkerTasks || []);
+      }
+    }
 
     // If there's a leftover offline queue from a previous session (the app
     // was closed while offline), check it now that we know what the server
@@ -13145,6 +13254,7 @@ export function WareHub({ isEditor, isManager, managerName, onSignOut, onRequest
     setReturns((prev) => {
       const next = updater(prev);
       saveWithRetry(RETURNS_KEY, JSON.stringify(next)).catch(() => {});
+      maybeAutoBackupReturns(next);
       return next;
     });
   };
@@ -13153,6 +13263,7 @@ export function WareHub({ isEditor, isManager, managerName, onSignOut, onRequest
     setGeneralTodos((prev) => {
       const next = updater(prev);
       saveWithRetry(GENERAL_TODOS_KEY, JSON.stringify(next)).catch(() => {});
+      maybeAutoBackupGeneralTodos(next);
       return next;
     });
   };
@@ -13171,6 +13282,7 @@ export function WareHub({ isEditor, isManager, managerName, onSignOut, onRequest
     setWorkerTasks((prev) => {
       const next = [...prev, task];
       saveWithRetry(WORKER_TASKS_KEY, JSON.stringify(next)).catch(() => {});
+      maybeAutoBackupWorkerTasks(workers, next);
       return next;
     });
     return task.id;
@@ -13181,6 +13293,7 @@ export function WareHub({ isEditor, isManager, managerName, onSignOut, onRequest
     setWorkerTasks((prev) => {
       const next = prev.filter((t) => t.id !== taskId);
       saveWithRetry(WORKER_TASKS_KEY, JSON.stringify(next)).catch(() => {});
+      maybeAutoBackupWorkerTasks(workers, next);
       return next;
     });
   };
@@ -13190,15 +13303,95 @@ export function WareHub({ isEditor, isManager, managerName, onSignOut, onRequest
   // whatever is already sitting in memory here — refresh on close so item
   // cards do not keep showing an assignment that was actually deleted.
   const reloadWorkerData = async () => {
+    let loadedWorkers = null;
+    let loadedTasks = null;
     try {
       const workersResult = await getWithRetry(WORKERS_KEY);
-      if (workersResult.ok && workersResult.value) setWorkers(JSON.parse(workersResult.value));
+      if (workersResult.ok && workersResult.value) {
+        loadedWorkers = JSON.parse(workersResult.value);
+        setWorkers(loadedWorkers);
+      }
     } catch {}
     try {
       const tasksResult = await getWithRetry(WORKER_TASKS_KEY);
-      if (tasksResult.ok && tasksResult.value) setWorkerTasks(JSON.parse(tasksResult.value).map(migrateWorkerTask));
+      if (tasksResult.ok && tasksResult.value) {
+        loadedTasks = JSON.parse(tasksResult.value).map(migrateWorkerTask);
+        setWorkerTasks(loadedTasks);
+      }
     } catch {}
+    if (loadedWorkers || loadedTasks) {
+      maybeAutoBackupWorkerTasks(loadedWorkers || workers, loadedTasks || workerTasks);
+    }
   };
+
+  // Backup/restore for Returns, Shop To-Dos, and Worker Tasks — same
+  // shape as Tools and Receipt Archive's: back up on demand, save the
+  // current data to a file before any restore so it's never a one-way
+  // door, then replace.
+  const backUpReturnsNow = async () => {
+    const ok = await downloadReturnsBackupFile(returns, { force: true });
+    const n = returns.length;
+    setReturnsBackupNotice(ok ? `✅ Backup saved (${n} return${n === 1 ? "" : "s"})` : "Couldn't create the backup file");
+    setTimeout(() => setReturnsBackupNotice(null), 4000);
+  };
+  const handleReturnsRestoreFileChosen = (file) => {
+    setReturnsRestoreError(null);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = parseReturnsBackup(e.target.result);
+      if (!result.ok) {
+        setReturnsRestoreError(result.error);
+        return;
+      }
+      setReturnsRestorePending({ returns: result.returns, exportedAt: result.exportedAt });
+    };
+    reader.onerror = () => setReturnsRestoreError("Couldn't read that file off the device.");
+    reader.readAsText(file);
+  };
+  const confirmReturnsRestore = async () => {
+    if (!returnsRestorePending) return;
+    const incoming = returnsRestorePending.returns;
+    setReturnsRestorePending(null);
+    if (returns.length > 0) {
+      await downloadReturnsBackupFile(returns, { force: true, label: "returns-before-restore" });
+    }
+    updateReturns(() => incoming);
+    setReturnsBackupNotice(`✅ Restored ${incoming.length} return${incoming.length === 1 ? "" : "s"}`);
+    setTimeout(() => setReturnsBackupNotice(null), 4000);
+  };
+
+  const backUpGeneralTodosNow = async () => {
+    const ok = await downloadGeneralTodosBackupFile(generalTodos, { force: true });
+    const n = generalTodos.length;
+    setGeneralTodosBackupNotice(ok ? `✅ Backup saved (${n} item${n === 1 ? "" : "s"})` : "Couldn't create the backup file");
+    setTimeout(() => setGeneralTodosBackupNotice(null), 4000);
+  };
+  const handleGeneralTodosRestoreFileChosen = (file) => {
+    setGeneralTodosRestoreError(null);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = parseGeneralTodosBackup(e.target.result);
+      if (!result.ok) {
+        setGeneralTodosRestoreError(result.error);
+        return;
+      }
+      setGeneralTodosRestorePending({ generalTodos: result.generalTodos, exportedAt: result.exportedAt });
+    };
+    reader.onerror = () => setGeneralTodosRestoreError("Couldn't read that file off the device.");
+    reader.readAsText(file);
+  };
+  const confirmGeneralTodosRestore = async () => {
+    if (!generalTodosRestorePending) return;
+    const incoming = generalTodosRestorePending.generalTodos;
+    setGeneralTodosRestorePending(null);
+    if (generalTodos.length > 0) {
+      await downloadGeneralTodosBackupFile(generalTodos, { force: true, label: "general-todos-before-restore" });
+    }
+    updateGeneralTodos(() => incoming);
+    setGeneralTodosBackupNotice(`✅ Restored ${incoming.length} item${incoming.length === 1 ? "" : "s"}`);
+    setTimeout(() => setGeneralTodosBackupNotice(null), 4000);
+  };
+
 
   const addGeneralTodo = (text) => {
     if (!text.trim()) return;
@@ -13680,6 +13873,14 @@ export function WareHub({ isEditor, isManager, managerName, onSignOut, onRequest
             setShowReturnsListPage(false);
             setShowPicker(true);
           }}
+          onBackUp={backUpReturnsNow}
+          onRestoreFileChosen={handleReturnsRestoreFileChosen}
+          backupNotice={returnsBackupNotice}
+          restoreError={returnsRestoreError}
+          onDismissRestoreError={() => setReturnsRestoreError(null)}
+          restorePending={returnsRestorePending}
+          onCancelRestore={() => setReturnsRestorePending(null)}
+          onConfirmRestore={confirmReturnsRestore}
         />
       ) : showingPicker ? (
         <JobPicker
@@ -13812,6 +14013,14 @@ export function WareHub({ isEditor, isManager, managerName, onSignOut, onRequest
           onDelete={deleteGeneralTodo}
           onClearFinished={clearFinishedGeneralTodos}
           onClose={() => setShowGeneralTodo(false)}
+          onBackUp={backUpGeneralTodosNow}
+          onRestoreFileChosen={handleGeneralTodosRestoreFileChosen}
+          backupNotice={generalTodosBackupNotice}
+          restoreError={generalTodosRestoreError}
+          onDismissRestoreError={() => setGeneralTodosRestoreError(null)}
+          restorePending={generalTodosRestorePending}
+          onCancelRestore={() => setGeneralTodosRestorePending(null)}
+          onConfirmRestore={confirmGeneralTodosRestore}
         />
       )}
 

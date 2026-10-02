@@ -374,3 +374,354 @@ export function parseArchiveBackup(text) {
   }
   return { ok: true, entries, exportedAt: parsed.exportedAt || null };
 }
+
+// --- Tools registry ---------------------------------------------------
+// The one most worth protecting of everything below: serial numbers tied
+// to specific tools aren't something you can reconstruct from memory the
+// way a worker roster or a todo list is.
+export const AUTO_BACKUP_TOOLS_KEY = "warehub-last-auto-backup-tools";
+let lastToolsBackupDownloadAt = 0;
+let toolsAutoBackupInFlight = false;
+
+export async function downloadToolsBackupFile(tools, { force = false, label = "tools" } = {}) {
+  if (!force && Date.now() - lastToolsBackupDownloadAt < 10000) return false;
+  const now = new Date();
+  const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `riggy-${label}-${stamp}.json`;
+  const payload = { exportedFrom: "Riggy (Tools)", exportedAt: now.toISOString(), tools };
+  lastToolsBackupDownloadAt = Date.now();
+  return writeBackupJson(filename, JSON.stringify(payload, null, 2));
+}
+
+export async function maybeAutoBackupTools(tools) {
+  if (!tools || tools.length === 0) return;
+  if (toolsAutoBackupInFlight) return;
+  try {
+    const last = localStorage.getItem(AUTO_BACKUP_TOOLS_KEY);
+    const lastTime = last ? new Date(last).getTime() : 0;
+    if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
+    toolsAutoBackupInFlight = true;
+    localStorage.setItem(AUTO_BACKUP_TOOLS_KEY, new Date().toISOString());
+    await downloadToolsBackupFile(tools);
+  } catch {
+    // best effort only
+  } finally {
+    toolsAutoBackupInFlight = false;
+  }
+}
+
+export function parseToolsBackup(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, error: "Couldn't read that file — make sure it's an unmodified Riggy backup." };
+  }
+  if (!parsed || !Array.isArray(parsed.tools)) {
+    return {
+      ok: false,
+      error: 'That file doesn\'t look like a Riggy Tools backup — make sure it\'s a "riggy-tools-...json" file, not a different export.',
+    };
+  }
+  const tools = parsed.tools;
+  if (tools.length === 0) {
+    return { ok: false, error: "That backup has no tools in it, so restoring it would empty your registry. Nothing was changed." };
+  }
+  if (!tools.every((t) => t && typeof t === "object" && t.id != null)) {
+    return { ok: false, error: "That backup has entries that don't look like tools, so it wasn't loaded." };
+  }
+  return { ok: true, tools, exportedAt: parsed.exportedAt || null };
+}
+
+// --- Worker roster + tasks (bundled — a task references a worker by id,
+// so restoring one without the other would leave dangling references) --
+export const AUTO_BACKUP_WORKER_TASKS_KEY = "warehub-last-auto-backup-worker-tasks";
+let lastWorkerTasksBackupDownloadAt = 0;
+let workerTasksAutoBackupInFlight = false;
+
+export async function downloadWorkerTasksBackupFile(
+  workers,
+  workerTasks,
+  workerActivity = [],
+  { force = false, label = "worker-tasks" } = {}
+) {
+  if (!force && Date.now() - lastWorkerTasksBackupDownloadAt < 10000) return false;
+  const now = new Date();
+  const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `riggy-${label}-${stamp}.json`;
+  const payload = {
+    exportedFrom: "Riggy (Worker Tasks)",
+    exportedAt: now.toISOString(),
+    workers,
+    workerTasks,
+    workerActivity,
+  };
+  lastWorkerTasksBackupDownloadAt = Date.now();
+  return writeBackupJson(filename, JSON.stringify(payload, null, 2));
+}
+
+export async function maybeAutoBackupWorkerTasks(workers, workerTasks, workerActivity = []) {
+  if ((!workers || workers.length === 0) && (!workerTasks || workerTasks.length === 0)) return;
+  if (workerTasksAutoBackupInFlight) return;
+  try {
+    const last = localStorage.getItem(AUTO_BACKUP_WORKER_TASKS_KEY);
+    const lastTime = last ? new Date(last).getTime() : 0;
+    if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
+    workerTasksAutoBackupInFlight = true;
+    localStorage.setItem(AUTO_BACKUP_WORKER_TASKS_KEY, new Date().toISOString());
+    await downloadWorkerTasksBackupFile(workers, workerTasks, workerActivity);
+  } catch {
+    // best effort only
+  } finally {
+    workerTasksAutoBackupInFlight = false;
+  }
+}
+
+export function parseWorkerTasksBackup(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, error: "Couldn't read that file — make sure it's an unmodified Riggy backup." };
+  }
+  if (!parsed || !Array.isArray(parsed.workers) || !Array.isArray(parsed.workerTasks)) {
+    return {
+      ok: false,
+      error: 'That file doesn\'t look like a Riggy Worker Tasks backup — make sure it\'s a "riggy-worker-tasks-...json" file, not a different export.',
+    };
+  }
+  const { workers, workerTasks } = parsed;
+  if (workers.length === 0 && workerTasks.length === 0) {
+    return { ok: false, error: "That backup has no workers or tasks in it, so restoring it would empty both. Nothing was changed." };
+  }
+  return {
+    ok: true,
+    workers,
+    workerTasks,
+    workerActivity: Array.isArray(parsed.workerActivity) ? parsed.workerActivity : [],
+    exportedAt: parsed.exportedAt || null,
+  };
+}
+
+// --- Returns ------------------------------------------------------------
+export const AUTO_BACKUP_RETURNS_KEY = "warehub-last-auto-backup-returns";
+let lastReturnsBackupDownloadAt = 0;
+let returnsAutoBackupInFlight = false;
+
+export async function downloadReturnsBackupFile(returns, { force = false, label = "returns" } = {}) {
+  if (!force && Date.now() - lastReturnsBackupDownloadAt < 10000) return false;
+  const now = new Date();
+  const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `riggy-${label}-${stamp}.json`;
+  const payload = { exportedFrom: "Riggy (Returns)", exportedAt: now.toISOString(), returns };
+  lastReturnsBackupDownloadAt = Date.now();
+  return writeBackupJson(filename, JSON.stringify(payload, null, 2));
+}
+
+export async function maybeAutoBackupReturns(returns) {
+  if (!returns || returns.length === 0) return;
+  if (returnsAutoBackupInFlight) return;
+  try {
+    const last = localStorage.getItem(AUTO_BACKUP_RETURNS_KEY);
+    const lastTime = last ? new Date(last).getTime() : 0;
+    if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
+    returnsAutoBackupInFlight = true;
+    localStorage.setItem(AUTO_BACKUP_RETURNS_KEY, new Date().toISOString());
+    await downloadReturnsBackupFile(returns);
+  } catch {
+    // best effort only
+  } finally {
+    returnsAutoBackupInFlight = false;
+  }
+}
+
+export function parseReturnsBackup(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, error: "Couldn't read that file — make sure it's an unmodified Riggy backup." };
+  }
+  if (!parsed || !Array.isArray(parsed.returns)) {
+    return {
+      ok: false,
+      error: 'That file doesn\'t look like a Riggy Returns backup — make sure it\'s a "riggy-returns-...json" file, not a different export.',
+    };
+  }
+  const returns = parsed.returns;
+  if (returns.length === 0) {
+    return { ok: false, error: "That backup has no returns in it, so restoring it would empty the list. Nothing was changed." };
+  }
+  if (!returns.every((r) => r && typeof r === "object" && r.id != null)) {
+    return { ok: false, error: "That backup has entries that don't look like returns, so it wasn't loaded." };
+  }
+  return { ok: true, returns, exportedAt: parsed.exportedAt || null };
+}
+
+// --- General To-Dos -------------------------------------------------------
+export const AUTO_BACKUP_GENERAL_TODOS_KEY = "warehub-last-auto-backup-general-todos";
+let lastGeneralTodosBackupDownloadAt = 0;
+let generalTodosAutoBackupInFlight = false;
+
+export async function downloadGeneralTodosBackupFile(generalTodos, { force = false, label = "general-todos" } = {}) {
+  if (!force && Date.now() - lastGeneralTodosBackupDownloadAt < 10000) return false;
+  const now = new Date();
+  const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `riggy-${label}-${stamp}.json`;
+  const payload = { exportedFrom: "Riggy (To-Dos)", exportedAt: now.toISOString(), generalTodos };
+  lastGeneralTodosBackupDownloadAt = Date.now();
+  return writeBackupJson(filename, JSON.stringify(payload, null, 2));
+}
+
+export async function maybeAutoBackupGeneralTodos(generalTodos) {
+  if (!generalTodos || generalTodos.length === 0) return;
+  if (generalTodosAutoBackupInFlight) return;
+  try {
+    const last = localStorage.getItem(AUTO_BACKUP_GENERAL_TODOS_KEY);
+    const lastTime = last ? new Date(last).getTime() : 0;
+    if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
+    generalTodosAutoBackupInFlight = true;
+    localStorage.setItem(AUTO_BACKUP_GENERAL_TODOS_KEY, new Date().toISOString());
+    await downloadGeneralTodosBackupFile(generalTodos);
+  } catch {
+    // best effort only
+  } finally {
+    generalTodosAutoBackupInFlight = false;
+  }
+}
+
+export function parseGeneralTodosBackup(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, error: "Couldn't read that file — make sure it's an unmodified Riggy backup." };
+  }
+  if (!parsed || !Array.isArray(parsed.generalTodos)) {
+    return {
+      ok: false,
+      error: 'That file doesn\'t look like a Riggy To-Dos backup — make sure it\'s a "riggy-general-todos-...json" file, not a different export.',
+    };
+  }
+  const generalTodos = parsed.generalTodos;
+  if (generalTodos.length === 0) {
+    return { ok: false, error: "That backup has no to-dos in it, so restoring it would empty the list. Nothing was changed." };
+  }
+  return { ok: true, generalTodos, exportedAt: parsed.exportedAt || null };
+}
+
+// --- Receiving queue (pending, not-yet-reviewed batches) -----------------
+// Arguably the most time-sensitive of all of these — it's unreconciled
+// in-flight work, not a settled record, so losing it means re-scanning
+// receipts that were already handled once.
+export const AUTO_BACKUP_RECEIVING_QUEUE_KEY = "warehub-last-auto-backup-receiving-queue";
+let lastReceivingQueueBackupDownloadAt = 0;
+let receivingQueueAutoBackupInFlight = false;
+
+export async function downloadReceivingQueueBackupFile(
+  receivingQueue,
+  { force = false, label = "receiving-queue" } = {}
+) {
+  if (!force && Date.now() - lastReceivingQueueBackupDownloadAt < 10000) return false;
+  const now = new Date();
+  const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `riggy-${label}-${stamp}.json`;
+  const payload = { exportedFrom: "Riggy (Receiving Queue)", exportedAt: now.toISOString(), receivingQueue };
+  lastReceivingQueueBackupDownloadAt = Date.now();
+  return writeBackupJson(filename, JSON.stringify(payload, null, 2));
+}
+
+export async function maybeAutoBackupReceivingQueue(receivingQueue) {
+  if (!receivingQueue || receivingQueue.length === 0) return;
+  if (receivingQueueAutoBackupInFlight) return;
+  try {
+    const last = localStorage.getItem(AUTO_BACKUP_RECEIVING_QUEUE_KEY);
+    const lastTime = last ? new Date(last).getTime() : 0;
+    if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
+    receivingQueueAutoBackupInFlight = true;
+    localStorage.setItem(AUTO_BACKUP_RECEIVING_QUEUE_KEY, new Date().toISOString());
+    await downloadReceivingQueueBackupFile(receivingQueue);
+  } catch {
+    // best effort only
+  } finally {
+    receivingQueueAutoBackupInFlight = false;
+  }
+}
+
+export function parseReceivingQueueBackup(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, error: "Couldn't read that file — make sure it's an unmodified Riggy backup." };
+  }
+  if (!parsed || !Array.isArray(parsed.receivingQueue)) {
+    return {
+      ok: false,
+      error: 'That file doesn\'t look like a Riggy Receiving Queue backup — make sure it\'s a "riggy-receiving-queue-...json" file, not a different export.',
+    };
+  }
+  const receivingQueue = parsed.receivingQueue;
+  if (receivingQueue.length === 0) {
+    return { ok: false, error: "That backup has no pending batches in it, so restoring it would empty the queue. Nothing was changed." };
+  }
+  return { ok: true, receivingQueue, exportedAt: parsed.exportedAt || null };
+}
+
+// --- Love Lists task/pull list ------------------------------------------
+// The running "what to go grab" list built by bulk-selecting items across
+// potentially many visits — losing it means redoing that accumulation,
+// not just re-entering one record.
+export const AUTO_BACKUP_LOVE_TASK_LIST_KEY = "warehub-last-auto-backup-love-task-list";
+let lastLoveTaskListBackupDownloadAt = 0;
+let loveTaskListAutoBackupInFlight = false;
+
+export async function downloadLoveTaskListBackupFile(
+  loveTaskList,
+  { force = false, label = "love-task-list" } = {}
+) {
+  if (!force && Date.now() - lastLoveTaskListBackupDownloadAt < 10000) return false;
+  const now = new Date();
+  const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `riggy-${label}-${stamp}.json`;
+  const payload = { exportedFrom: "Riggy (Love Task List)", exportedAt: now.toISOString(), loveTaskList };
+  lastLoveTaskListBackupDownloadAt = Date.now();
+  return writeBackupJson(filename, JSON.stringify(payload, null, 2));
+}
+
+export async function maybeAutoBackupLoveTaskList(loveTaskList) {
+  if (!loveTaskList || loveTaskList.length === 0) return;
+  if (loveTaskListAutoBackupInFlight) return;
+  try {
+    const last = localStorage.getItem(AUTO_BACKUP_LOVE_TASK_LIST_KEY);
+    const lastTime = last ? new Date(last).getTime() : 0;
+    if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
+    loveTaskListAutoBackupInFlight = true;
+    localStorage.setItem(AUTO_BACKUP_LOVE_TASK_LIST_KEY, new Date().toISOString());
+    await downloadLoveTaskListBackupFile(loveTaskList);
+  } catch {
+    // best effort only
+  } finally {
+    loveTaskListAutoBackupInFlight = false;
+  }
+}
+
+export function parseLoveTaskListBackup(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, error: "Couldn't read that file — make sure it's an unmodified Riggy backup." };
+  }
+  if (!parsed || !Array.isArray(parsed.loveTaskList)) {
+    return {
+      ok: false,
+      error: 'That file doesn\'t look like a Riggy Love Task List backup — make sure it\'s a "riggy-love-task-list-...json" file, not a different export.',
+    };
+  }
+  const loveTaskList = parsed.loveTaskList;
+  if (loveTaskList.length === 0) {
+    return { ok: false, error: "That backup has no entries in it, so restoring it would empty the list. Nothing was changed." };
+  }
+  return { ok: true, loveTaskList, exportedAt: parsed.exportedAt || null };
+}

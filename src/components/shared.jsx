@@ -1959,3 +1959,92 @@ export function ReferenceDocsModal({ entity, entityLabel, isEditor, onUpdateEnti
     </>
   );
 }
+
+// The "Back up / Restore" control pair, factored out once it was about to
+// be copy-pasted onto a sixth screen (Receipt Archive had the original,
+// full version). Each caller owns its own backUpNow/handleRestoreFileChosen/
+// confirmRestore logic (that part is genuinely domain-specific — different
+// storage key, different payload, different validator) and just hands this
+// the UI state to render.
+export function BackupRestoreBar({
+  onBackUp,
+  backupDisabled,
+  backupTitle,
+  onRestoreFileChosen,
+  backupNotice,
+  restoreError,
+  onDismissRestoreError,
+  restorePending, // { summary, warning, onConfirm, onCancel } | null
+  className = "flex items-center gap-3",
+}) {
+  const restoreInputRef = useRef(null);
+  return (
+    <>
+      <div className={className}>
+        <button
+          onClick={onBackUp}
+          disabled={backupDisabled}
+          title={backupTitle}
+          className="text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2 disabled:opacity-40 disabled:no-underline"
+        >
+          Back up
+        </button>
+        <button
+          onClick={() => restoreInputRef.current?.click()}
+          className="text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2"
+        >
+          Restore
+        </button>
+        <input
+          ref={restoreInputRef}
+          type="file"
+          accept="application/json"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files && e.target.files[0];
+            e.target.value = "";
+            if (file) onRestoreFileChosen(file);
+          }}
+        />
+      </div>
+      {backupNotice && <p className="text-xs text-emerald-400 mt-2">{backupNotice}</p>}
+      {restoreError && (
+        <p className="text-xs text-red-400 mt-2">
+          {restoreError}{" "}
+          <button onClick={onDismissRestoreError} className="underline text-red-300">
+            Dismiss
+          </button>
+        </p>
+      )}
+      {restorePending && (
+        <div
+          className="fixed inset-0 z-[95] flex items-center justify-center bg-black/70 px-4"
+          onClick={restorePending.onCancel}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-lg p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-slate-100 font-semibold text-base mb-2">Restore from backup?</h2>
+            <p className="text-sm text-slate-400 mb-1">{restorePending.summary}</p>
+            <p className="text-sm text-slate-400 mb-4">{restorePending.warning}</p>
+            <div className="flex gap-2">
+              <button
+                onClick={restorePending.onCancel}
+                className="flex-1 text-sm rounded-md py-2 border border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={restorePending.onConfirm}
+                className="flex-1 text-sm rounded-md py-2 bg-amber-500 text-slate-950 font-semibold hover:bg-amber-400"
+              >
+                Restore
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}

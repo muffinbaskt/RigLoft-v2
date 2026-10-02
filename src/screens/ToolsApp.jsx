@@ -38,7 +38,14 @@ import {
 } from "../lib/tools";
 import { normalizeText, uniqueId } from "../lib/utils";
 import { formatTaskTimestamp } from "../lib/workertasks";
-import { AddToolModal, ConfirmDelete, SimpleListPickerModal, ZoomableImage } from "../components/shared";
+import { downloadToolsBackupFile, maybeAutoBackupTools, parseToolsBackup } from "../lib/backup";
+import {
+  AddToolModal,
+  BackupRestoreBar,
+  ConfirmDelete,
+  SimpleListPickerModal,
+  ZoomableImage,
+} from "../components/shared";
 
 // Tools registry, phase 1: a permanent record per physical tool (keyed
 // by SME#), separate from any one job's item list, so "have I seen this
@@ -61,6 +68,10 @@ export function ToolsApp({ onGoHome, isOwner }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkStatusPicking, setBulkStatusPicking] = useState(false);
   const toolsRef = useRef([]);
+  const [restoreError, setRestoreError] = useState(null);
+  const [restorePending, setRestorePending] = useState(null); // { tools, exportedAt }
+  const [backupNotice, setBackupNotice] = useState(null);
+  const backupNoticeTimer = useRef(null);
 
   useEffect(() => {
     // Same reasoning as Receiving/Receipt Archive: no view-only mode of
@@ -78,6 +89,7 @@ export function ToolsApp({ onGoHome, isOwner }) {
           const loaded = JSON.parse(toolsResult.value);
           setTools(loaded);
           toolsRef.current = loaded;
+          maybeAutoBackupTools(loaded);
         }
         if (catalogResult.ok && catalogResult.value) setCatalog(JSON.parse(catalogResult.value));
       } catch {}
@@ -86,9 +98,50 @@ export function ToolsApp({ onGoHome, isOwner }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOwner]);
 
+  const showBackupNotice = (message) => {
+    setBackupNotice(message);
+    if (backupNoticeTimer.current) clearTimeout(backupNoticeTimer.current);
+    backupNoticeTimer.current = setTimeout(() => setBackupNotice(null), 4000);
+  };
+
+  const backUpNow = async () => {
+    const ok = await downloadToolsBackupFile(toolsRef.current, { force: true });
+    const n = toolsRef.current.length;
+    showBackupNotice(ok ? `✅ Backup saved (${n} tool${n === 1 ? "" : "s"})` : "Couldn't create the backup file");
+  };
+
+  const handleRestoreFileChosen = (file) => {
+    setRestoreError(null);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = parseToolsBackup(e.target.result);
+      if (!result.ok) {
+        setRestoreError(result.error);
+        return;
+      }
+      setRestorePending({ tools: result.tools, exportedAt: result.exportedAt });
+    };
+    reader.onerror = () => setRestoreError("Couldn't read that file off the device.");
+    reader.readAsText(file);
+  };
+
+  // Restoring replaces the whole registry, so the current one is saved to a
+  // file first — a restore can then always be undone.
+  const confirmRestore = async () => {
+    if (!restorePending) return;
+    const incoming = restorePending.tools;
+    setRestorePending(null);
+    if (toolsRef.current.length > 0) {
+      await downloadToolsBackupFile(toolsRef.current, { force: true, label: "tools-before-restore" });
+    }
+    saveTools(incoming);
+    showBackupNotice(`✅ Restored ${incoming.length} tool${incoming.length === 1 ? "" : "s"}`);
+  };
+
   const saveTools = (next) => {
     toolsRef.current = next;
     setTools(next);
+    maybeAutoBackupTools(next);
     saveWithRetry(TOOLS_KEY, JSON.stringify(next)).catch(() => {});
   };
 
@@ -303,6 +356,30 @@ export function ToolsApp({ onGoHome, isOwner }) {
               </button>
             );
           })}
+        </div>
+
+        <div className="mb-4">
+          <BackupRestoreBar
+            onBackUp={backUpNow}
+            backupDisabled={tools.length === 0}
+            backupTitle="Saves every tool's SME#, serials, and history to a file"
+            onRestoreFileChosen={handleRestoreFileChosen}
+            backupNotice={backupNotice}
+            restoreError={restoreError}
+            onDismissRestoreError={() => setRestoreError(null)}
+            restorePending={
+              restorePending && {
+                summary: `This file has ${restorePending.tools.length} tool${
+                  restorePending.tools.length === 1 ? "" : "s"
+                }${restorePending.exportedAt ? `, backed up ${new Date(restorePending.exportedAt).toLocaleString()}` : ""}.`,
+                warning: `This replaces everything currently in the registry (${tools.length} tool${
+                  tools.length === 1 ? "" : "s"
+                } right now). Your current registry is saved to a file first, so you can undo this.`,
+                onCancel: () => setRestorePending(null),
+                onConfirm: confirmRestore,
+              }
+            }
+          />
         </div>
 
         {selectMode && filtered.length > 0 && (

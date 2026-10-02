@@ -20,6 +20,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { uniqueId, playSaveChime, playSoftTap } from "./lib/utils";
+import { maybeAutoBackupWorkerTasks } from "./lib/backup";
 import { TaskMetaBadges } from "./components/WorkerTasks";
 // Lazy-loaded: each of these only downloads once someone actually opens
 // that section, instead of every visit shipping all of Receiving/Receipt
@@ -377,14 +378,25 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
   const [failReasonDraft, setFailReasonDraft] = useState("");
 
   const load = async () => {
+    let loadedWorkers = null;
+    let loadedTasks = null;
     try {
       const wResult = await getWithRetry(WORKERS_KEY);
-      if (wResult.ok && wResult.value) setWorkers(JSON.parse(wResult.value));
+      if (wResult.ok && wResult.value) {
+        loadedWorkers = JSON.parse(wResult.value);
+        setWorkers(loadedWorkers);
+      }
     } catch {}
     try {
       const tResult = await getWithRetry(WORKER_TASKS_KEY);
-      if (tResult.ok && tResult.value) setTasks(JSON.parse(tResult.value).map(migrateWorkerTask));
+      if (tResult.ok && tResult.value) {
+        loadedTasks = JSON.parse(tResult.value).map(migrateWorkerTask);
+        setTasks(loadedTasks);
+      }
     } catch {}
+    if (loadedWorkers || loadedTasks) {
+      maybeAutoBackupWorkerTasks(loadedWorkers || [], loadedTasks || []);
+    }
     setLoading(false);
   };
 
@@ -397,6 +409,7 @@ function WorkerKioskApp({ onRequestStaffLogin }) {
   const saveTasks = async (next) => {
     setTasks(next);
     await saveWithRetry(WORKER_TASKS_KEY, JSON.stringify(next));
+    maybeAutoBackupWorkerTasks(workers, next);
   };
 
   const tryPin = () => {

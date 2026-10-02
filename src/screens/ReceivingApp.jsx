@@ -39,7 +39,18 @@ import {
   withLearnedAlias,
 } from "../lib/utils";
 import { formatTaskTimestamp } from "../lib/workertasks";
-import { ConfirmDelete, GroupPhotoStepper, PhotoLightbox, SectionHeader } from "../components/shared";
+import {
+  downloadReceivingQueueBackupFile,
+  maybeAutoBackupReceivingQueue,
+  parseReceivingQueueBackup,
+} from "../lib/backup";
+import {
+  BackupRestoreBar,
+  ConfirmDelete,
+  GroupPhotoStepper,
+  PhotoLightbox,
+  SectionHeader,
+} from "../components/shared";
 
 // Scanning + verifying incoming shipments against what's on the receipt,
 // before anything actually gets added to a job or Love List. Nothing here
@@ -190,6 +201,9 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
   const [viewingHistoryBatch, setViewingHistoryBatch] = useState(null);
   const [receivingUndoStack, setReceivingUndoStack] = useState([]);
   const fileInputRef = useRef(null);
+  const [backupNotice, setBackupNotice] = useState(null);
+  const [restoreError, setRestoreError] = useState(null);
+  const [restorePending, setRestorePending] = useState(null); // { receivingQueue, exportedAt }
 
   const load = async () => {
     try {
@@ -205,6 +219,7 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
         const loaded = JSON.parse(qResult.value);
         setQueue(loaded);
         queueRef.current = loaded;
+        maybeAutoBackupReceivingQueue(loaded);
       }
       if (jResult.ok && jResult.value) setJobs(JSON.parse(jResult.value));
       if (lResult.ok && lResult.value) setLists(JSON.parse(lResult.value));
@@ -246,7 +261,43 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
     if (queueSaveTimer.current) clearTimeout(queueSaveTimer.current);
     queueSaveTimer.current = setTimeout(() => {
       saveWithRetry(RECEIVING_QUEUE_KEY, JSON.stringify(queueRef.current)).catch(() => {});
+      maybeAutoBackupReceivingQueue(queueRef.current);
     }, 600);
+  };
+
+  const backUpQueueNow = async () => {
+    const ok = await downloadReceivingQueueBackupFile(queueRef.current, { force: true });
+    const n = queueRef.current.length;
+    setBackupNotice(ok ? `✅ Backup saved (${n} batch${n === 1 ? "" : "es"})` : "Couldn't create the backup file");
+    setTimeout(() => setBackupNotice(null), 4000);
+  };
+  const handleQueueRestoreFileChosen = (file) => {
+    setRestoreError(null);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = parseReceivingQueueBackup(e.target.result);
+      if (!result.ok) {
+        setRestoreError(result.error);
+        return;
+      }
+      setRestorePending({ receivingQueue: result.receivingQueue, exportedAt: result.exportedAt });
+    };
+    reader.onerror = () => setRestoreError("Couldn't read that file off the device.");
+    reader.readAsText(file);
+  };
+  const confirmQueueRestore = async () => {
+    if (!restorePending) return;
+    const incoming = restorePending.receivingQueue;
+    setRestorePending(null);
+    if (queueRef.current.length > 0) {
+      await downloadReceivingQueueBackupFile(queueRef.current, {
+        force: true,
+        label: "receiving-queue-before-restore",
+      });
+    }
+    saveQueue(incoming);
+    setBackupNotice(`✅ Restored ${incoming.length} batch${incoming.length === 1 ? "" : "es"}`);
+    setTimeout(() => setBackupNotice(null), 4000);
   };
 
   // Undo for Receiving's genuinely consequential actions — approve,
@@ -1077,6 +1128,30 @@ export function ReceivingApp({ onGoHome, onQuickNav, isOwner }) {
               </div>
             );
           })}
+
+        <div className="mb-4">
+          <BackupRestoreBar
+            onBackUp={backUpQueueNow}
+            backupDisabled={queue.length === 0}
+            backupTitle="Saves every pending/reviewed batch in the queue to a file"
+            onRestoreFileChosen={handleQueueRestoreFileChosen}
+            backupNotice={backupNotice}
+            restoreError={restoreError}
+            onDismissRestoreError={() => setRestoreError(null)}
+            restorePending={
+              restorePending && {
+                summary: `This file has ${restorePending.receivingQueue.length} batch${
+                  restorePending.receivingQueue.length === 1 ? "" : "es"
+                }${restorePending.exportedAt ? `, backed up ${new Date(restorePending.exportedAt).toLocaleString()}` : ""}.`,
+                warning: `This replaces the whole queue currently in place (${queue.length} batch${
+                  queue.length === 1 ? "" : "es"
+                } right now). The current queue is saved to a file first, so you can undo this.`,
+                onCancel: () => setRestorePending(null),
+                onConfirm: confirmQueueRestore,
+              }
+            }
+          />
+        </div>
 
         <p className="text-xs font-medium text-slate-400 mb-2">
           Awaiting review ({pending.length})

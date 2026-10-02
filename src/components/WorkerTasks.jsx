@@ -24,7 +24,12 @@ import {
   taskTitleDisplay,
   workerSpeaksSpanish,
 } from "../lib/workertasks";
-import { ConfirmDelete } from "./shared";
+import {
+  maybeAutoBackupWorkerTasks,
+  downloadWorkerTasksBackupFile,
+  parseWorkerTasksBackup,
+} from "../lib/backup";
+import { BackupRestoreBar, ConfirmDelete } from "./shared";
 
 // Small badge row used on task cards everywhere (dashboard, worker detail,
 // kiosk) — urgency pill plus a due-date pill that turns red once it's
@@ -906,7 +911,25 @@ export function WorkerDetailPage({ worker, tasks, allWorkers = [], onUpdateTask,
   );
 }
 
-export function WorkerTasksDashboard({ workers, tasks, hasUnreadActivity, onOpenWorker, onAddTask, onManageRoster, onOpenActivity, onRequestEdit, onClose }) {
+export function WorkerTasksDashboard({
+  workers,
+  tasks,
+  hasUnreadActivity,
+  onOpenWorker,
+  onAddTask,
+  onManageRoster,
+  onOpenActivity,
+  onRequestEdit,
+  onClose,
+  onBackUp,
+  onRestoreFileChosen,
+  backupNotice,
+  restoreError,
+  onDismissRestoreError,
+  restorePending,
+  onCancelRestore,
+  onConfirmRestore,
+}) {
   const [tab, setTab] = useState("workers"); // "workers" | "today" | "jobs"
   const [preparingPrintList, setPreparingPrintList] = useState(false);
   const [printSpec, setPrintSpec] = useState(null); // { timeframe, workerIds, includeOpen } once confirmed
@@ -1058,6 +1081,33 @@ export function WorkerTasksDashboard({ workers, tasks, hasUnreadActivity, onOpen
         </div>
       </header>
       <main className="max-w-2xl mx-auto px-4 py-5">
+        {onBackUp && (
+          <div className="mb-4">
+            <BackupRestoreBar
+              onBackUp={onBackUp}
+              backupDisabled={workers.length === 0 && tasks.length === 0}
+              backupTitle="Saves the worker roster and every task to a file"
+              onRestoreFileChosen={onRestoreFileChosen}
+              backupNotice={backupNotice}
+              restoreError={restoreError}
+              onDismissRestoreError={onDismissRestoreError}
+              restorePending={
+                restorePending && {
+                  summary: `This file has ${restorePending.workers.length} worker${
+                    restorePending.workers.length === 1 ? "" : "s"
+                  } and ${restorePending.workerTasks.length} task${
+                    restorePending.workerTasks.length === 1 ? "" : "s"
+                  }${restorePending.exportedAt ? `, backed up ${new Date(restorePending.exportedAt).toLocaleString()}` : ""}.`,
+                  warning: `This replaces the whole roster and task list currently in place (${workers.length} worker${
+                    workers.length === 1 ? "" : "s"
+                  }, ${tasks.length} task${tasks.length === 1 ? "" : "s"} right now). Everything current is saved to a file first, so you can undo this.`,
+                  onCancel: onCancelRestore,
+                  onConfirm: onConfirmRestore,
+                }
+              }
+            />
+          </div>
+        )}
         {openTasks.length > 0 && (
           <div className="mb-5">
             <p className="text-xs font-medium text-slate-400 mb-2">
@@ -1615,30 +1665,47 @@ export function WorkerTasksSection({ onClose }) {
   const [showActivity, setShowActivity] = useState(false);
   const [hasUnreadActivity, setHasUnreadActivity] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
+  const [activityLog, setActivityLog] = useState([]);
+  const [backupNotice, setBackupNotice] = useState(null);
+  const [restoreError, setRestoreError] = useState(null);
+  const [restorePending, setRestorePending] = useState(null); // { workers, workerTasks, exportedAt }
 
   useEffect(() => {
     (async () => {
+      let loadedWorkers = null;
+      let loadedTasks = null;
       try {
         const wResult = await getWithRetry(WORKERS_KEY);
-        if (wResult.ok && wResult.value) setWorkers(JSON.parse(wResult.value));
+        if (wResult.ok && wResult.value) {
+          loadedWorkers = JSON.parse(wResult.value);
+          setWorkers(loadedWorkers);
+        }
       } catch {}
       try {
         const tResult = await getWithRetry(WORKER_TASKS_KEY);
-        if (tResult.ok && tResult.value) setTasks(JSON.parse(tResult.value).map(migrateWorkerTask));
+        if (tResult.ok && tResult.value) {
+          loadedTasks = JSON.parse(tResult.value).map(migrateWorkerTask);
+          setTasks(loadedTasks);
+        }
       } catch {}
       try {
         const [activityResult, lastSeenResult] = await Promise.all([
           getWithRetry(WORKER_ACTIVITY_KEY),
           getWithRetry(WORKER_ACTIVITY_LAST_SEEN_KEY),
         ]);
-        const latest =
-          activityResult.ok && activityResult.value ? JSON.parse(activityResult.value)[0] : null;
+        const activity =
+          activityResult.ok && activityResult.value ? JSON.parse(activityResult.value) : [];
+        setActivityLog(activity);
+        const latest = activity[0] || null;
         const lastSeen =
           lastSeenResult.ok && lastSeenResult.value ? JSON.parse(lastSeenResult.value) : null;
         if (latest && (!lastSeen || new Date(latest.time) > new Date(lastSeen))) {
           setHasUnreadActivity(true);
         }
       } catch {}
+      if (loadedWorkers || loadedTasks) {
+        maybeAutoBackupWorkerTasks(loadedWorkers || [], loadedTasks || []);
+      }
       setLoading(false);
     })();
   }, []);
@@ -1646,10 +1713,53 @@ export function WorkerTasksSection({ onClose }) {
   const saveWorkers = (next) => {
     setWorkers(next);
     saveWithRetry(WORKERS_KEY, JSON.stringify(next)).catch(() => {});
+    maybeAutoBackupWorkerTasks(next, tasks);
   };
   const saveTasks = (next) => {
     setTasks(next);
     saveWithRetry(WORKER_TASKS_KEY, JSON.stringify(next)).catch(() => {});
+    maybeAutoBackupWorkerTasks(workers, next);
+  };
+
+  const backUpNow = async () => {
+    const ok = await downloadWorkerTasksBackupFile(workers, tasks, activityLog, { force: true });
+    setBackupNotice(
+      ok
+        ? `✅ Backup saved (${workers.length} worker${workers.length === 1 ? "" : "s"}, ${tasks.length} task${tasks.length === 1 ? "" : "s"})`
+        : "Couldn't create the backup file"
+    );
+    setTimeout(() => setBackupNotice(null), 4000);
+  };
+  const handleRestoreFileChosen = (file) => {
+    setRestoreError(null);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = parseWorkerTasksBackup(e.target.result);
+      if (!result.ok) {
+        setRestoreError(result.error);
+        return;
+      }
+      setRestorePending({ workers: result.workers, workerTasks: result.workerTasks, exportedAt: result.exportedAt });
+    };
+    reader.onerror = () => setRestoreError("Couldn't read that file off the device.");
+    reader.readAsText(file);
+  };
+  const confirmRestore = async () => {
+    if (!restorePending) return;
+    const { workers: incomingWorkers, workerTasks: incomingTasks } = restorePending;
+    setRestorePending(null);
+    if (workers.length > 0 || tasks.length > 0) {
+      await downloadWorkerTasksBackupFile(workers, tasks, activityLog, {
+        force: true,
+        label: "worker-tasks-before-restore",
+      });
+    }
+    saveWorkers(incomingWorkers);
+    saveTasks(incomingTasks);
+    setBackupNotice(
+      `✅ Restored ${incomingWorkers.length} worker${incomingWorkers.length === 1 ? "" : "s"}, ${incomingTasks.length} task${incomingTasks.length === 1 ? "" : "s"}`
+    );
+    setTimeout(() => setBackupNotice(null), 4000);
   };
 
   const addWorker = (name) => {
@@ -1791,6 +1901,14 @@ export function WorkerTasksSection({ onClose }) {
           setHasUnreadActivity(false);
         }}
         onClose={onClose}
+        onBackUp={backUpNow}
+        onRestoreFileChosen={handleRestoreFileChosen}
+        backupNotice={backupNotice}
+        restoreError={restoreError}
+        onDismissRestoreError={() => setRestoreError(null)}
+        restorePending={restorePending}
+        onCancelRestore={() => setRestorePending(null)}
+        onConfirmRestore={confirmRestore}
       />
       {editingTask && (
         <WorkerTaskEditForm
