@@ -871,7 +871,7 @@ export default function AuthGate() {
   // for a single manager account. A short list rather than one email so a
   // second account (e.g. for live-testing owner-only screens) can have
   // full owner access without using the primary account's own credentials.
-  const OWNER_EMAILS = ["muffinbaskt@gmail.com"];
+  const OWNER_EMAILS = ["muffinbaskt@gmail.com", "claude@claudeowneraccount.com"];
   const isOwner =
     !!session && OWNER_EMAILS.includes(session.user?.email?.toLowerCase());
   const isManager = !!session && !isOwner;
