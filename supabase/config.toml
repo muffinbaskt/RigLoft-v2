@@ -37,6 +37,11 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/notify-suggestion/index.ts"
 
+[functions.send-push]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/send-push/index.ts"
+
 [functions.rapid-handler]
 enabled = true
 verify_jwt = false

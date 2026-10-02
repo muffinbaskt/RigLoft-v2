@@ -181,6 +181,22 @@ export const WORKER_ACTIVITY_LAST_SEEN_KEY = "warehub-worker-activity-last-seen"
 // place to see everything going on without walking around checking in.
 export function logWorkerActivity(entries) {
   const list = Array.isArray(entries) ? entries : [entries];
+  // Fire-and-forget, same as the Spanish-translation pattern elsewhere in
+  // this file — a real push to the owner's phone for every entry, not just
+  // the in-app activity feed. Never allowed to block or fail the actual
+  // save above; a notification that doesn't arrive is a lot less bad than
+  // an activity log entry that silently doesn't save because a push
+  // happened to fail.
+  if (typeof fetch !== "undefined") {
+    for (const entry of list) {
+      if (!entry || !entry.message) continue;
+      fetch("https://vwvppivdpxjvmaazcmmg.supabase.co/functions/v1/send-push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Riggy — Worker Tasks", body: entry.message }),
+      }).catch(() => {});
+    }
+  }
   return getWithRetry(WORKER_ACTIVITY_KEY).then((result) => {
     const prior = result.ok && result.value ? JSON.parse(result.value) : [];
     const next = [...list, ...prior].slice(0, 200);
