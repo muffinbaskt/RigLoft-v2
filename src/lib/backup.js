@@ -117,7 +117,7 @@ export async function chooseBackupFolder() {
   }
 }
 
-export async function downloadBackupFile(jobs, catalog, label, { force = false } = {}) {
+export async function downloadBackupFile(jobs, catalog, label, { force = false, silent = false } = {}) {
   if (!force && Date.now() - lastBackupDownloadAt < 10000) return false;
   const now = new Date();
   const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -128,44 +128,8 @@ export async function downloadBackupFile(jobs, catalog, label, { force = false }
     jobs,
     catalog,
   };
-  const jsonText = JSON.stringify(payload, null, 2);
-
-  // Try the folder you chose, if you've set one up and it's still accessible
-  if (FS_ACCESS_SUPPORTED) {
-    try {
-      const dirHandle = await loadBackupDirectoryHandle();
-      if (dirHandle) {
-        const permission = await dirHandle.queryPermission({ mode: "readwrite" });
-        if (permission === "granted") {
-          const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
-          const writable = await fileHandle.createWritable();
-          await writable.write(jsonText);
-          await writable.close();
-          lastBackupDownloadAt = Date.now();
-          return true;
-        }
-      }
-    } catch {
-      // Folder no longer accessible for some reason — fall back below
-      // rather than losing the backup entirely.
-    }
-  }
-
-  try {
-    lastBackupDownloadAt = Date.now();
-    const blob = new Blob([jsonText], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    return true;
-  } catch {
-    return false;
-  }
+  lastBackupDownloadAt = Date.now();
+  return writeBackupJson(filename, JSON.stringify(payload, null, 2), { silent });
 }
 
 export function downloadOfflineBackup(queue) {
@@ -191,7 +155,7 @@ export async function maybeAutoBackup(jobs, catalog) {
     // time) all read the same stale timestamp and each decide to back up.
     autoBackupInFlight = true;
     localStorage.setItem(AUTO_BACKUP_KEY, new Date().toISOString());
-    await downloadBackupFile(jobs, catalog, "auto-backup");
+    await downloadBackupFile(jobs, catalog, "auto-backup", { silent: true });
   } catch {
     // best effort only — never worth interrupting anything over this
   } finally {
@@ -206,7 +170,7 @@ let lastLoveListsBackupDownloadAt = 0;
 export const AUTO_BACKUP_LOVE_LISTS_KEY = "warehub-last-auto-backup-lovelists";
 let loveListsAutoBackupInFlight = false;
 
-export async function downloadLoveListsBackupFile(loveLists, { force = false } = {}) {
+export async function downloadLoveListsBackupFile(loveLists, { force = false, silent = false } = {}) {
   if (!force && Date.now() - lastLoveListsBackupDownloadAt < 10000) return false;
   const now = new Date();
   const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -216,42 +180,8 @@ export async function downloadLoveListsBackupFile(loveLists, { force = false } =
     exportedAt: now.toISOString(),
     loveLists,
   };
-  const jsonText = JSON.stringify(payload, null, 2);
-
-  if (FS_ACCESS_SUPPORTED) {
-    try {
-      const dirHandle = await loadBackupDirectoryHandle();
-      if (dirHandle) {
-        const permission = await dirHandle.queryPermission({ mode: "readwrite" });
-        if (permission === "granted") {
-          const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
-          const writable = await fileHandle.createWritable();
-          await writable.write(jsonText);
-          await writable.close();
-          lastLoveListsBackupDownloadAt = Date.now();
-          return true;
-        }
-      }
-    } catch {
-      // Folder no longer accessible — fall back below rather than losing it
-    }
-  }
-
-  try {
-    lastLoveListsBackupDownloadAt = Date.now();
-    const blob = new Blob([jsonText], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    return true;
-  } catch {
-    return false;
-  }
+  lastLoveListsBackupDownloadAt = Date.now();
+  return writeBackupJson(filename, JSON.stringify(payload, null, 2), { silent });
 }
 
 export async function maybeAutoBackupLoveLists(loveLists) {
@@ -263,7 +193,7 @@ export async function maybeAutoBackupLoveLists(loveLists) {
     if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
     loveListsAutoBackupInFlight = true;
     localStorage.setItem(AUTO_BACKUP_LOVE_LISTS_KEY, new Date().toISOString());
-    await downloadLoveListsBackupFile(loveLists);
+    await downloadLoveListsBackupFile(loveLists, { silent: true });
   } catch {
     // best effort only
   } finally {
@@ -282,8 +212,19 @@ let lastArchiveBackupDownloadAt = 0;
 let archiveAutoBackupInFlight = false;
 
 // Writes to the chosen backup folder when it's set up and still permitted,
-// otherwise falls back to a normal download.
-async function writeBackupJson(filename, jsonText) {
+// otherwise falls back to a normal download — EXCEPT when `silent` is true,
+// in which case there's no fallback at all: it just quietly does nothing
+// and returns false. That distinction matters a lot in practice. The silent
+// hourly auto-backups and an explicit "Back up now" button share this same
+// writer, but they need opposite behavior when no folder is configured: a
+// button click is a deliberate request for a file, so a download/save
+// dialog is exactly the expected outcome. An automatic background check
+// popping that same dialog unprompted is a real bug, not a feature — most
+// visibly on a device nobody ever configured a backup folder on at all,
+// like a shared kiosk tablet a worker is just trying to use, where an
+// unexplained file-save prompt interrupting them has nothing to do with
+// whatever they were actually doing.
+async function writeBackupJson(filename, jsonText, { silent = false } = {}) {
   if (FS_ACCESS_SUPPORTED) {
     try {
       const dirHandle = await loadBackupDirectoryHandle();
@@ -301,6 +242,7 @@ async function writeBackupJson(filename, jsonText) {
       // Folder no longer accessible — fall back below rather than losing it
     }
   }
+  if (silent) return false;
   try {
     const blob = new Blob([jsonText], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -318,7 +260,7 @@ async function writeBackupJson(filename, jsonText) {
   }
 }
 
-export async function downloadArchiveBackupFile(entries, { force = false, label = "receipt-archive" } = {}) {
+export async function downloadArchiveBackupFile(entries, { force = false, label = "receipt-archive", silent = false } = {}) {
   if (!force && Date.now() - lastArchiveBackupDownloadAt < 10000) return false;
   const now = new Date();
   const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -329,7 +271,7 @@ export async function downloadArchiveBackupFile(entries, { force = false, label 
     receiptArchive: entries,
   };
   lastArchiveBackupDownloadAt = Date.now();
-  return writeBackupJson(filename, JSON.stringify(payload, null, 2));
+  return writeBackupJson(filename, JSON.stringify(payload, null, 2), { silent });
 }
 
 export async function maybeAutoBackupArchive(entries) {
@@ -341,7 +283,7 @@ export async function maybeAutoBackupArchive(entries) {
     if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
     archiveAutoBackupInFlight = true;
     localStorage.setItem(AUTO_BACKUP_ARCHIVE_KEY, new Date().toISOString());
-    await downloadArchiveBackupFile(entries);
+    await downloadArchiveBackupFile(entries, { silent: true });
   } catch {
     // best effort only
   } finally {
@@ -383,14 +325,14 @@ export const AUTO_BACKUP_TOOLS_KEY = "warehub-last-auto-backup-tools";
 let lastToolsBackupDownloadAt = 0;
 let toolsAutoBackupInFlight = false;
 
-export async function downloadToolsBackupFile(tools, { force = false, label = "tools" } = {}) {
+export async function downloadToolsBackupFile(tools, { force = false, label = "tools", silent = false } = {}) {
   if (!force && Date.now() - lastToolsBackupDownloadAt < 10000) return false;
   const now = new Date();
   const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const filename = `riggy-${label}-${stamp}.json`;
   const payload = { exportedFrom: "Riggy (Tools)", exportedAt: now.toISOString(), tools };
   lastToolsBackupDownloadAt = Date.now();
-  return writeBackupJson(filename, JSON.stringify(payload, null, 2));
+  return writeBackupJson(filename, JSON.stringify(payload, null, 2), { silent });
 }
 
 export async function maybeAutoBackupTools(tools) {
@@ -402,7 +344,7 @@ export async function maybeAutoBackupTools(tools) {
     if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
     toolsAutoBackupInFlight = true;
     localStorage.setItem(AUTO_BACKUP_TOOLS_KEY, new Date().toISOString());
-    await downloadToolsBackupFile(tools);
+    await downloadToolsBackupFile(tools, { silent: true });
   } catch {
     // best effort only
   } finally {
@@ -443,7 +385,7 @@ export async function downloadWorkerTasksBackupFile(
   workers,
   workerTasks,
   workerActivity = [],
-  { force = false, label = "worker-tasks" } = {}
+  { force = false, label = "worker-tasks", silent = false } = {}
 ) {
   if (!force && Date.now() - lastWorkerTasksBackupDownloadAt < 10000) return false;
   const now = new Date();
@@ -457,7 +399,7 @@ export async function downloadWorkerTasksBackupFile(
     workerActivity,
   };
   lastWorkerTasksBackupDownloadAt = Date.now();
-  return writeBackupJson(filename, JSON.stringify(payload, null, 2));
+  return writeBackupJson(filename, JSON.stringify(payload, null, 2), { silent });
 }
 
 export async function maybeAutoBackupWorkerTasks(workers, workerTasks, workerActivity = []) {
@@ -469,7 +411,7 @@ export async function maybeAutoBackupWorkerTasks(workers, workerTasks, workerAct
     if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
     workerTasksAutoBackupInFlight = true;
     localStorage.setItem(AUTO_BACKUP_WORKER_TASKS_KEY, new Date().toISOString());
-    await downloadWorkerTasksBackupFile(workers, workerTasks, workerActivity);
+    await downloadWorkerTasksBackupFile(workers, workerTasks, workerActivity, { silent: true });
   } catch {
     // best effort only
   } finally {
@@ -508,14 +450,14 @@ export const AUTO_BACKUP_RETURNS_KEY = "warehub-last-auto-backup-returns";
 let lastReturnsBackupDownloadAt = 0;
 let returnsAutoBackupInFlight = false;
 
-export async function downloadReturnsBackupFile(returns, { force = false, label = "returns" } = {}) {
+export async function downloadReturnsBackupFile(returns, { force = false, label = "returns", silent = false } = {}) {
   if (!force && Date.now() - lastReturnsBackupDownloadAt < 10000) return false;
   const now = new Date();
   const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const filename = `riggy-${label}-${stamp}.json`;
   const payload = { exportedFrom: "Riggy (Returns)", exportedAt: now.toISOString(), returns };
   lastReturnsBackupDownloadAt = Date.now();
-  return writeBackupJson(filename, JSON.stringify(payload, null, 2));
+  return writeBackupJson(filename, JSON.stringify(payload, null, 2), { silent });
 }
 
 export async function maybeAutoBackupReturns(returns) {
@@ -527,7 +469,7 @@ export async function maybeAutoBackupReturns(returns) {
     if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
     returnsAutoBackupInFlight = true;
     localStorage.setItem(AUTO_BACKUP_RETURNS_KEY, new Date().toISOString());
-    await downloadReturnsBackupFile(returns);
+    await downloadReturnsBackupFile(returns, { silent: true });
   } catch {
     // best effort only
   } finally {
@@ -563,14 +505,14 @@ export const AUTO_BACKUP_GENERAL_TODOS_KEY = "warehub-last-auto-backup-general-t
 let lastGeneralTodosBackupDownloadAt = 0;
 let generalTodosAutoBackupInFlight = false;
 
-export async function downloadGeneralTodosBackupFile(generalTodos, { force = false, label = "general-todos" } = {}) {
+export async function downloadGeneralTodosBackupFile(generalTodos, { force = false, label = "general-todos", silent = false } = {}) {
   if (!force && Date.now() - lastGeneralTodosBackupDownloadAt < 10000) return false;
   const now = new Date();
   const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const filename = `riggy-${label}-${stamp}.json`;
   const payload = { exportedFrom: "Riggy (To-Dos)", exportedAt: now.toISOString(), generalTodos };
   lastGeneralTodosBackupDownloadAt = Date.now();
-  return writeBackupJson(filename, JSON.stringify(payload, null, 2));
+  return writeBackupJson(filename, JSON.stringify(payload, null, 2), { silent });
 }
 
 export async function maybeAutoBackupGeneralTodos(generalTodos) {
@@ -582,7 +524,7 @@ export async function maybeAutoBackupGeneralTodos(generalTodos) {
     if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
     generalTodosAutoBackupInFlight = true;
     localStorage.setItem(AUTO_BACKUP_GENERAL_TODOS_KEY, new Date().toISOString());
-    await downloadGeneralTodosBackupFile(generalTodos);
+    await downloadGeneralTodosBackupFile(generalTodos, { silent: true });
   } catch {
     // best effort only
   } finally {
@@ -620,7 +562,7 @@ let receivingQueueAutoBackupInFlight = false;
 
 export async function downloadReceivingQueueBackupFile(
   receivingQueue,
-  { force = false, label = "receiving-queue" } = {}
+  { force = false, label = "receiving-queue", silent = false } = {}
 ) {
   if (!force && Date.now() - lastReceivingQueueBackupDownloadAt < 10000) return false;
   const now = new Date();
@@ -628,7 +570,7 @@ export async function downloadReceivingQueueBackupFile(
   const filename = `riggy-${label}-${stamp}.json`;
   const payload = { exportedFrom: "Riggy (Receiving Queue)", exportedAt: now.toISOString(), receivingQueue };
   lastReceivingQueueBackupDownloadAt = Date.now();
-  return writeBackupJson(filename, JSON.stringify(payload, null, 2));
+  return writeBackupJson(filename, JSON.stringify(payload, null, 2), { silent });
 }
 
 export async function maybeAutoBackupReceivingQueue(receivingQueue) {
@@ -640,7 +582,7 @@ export async function maybeAutoBackupReceivingQueue(receivingQueue) {
     if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
     receivingQueueAutoBackupInFlight = true;
     localStorage.setItem(AUTO_BACKUP_RECEIVING_QUEUE_KEY, new Date().toISOString());
-    await downloadReceivingQueueBackupFile(receivingQueue);
+    await downloadReceivingQueueBackupFile(receivingQueue, { silent: true });
   } catch {
     // best effort only
   } finally {
@@ -678,7 +620,7 @@ let loveTaskListAutoBackupInFlight = false;
 
 export async function downloadLoveTaskListBackupFile(
   loveTaskList,
-  { force = false, label = "love-task-list" } = {}
+  { force = false, label = "love-task-list", silent = false } = {}
 ) {
   if (!force && Date.now() - lastLoveTaskListBackupDownloadAt < 10000) return false;
   const now = new Date();
@@ -686,7 +628,7 @@ export async function downloadLoveTaskListBackupFile(
   const filename = `riggy-${label}-${stamp}.json`;
   const payload = { exportedFrom: "Riggy (Love Task List)", exportedAt: now.toISOString(), loveTaskList };
   lastLoveTaskListBackupDownloadAt = Date.now();
-  return writeBackupJson(filename, JSON.stringify(payload, null, 2));
+  return writeBackupJson(filename, JSON.stringify(payload, null, 2), { silent });
 }
 
 export async function maybeAutoBackupLoveTaskList(loveTaskList) {
@@ -698,7 +640,7 @@ export async function maybeAutoBackupLoveTaskList(loveTaskList) {
     if (Date.now() - lastTime < AUTO_BACKUP_INTERVAL_MS) return;
     loveTaskListAutoBackupInFlight = true;
     localStorage.setItem(AUTO_BACKUP_LOVE_TASK_LIST_KEY, new Date().toISOString());
-    await downloadLoveTaskListBackupFile(loveTaskList);
+    await downloadLoveTaskListBackupFile(loveTaskList, { silent: true });
   } catch {
     // best effort only
   } finally {
