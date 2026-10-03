@@ -3948,6 +3948,7 @@ export function GeneralTodoModal({
   onDelete,
   onClearFinished,
   onClose,
+  isOwner,
   onBackUp,
   onRestoreFileChosen,
   backupNotice,
@@ -4085,7 +4086,7 @@ export function GeneralTodoModal({
             </>
           )}
         </div>
-        {onBackUp && (
+        {isOwner && onBackUp && (
           <div className="px-5 py-3 border-t border-slate-800 shrink-0">
             <BackupRestoreBar
               onBackUp={onBackUp}
@@ -4881,6 +4882,7 @@ export function ReturnsListPage({
   onOpenReturn,
   onBack,
   onGoHome,
+  isOwner,
   onBackUp,
   onRestoreFileChosen,
   backupNotice,
@@ -4914,7 +4916,7 @@ export function ReturnsListPage({
       </header>
 
       <main className="max-w-3xl mx-auto px-4 py-5">
-        {onBackUp && (
+        {isOwner && onBackUp && (
           <div className="mb-4">
             <BackupRestoreBar
               onBackUp={onBackUp}
@@ -13873,6 +13875,7 @@ export function WareHub({ isEditor, isManager, managerName, onSignOut, onRequest
             setShowReturnsListPage(false);
             setShowPicker(true);
           }}
+          isOwner={isEditor}
           onBackUp={backUpReturnsNow}
           onRestoreFileChosen={handleReturnsRestoreFileChosen}
           backupNotice={returnsBackupNotice}
@@ -14013,6 +14016,7 @@ export function WareHub({ isEditor, isManager, managerName, onSignOut, onRequest
           onDelete={deleteGeneralTodo}
           onClearFinished={clearFinishedGeneralTodos}
           onClose={() => setShowGeneralTodo(false)}
+          isOwner={isEditor}
           onBackUp={backUpGeneralTodosNow}
           onRestoreFileChosen={handleGeneralTodosRestoreFileChosen}
           backupNotice={generalTodosBackupNotice}
@@ -14030,6 +14034,7 @@ export function WareHub({ isEditor, isManager, managerName, onSignOut, onRequest
             setShowWorkerTasks(false);
             reloadWorkerData();
           }}
+          isOwner={isEditor}
         />
       )}
 

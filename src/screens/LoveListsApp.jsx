@@ -4098,6 +4098,7 @@ export function LoveTaskListModal({
   entries,
   lists,
   isEditor,
+  isOwner,
   onToggleDone,
   onRemove,
   onClearDone,
@@ -4166,7 +4167,7 @@ export function LoveTaskListModal({
       </header>
 
       <main className="max-w-2xl mx-auto px-4 py-5">
-        {isEditor && onBackUp && (
+        {isOwner && onBackUp && (
           <div className="mb-4">
             <BackupRestoreBar
               onBackUp={onBackUp}
@@ -4991,6 +4992,7 @@ export function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null
             setShowWorkerTasks(false);
             reloadWorkerData();
           }}
+          isOwner={isOwner}
         />
       )}
       {showLoveTaskList && (
@@ -4998,6 +5000,7 @@ export function LoveListsApp({ isEditor, isOwner, onGoHome, initialListId = null
           entries={loveTaskList}
           lists={lists}
           isEditor={isEditor}
+          isOwner={isOwner}
           onToggleDone={toggleLoveTaskDone}
           onRemove={removeLoveTaskEntry}
           onClearDone={clearDoneLoveTasks}

@@ -921,6 +921,7 @@ export function WorkerTasksDashboard({
   onOpenActivity,
   onRequestEdit,
   onClose,
+  isOwner,
   onBackUp,
   onRestoreFileChosen,
   backupNotice,
@@ -1081,7 +1082,7 @@ export function WorkerTasksDashboard({
         </div>
       </header>
       <main className="max-w-2xl mx-auto px-4 py-5">
-        {onBackUp && (
+        {isOwner && onBackUp && (
           <div className="mb-4">
             <BackupRestoreBar
               onBackUp={onBackUp}
@@ -1655,7 +1656,7 @@ export function WorkerActivityFeedModal({ onClose }) {
   );
 }
 
-export function WorkerTasksSection({ onClose }) {
+export function WorkerTasksSection({ onClose, isOwner }) {
   const [workers, setWorkers] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1901,6 +1902,7 @@ export function WorkerTasksSection({ onClose }) {
           setHasUnreadActivity(false);
         }}
         onClose={onClose}
+        isOwner={isOwner}
         onBackUp={backUpNow}
         onRestoreFileChosen={handleRestoreFileChosen}
         backupNotice={backupNotice}
